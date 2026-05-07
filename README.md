@@ -1,6 +1,6 @@
 # claude-code-harness
 
-> **Claude Code v2.1+** 위에 얹는 작업 절차 묶음. 평소엔 **`/orchestrator` 한 번** 입력하면 계획부터 PR까지 자동. 언어/프레임워크는 무관, 스택별 리뷰 룰만 본인이 채우는 구조.
+> **Claude Code v2.1+** 용 workflow harness. `/orchestrator` 단일 entry point 로 plan → implement → review → PR 까지 자동화. 6 subagent + 6 verb skill + 2 PreToolUse hook + phase runner. 언어/프레임워크 비종속, 스택별 reviewer 룰만 사용자 작성.
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1+-purple)](https://code.claude.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -11,57 +11,57 @@
 
 ## What This Is
 
-Claude Code 는 그 자체로도 코딩을 도와주지만, 기본 상태로는 **계획 없이 바로 코드부터 치고**, **위험한 명령도 깜빡하면 실행**합니다. 이 하네스는 그 위에 얹는 "**규칙대로 일하는 동료**" 같은 절차 묶음이에요.
+`Claude Code` 가 in-the-wild 에서 흔히 보이는 두 문제 — 계획 없이 바로 implementation 시작 + 위험 명령 직접 실행 — 를 강제로 막는 workflow layer. 본인 프로젝트 루트에 `.claude/` 트리를 그대로 복사하면 적용.
 
-설치 = 본인 프로젝트 폴더에 `.claude/` 등 설정 폴더를 그대로 복사해 넣기. Claude Code 를 그 폴더에서 띄우면 자동 인식.
+### Components
 
-### 들어있는 것 5가지
+**Subagents (6)** · `.claude/agents/<name>.md`
+`explorer`, `planner`, `coder`, `tester`, `reviewer`, `documenter`. 격리된 context window 에서 동작. verbose tool output 은 sub-context 에 머물고 메인엔 summary 만 반환. 의사결정 비싼 단계 (`planner`, `reviewer`) 만 Opus, 나머지 Sonnet 으로 모델 비용 분리.
 
-**1. 6명의 전문 작업자**
-`explorer`, `planner`, `coder`, `tester`, `reviewer`, `documenter` — 각자 본인 일만 함.
-이들을 **subagent** 라고 부르는데, 각자 격리된 자리에서 일하고 결과만 메인 채팅에 돌려주기 때문에 **작업 로그가 메인을 어지럽히지 않음**. 또 똑똑한 일 (planner, reviewer) 만 Opus, 나머진 Sonnet 으로 비용 분리.
+**Verb skills (6)** · `.claude/skills/<verb>/SKILL.md`
+`/orchestrator` (primary entry point) + `/plan`, `/work`, `/review`, `/release`, `/setup` (manual override / debugging). Description 매칭으로 자연어 invocation 도 지원. `/release` 만 `disable-model-invocation: true` 로 lock — side effect 가 있어서 user 가 직접 타이핑.
 
-**2. 6가지 슬래시 명령어**
-`/orchestrator` (메인) + `/plan`, `/work`, `/review`, `/release`, `/setup` (옵션). 채팅창에 입력하면 발동. 이걸 **skill** 이라 부름. 평소엔 `/orchestrator` 하나만 쓰면 됨.
+**PreToolUse hooks (2)** · `.claude/hooks/*.sh`
+- `block-destructive.sh` — `rm -rf` on broad target / `git push --force(-with-lease|-f)` / `git reset --hard origin/*` / `dd of=/dev/sd*` 차단. 18 케이스 테스트, false positive 0.
+- `protect-secrets.sh` — `.env*` / `*.pem` / `credentials*` / `.mcp.json` write 거부. doc 파일 (`.md`/`.txt`) 은 통과.
 
-**3. 위험 명령 차단 장치 2개**
-`rm -rf /`, `git push --force`, `.env` 파일 쓰기 같은 위험한 일을 AI 가 시도하면 **모델이 참아주는 게 아니라 셸 스크립트가 먼저 막음**. 모델은 깜빡해도 스크립트는 안 깜빡함. 이걸 **hook** 이라 부름.
+모델 prompt 가 아니라 stdin JSON → exit-code 로 결정론적 enforce.
 
-**4. 긴 작업 분리 스크립트**
-phase 작업이 길어지면 메인 채팅창이 로그로 폭주하니까, 별도 셸로 분리해서 결과 한 줄만 메인에 돌리는 도구.
+**Phase runner** · `scripts/harness/run_phase.py`
+`claude --agent <name> -p` wrapper. Long-running phase 작업을 별도 process 로 spawn 하고 `.claude/notes/phase-N-<agent>-<ts>.log` 에 stdout 캡처. 메인 session context 보호.
 
-**5. 문서 양식 3종**
-요구사항 (REQUIREMENTS), 결정 기록 (ADR), 문서 동기화 정책. 매번 새로 짜지 않게 미리 만든 빈 양식.
+**Doc templates** · `docs/harness/`
+`REQUIREMENTS.template.md` / `ADR.template.md` / `DOC_SYNC_POLICY.md`.
 
 
 ## Why a Harness — In Plain Words
 
-Claude Code 는 강력하지만 기본 상태로는 절제가 부족합니다. 이 하네스가 강제하는 5가지:
+Claude Code 의 default operating model 은 절차 강제력이 약함. 이 하네스가 enforce 하는 5가지:
 
-### 1. Plan-first — "설계도 없이 못 박지 마"
-"기능 추가해줘" 하면 Claude 가 바로 코드를 치는 게 아니라, **먼저 `Plans.md` 라는 설계 문서**를 만듭니다. 단계별로 "Phase 1 은 뭘 하고, 다 됐는지 확인하는 기준은 뭐고" 가 적혀있음. 사람이 그거 보고 ✓ 한 다음에야 진짜 코딩 시작. **AI 가 알아서 코딩하다가 산으로 가는 사고 방지.**
+### 1. Plan-first — "no nailing without a blueprint"
+자연어 요청 → 즉시 코드 변경이 아니라, `planner` (Opus) 가 phase decomposition + acceptance criteria 가 담긴 `Plans.md` 를 먼저 생성. 사용자가 approval 박스 ✓ 친 뒤에야 implementation 시작. **Plan 이 부실하면 cascade failure** — 그래서 Opus 토큰을 여기 투자.
 
-### 2. Phase 경계 — "한 입씩 먹어"
-한 Phase = 한 번에 리뷰할 수 있는 작은 단위 (대략 400줄 변경 이하). 큰 기능 한 번에 다 짜지 말고 잘게 쪼갬. **이유: 1000줄짜리 PR 은 사람도 제대로 못 봐서 버그가 새어나감.**
+### 2. Phase boundary — "one bite at a time"
+1 phase = 1 reviewable unit (~400 LoC diff target). 4-7 phase 로 분해, 각 phase 가 독립 mergeable 단위. **1000-line PR 은 human review 가 형식적으로 끝나서 버그가 새어나감.**
 
-### 3. 4-lens 리뷰 — "리뷰는 4개 안경 끼고"
-머지 전에 reviewer 가 4가지 관점에서 봅니다:
-- **spec**: Plan 에 적힌 거 진짜 됐냐
-- **security**: 비밀번호 노출, 인증 누락, SQL 인젝션
-- **correctness**: 엣지 케이스, 에러 처리, 네이밍
-- **performance**: 느림, 메모리 폭주
+### 3. 4-lens review + stack-specific
+머지 전 `reviewer` (Opus) 가 4 lens 적용:
+- **Spec** — Plans.md acceptance ↔ diff 매핑
+- **Security** — secret leak, injection vectors, AuthZ, PII logging
+- **Correctness** — edge case, error handling, naming, dead code, test coverage
+- **Performance** — memory blowup, blocking I/O, observability
 
-여기에 본인 스택 특유의 함정도 추가로 봄. 예: Django 의 N+1 쿼리 (반복문 안에서 `.user.email` 접근하면 100번 DB 가는 그거).
+여기에 stack-specific 룰 추가. 예: Django ORM N+1 (`for x in qs: x.fk.attr` without `select_related`), Spring JPA `@Transactional` on private method (proxy bypass → no-op), FastAPI `async def` 안의 sync DB call (event loop 블록).
 
-### 4. Hooks over hopes — "막아야 할 건 코드로 막아"
-"`rm -rf /` 하지 마세요" 같은 걸 모델에게 부탁하는 게 아니라, **셸 스크립트가 명령 실행 직전에 검사해서 위험하면 차단**. 모델은 깜빡할 수 있지만 스크립트는 안 깜빡함.
+### 4. Hooks over hopes — "deterministic, not prompted"
+"`rm -rf` 하지 마세요" 같은 instruction 은 모델 attention drift 에 취약. PreToolUse hook 으로 **shell-level 차단** — 모델이 깜빡해도 hook 은 안 깜빡함. Exit code 2 + JSON deny → Claude 에게 reason 표시.
 
-### 5. 사람 게이트 — "AI 가 다 해주지 않음"
-Plan 승인, BLOCK 판정 시 결정, PR 머지 — 이 3개는 사람이 직접. **"AI 한테 다 맡기고 자버린다" 가 안 되게 강제.**
+### 5. Human gates — non-negotiable
+Plan approval / BLOCK verdict 시 결정 / PR 머지. 이 3개는 사람이. **"AI 한테 다 맡기고 자버린다" 가 안 되게 enforce.** 그 외엔 자동.
 
 ---
 
-이걸 다 합치면: "AI 가 비싼 부분(코드 작성, 테스트 매핑, 4관점 리뷰)을 처리하고, 사람은 게이트만 통과시킨다" 가 되는 거예요.
+> Net effect: AI 가 비싼 부분 (decomposition, implementation, test mapping, 4-lens review, auto-fix loop) 을 처리, human 은 gate 만 통과시킴.
 
 
 ## Install
@@ -300,36 +300,41 @@ $ cd ~/your-project && claude
 자세한 사용법 / 트러블슈팅 / 비용 가이드는 [HARNESS.md](HARNESS.md) 참고.
 
 
-## Reviewer — 기본은 언어 무관
+## Reviewer — Stack-Agnostic by Default
 
-`reviewer` 작업자가 PR 직전에 4가지 관점으로 검토:
+`reviewer` (Opus) — 4 lens × stack-specific 매트릭스로 PR 직전 검토. Universal lens 는 항상 적용:
 
-| 관점 | 무엇을 보나 (모든 언어 공통) |
+| Lens | Universal checks |
 |---|---|
-| **Spec** | 처음 합의한 acceptance 기준이 진짜 충족됐나 |
-| **Security** | 시크릿 노출, 인증 누락, SQL/명령 인젝션, PII 로깅 |
-| **Correctness** | 엣지 케이스, 에러 처리, 네이밍, 죽은 코드, 테스트 커버리지 |
-| **Performance** | 메모리 폭주, 블로킹 I/O, 로깅/트레이싱/메트릭 |
+| **Spec** | `Plans.md` acceptance bullet ↔ diff line 매핑 |
+| **Security** | secret leak, injection (SQL/cmd/template), SSRF, path traversal, AuthZ, PII logging |
+| **Correctness** | edge case, error handling, naming, dead code, test coverage |
+| **Performance** | memory blowup, blocking I/O on async path, observability gaps |
 
-**언어 특유의 함정 룰** (예: Django N+1, Spring JPA lazy loading, FastAPI async-sync 혼합) **은 비어있는 채로 옵션**. 본인 스택에 맞게 채우는 게 다음 섹션 (Customize for Your Stack).
+**Stack-specific subsections 은 placeholder 만 있고 비어있음.** 본인 스택 룰은 다음 섹션 참고하여 작성.
+
+Verdict tags: `[BLOCK]` (보안/correctness/spec 미달, 머지 차단) / `[CHANGES]` (수정 권장) / `[NIT]` (선택) / `[EXISTING]` (pre-existing 이슈, 이번 PR 차단 안 함).
 
 
-## Safety Hooks — 위험 명령 차단
+## Safety Hooks — What They Block
 
-**Hook 이란**: AI 가 셸 명령이나 파일 쓰기를 시도하기 **직전에** 끼어들어 검사하는 작은 스크립트. AI 의 판단에 의존하지 않고 코드로 강제.
+PreToolUse hooks. stdin 으로 tool input JSON 수신 → exit code 0 (allow) / 2 (deny + reason) 로 결정. `.claude/settings.local.json` 의 `hooks.PreToolUse` 에 wired.
 
+**`block-destructive.sh`** · matcher: `Bash` · 18 cases tested, 0 false positives
 ```
-# block-destructive.sh — 위험한 셸 명령 차단 (18 케이스 테스트 통과)
-✓ 차단: rm -rf /, ~, $HOME, /usr/*, /etc/*, /Library/* ...
-✓ 차단: git push --force, --force-with-lease, -f
-✓ 차단: git reset --hard origin/<branch>
-✓ 차단: dd of=/dev/sd*
-✓ 통과: rm -rf node_modules, /tmp/foo, .venv  (오탐 0건)
-✓ 통과: git push -u origin feat/x
+deny: rm -rf {/, ~, $HOME, /usr/*, /etc/*, /Library/*, ...}
+deny: git push {--force, --force-with-lease, -f}
+deny: git reset --hard origin/<branch>
+deny: dd of=/dev/{sd,nvme,hd,disk}*
+allow: rm -rf {node_modules, /tmp/foo, .venv, build}
+allow: git push -u origin <branch>
+allow: git reset --hard HEAD~1
+```
 
-# protect-secrets.sh — 시크릿 파일 쓰기 거부 (11 케이스 테스트 통과)
-✓ 차단: .env*, *.pem, *.key, credentials.json, tokens.yaml, .mcp.json
-✓ 통과: README.md, main.py, credentials.md  (문서 파일은 OK)
+**`protect-secrets.sh`** · matcher: `Edit|Write` · 11 cases tested
+```
+deny:  .env*, *.pem, *.key, *.p12, *credentials*.{json,yaml}, *token*.{json,yaml}, .mcp.json
+allow: README.md, main.py, credentials.md, *.txt  (doc files)
 ```
 
 
