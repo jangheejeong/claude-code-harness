@@ -84,6 +84,8 @@
 
 > Plan 이 부실하면 그 위에 쌓이는 모든 게 부실해짐 — 그래서 Opus 토큰을 이 단계에 투자.
 
+> Claude Code 자체에도 [plan mode](https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode) (read-only 탐색 + Plan agent) 가 있음. 본 하네스의 `/plan` 은 그 위에 **phase 분해 + acceptance criteria + 영속화 (Plans.md 파일)** 를 더한 것.
+
 ### 2. Phase 경계
 1 phase = 1 reviewable 단위 (~400 LoC diff 권장). 4-7 phase 로 분해, 각 phase 가 독립 머지 가능.
 
@@ -250,8 +252,10 @@ $ cd ~/your-project && claude
 | `/plan` | Plans.md 의 phase 분해를 **다시 짜고 싶을 때** (시공은 안 함) |
 | `/work N` | Plans.md 가 있는 상태에서 **N 번째 phase 만 따로** (디버깅) |
 | `/review` | 마지막 작업 diff **리뷰만 다시** |
-| `/release` | 본인 commit/PR 스타일 따로 있어서 자동 PR 안 쓰고 싶을 때 — 사실 안 써도 됨 |
+| `/release` | 본인 commit/PR 스타일 따로 있어서 자동 PR 안 쓰고 싶을 때 — 사실 안 써도 됨. `disable-model-invocation: true` 로 잠가둠. <sup>[1]</sup> |
 | `/setup` | **신규 서브프로젝트** 첫 부트스트랩 (한 번만) |
+
+<sup>[1]</sup> Claude Code v2.1.74+ 에서 검증. 이전 버전은 슬래시 호출도 막힐 수 있음 ([issue #26251](https://github.com/anthropics/claude-code/issues/26251)). `claude --version` 으로 확인.
 
 ---
 
@@ -353,6 +357,8 @@ $ cd ~/your-project && claude
     └── reviewer-java-spring.md    # Java (Spring/JPA/WebFlux)
 ```
 
+> **빌트인과의 이름**: Claude Code 빌트인 subagent (`Explore`, `Plan`, `general-purpose`) 와 본 하네스 커스텀 (`explorer`, `planner`) 은 대소문자가 달라 충돌 안 함. 빌트인은 read-only quick-research 용, 본 커스텀은 Plans.md 연동 워크플로우 전용.
+
 자세한 사용법 / 트러블슈팅 / 비용 가이드는 [HARNESS.md](HARNESS.md) 참고.
 
 ---
@@ -382,6 +388,8 @@ $ cd ~/your-project && claude
 ## Safety Hooks — What They Block
 
 PreToolUse hooks. stdin JSON 으로 tool input 수신 → exit code `0` (allow) / `2` (deny + reason) 로 결정. `.claude/settings.local.json` 의 `hooks.PreToolUse` 에 wired.
+
+> **권한 모드 우회 불가**: hook 의 `deny` 는 사용자가 `--dangerously-skip-permissions` 또는 `bypassPermissions` 모드로 띄워도 작동. 즉 사용자가 권한 검사 끄고 띄워도 hook 차단은 그대로. 팀 정책 / 보안 가드용으로 신뢰 가능.
 
 ### `block-destructive.sh` · matcher: `Bash`
 
@@ -415,6 +423,7 @@ allow: README.md, main.py, credentials.md, *.txt   (문서 파일은 OK)
 - **Plan 의 품질이 모든 것을 결정.** 부실한 Plan = 부실한 코드 + 부실한 리뷰. Planner 에 Opus 토큰 쓰는 게 항상 이득.
 - **`/orchestrator` 비용은 manual 흐름과 비슷.** 단순 채팅 대비 phase 당 약 3-5x.
 - **멀티 repo 동시 변경은 약점.** 한 번에 한 저장소.
+- **단일 세션 subagent 패턴 채택.** Claude Code 의 [Agent Teams](https://code.claude.com/docs/en/agent-teams) (teammates 간 직접 통신 + 공유 task list) 는 의도적으로 안 씀 — 일반 phase 흐름엔 단일 세션 + 격리 컨텍스트가 더 단순. 10+ 병렬 worker 가 자율 토론하며 일하는 시나리오는 Agent Teams 가 적합 (3-5x 더 저렴).
 
 ---
 
