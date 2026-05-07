@@ -212,7 +212,21 @@ $ cd ~/your-project && claude
 
 **Plan 승인.** `planner` 가 작성한 `Plans.md` 를 검토하고 Approval 박스에 체크해야 다음 단계로 넘어간다. Plan 이 부실하면 그 위에 쌓이는 코드, 테스트, 리뷰가 모두 부실해지므로 이 검토에 시간을 충분히 쓰는 게 작업 전체에서 가장 큰 레버리지다.
 
-**BLOCK verdict.** `reviewer` 가 BLOCK 으로 판정하고 자동 fix 루프 (최대 3회) 가 그것을 해결하지 못하면 흐름이 멈춘다. 3회 안에 풀리지 않는 BLOCK 은 대개 다음 셋 중 하나의 신호다 — Plan 의 가정이 잘못됐거나, 더 큰 architectural 결정이 필요하거나, reviewer 의 finding 자체가 false positive 거나. 어느 쪽이든 사용자가 직접 코드를 손대는 게 첫 번째 선택은 아니다. 자연어로 방향을 다시 잡아주는 게 우선이다 — "Phase 2 의 가정이 틀렸다, X 대신 Y 로 가자", "이건 false positive 다, reviewer 에게 다시 보라고 해", 또는 더 큰 방향 전환이면 `/plan` 으로 Plan 을 다시 짠 뒤 `/orchestrator` 를 재실행한다. 직접 편집은 위 모든 게 막혔을 때의 마지막 수단이다.
+**BLOCK verdict.** `reviewer` 가 BLOCK 을 내고 자동 fix 루프 (최대 3회) 가 풀지 못하면 흐름이 멈춘다.
+
+3회 안에 풀리지 않는 BLOCK 은 보통 다음 셋 중 하나의 신호다:
+
+- Plan 의 가정이 잘못됨
+- 더 큰 architectural 결정이 필요함
+- reviewer 의 finding 자체가 false positive
+
+이때 **사용자가 직접 코드를 수정하는 건 권장하지 않는다.** 사람이 코드를 직접 만지는 순간 하네스의 컨텍스트와 어긋나기 시작하고, 이후 phase 의 reviewer / coder 가 사용자의 직접 변경을 모르는 상태로 진행하면서 회귀가 쌓인다. 자연어로 방향을 다시 잡아주는 게 올바른 대응이다:
+
+- _"Phase 2 의 가정이 틀렸다, X 대신 Y 로 가자"_
+- _"이건 false positive 다, reviewer 에게 다시 보라고 해"_
+- 더 큰 방향 전환이면 `/plan` 으로 Plan 을 다시 짠 뒤 `/orchestrator` 재실행
+
+자연어로도 안 풀리는 막힘이라면 그건 보통 Plan 의 근본 가정을 다시 봐야 할 시점이지, 사용자가 코드 패치로 우회할 문제가 아니다.
 
 **PR 머지.** 머지는 GitHub 에서 사람이 직접 클릭한다. `main` 으로의 자동 머지는 의도적으로 비활성화 — 동료 리뷰와 CI 가 통과한 뒤 사람의 손이 한 번 들어가는 흐름을 강제한다.
 
