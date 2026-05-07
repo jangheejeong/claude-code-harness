@@ -69,7 +69,14 @@ Claude Code 는 강력하지만 기본 동작에 절제가 없다. 자연어 작
 ### 1. Plan 먼저
 코드 수정 전에 `Plans.md` 가 있어야 한다. `planner` (Opus) 가 작업을 phase 단위로 분해하고 각 phase 의 acceptance criteria 를 적는다. Plan 이 부실하면 그 위에 쌓이는 모든 게 부실해지므로 Opus 토큰을 여기 투자한다.
 
-각 phase 는 **vertical slice** 로 분해한다 — 한 phase 가 DB + service + UI (또는 본인 스택의 모든 레이어) 를 가로지르게. horizontal phasing (DB 먼저 다 만들고, 그 다음 service 다, 그 다음 UI 다) 은 end-to-end 피드백을 늦춰서 권장하지 않는다.
+각 phase 는 **vertical slice** 로 분해한다 — 한 phase 가 DB + service + API + UI 를 가로질러 **한 기능이 end-to-end 로 작동**하게.
+
+예시 — "webhook 3개 (Slack/Discord/Telegram) 추가" 작업:
+
+- ✅ **vertical**: Phase 1 = Slack webhook DB→서비스→API→UI 끝까지 / Phase 2 = Discord 끝까지 / Phase 3 = Telegram 끝까지. **각 phase 끝나면 한 기능이 진짜 동작**.
+- ❌ **horizontal**: Phase 1 = 3개 webhook 의 DB 다 / Phase 2 = 서비스 다 / Phase 3 = API 다 / Phase 4 = UI 다. **마지막 phase 까지 가야 한 기능이라도 작동**.
+
+horizontal 은 도중에 발견되는 문제 (DB 스키마가 UI 요구와 안 맞음 등) 를 마지막에야 발견하게 만들고, reviewer 가 phase 별로 검증할 거리도 빈약해진다 ("DB 만 추가됨 = valid" 정도). vertical 이 reviewer / 사람 양쪽에 더 쓸모 있는 단위.
 
 > Claude Code 자체에도 [plan mode](https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode) (read-only 탐색 + Plan agent) 가 있음. 본 하네스의 `/plan` 은 그 위에 phase 분해 + acceptance criteria + 영속화 (`Plans.md` 파일) 를 더한 것.
 
