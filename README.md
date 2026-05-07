@@ -320,12 +320,12 @@ $ cd ~/your-project && claude
 │       └── protect-secrets.sh     # 시크릿 파일 쓰기 거부
 │
 ├── scripts/harness/
-│   └── run_phase.py               # phase 작업 분리 도구
+│   └── run_phase.py               # /orchestrator 가 호출, 긴 phase 출력 분리
 │
 ├── docs/harness/
-│   ├── REQUIREMENTS.template.md   # 요구사항 양식
-│   ├── ADR.template.md            # 결정 기록 양식
-│   └── DOC_SYNC_POLICY.md         # 문서 동기화 정책
+│   ├── REQUIREMENTS.template.md   # /setup 이 복사, planner 가 읽음
+│   ├── ADR.template.md            # documenter 가 결정 기록 시 사용
+│   └── DOC_SYNC_POLICY.md         # documenter 가 문서 갱신 판단 시 참고
 │
 └── examples/
     ├── reviewer-python.md         # Python (Django/FastAPI/Airflow)
@@ -409,9 +409,9 @@ allow: README.md, main.py, credentials.md, *.txt   (문서 파일은 OK)
 | 커스터마이즈 대상 | 수정할 파일 | How |
 |---|---|---|
 | **스택별 reviewer 룰** (ORM N+1, async/sync 혼합, 마이그레이션 안전성, 프레임워크 함정) | `.claude/agents/reviewer.md` 의 "Stack-specific" 서브섹션 | `examples/reviewer-python.md` / `examples/reviewer-java-spring.md` 참고하여 작성 |
-| **의존성 매니저 / 린트 / 테스트 러너** | `.claude/agents/coder.md`, `tester.md` | 자동 추론 — 강제 시 한 줄 추가 |
+| **의존성 매니저 / 린트 / 테스트 러너** | `.claude/agents/coder.md`, `tester.md` | agent 가 `pyproject.toml`/`package.json`/`pom.xml` 등 lock file 을 읽고 따라가도록 instruction 작성됨. 특정 도구를 강제하려면 한 줄 추가 |
 | **빌드 산출물 skip 폴더** | `.claude/agents/explorer.md` | 표준 폴더 (`node_modules`, `.venv`, `target`, `build`, `dist`) 이미 포함 |
-| **테스트 디렉토리** | `.claude/agents/tester.md` | 자동 추론 — 명시 원하면 한 줄 추가 |
+| **테스트 디렉토리** | `.claude/agents/tester.md` | agent 가 `tests/`, `src/test/java/`, `__tests__/` 등 표준 위치를 인식하도록 instruction 작성됨. 비표준 위치면 한 줄 추가 |
 | **프로젝트 지도 / 작업 규칙** | `CLAUDE.md` | `CLAUDE.md.example` 복사 후 채움. **Anthropic 권장 200 줄 / 150 instruction 이내**. 그 이상은 `@import` 로 분리 |
 | **요구사항 / 인수 기준** | `<subproject>/REQUIREMENTS.md` | `docs/harness/REQUIREMENTS.template.md` 복사 후 채움 (또는 `/setup` 자동화) |
 
@@ -431,7 +431,7 @@ cp examples/reviewer-<your-stack>.md .claude/agents/reviewer.md
 
 ### 30분 안에 본인 스택 화
 
-1. `examples/` 에서 본인 스택 reviewer 복사 (없으면 4 lens × stack 서브섹션 직접 채움).
+1. `examples/` 에서 본인 스택 reviewer 가 있으면 `.claude/agents/reviewer.md` 로 복사. 없으면 reviewer.md 안의 "Stack-specific" placeholder 4개 (security/correctness/performance + 일반) 를 본인 스택 룰로 직접 채운다.
 2. `CLAUDE.md.example` → `CLAUDE.md` 로 복사 후 본인 프로젝트 지도/규칙 채움.
 3. (필요시) 신규 서브프로젝트 `REQUIREMENTS.md` 채움 — `/setup` 스킬이 자동화.
 4. `claude` 재시작 → `/orchestrator <첫 작업>`.
