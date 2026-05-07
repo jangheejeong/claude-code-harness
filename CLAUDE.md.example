@@ -1,0 +1,52 @@
+# <Your project / workspace name>
+
+> This file is loaded into every Claude Code session as always-on context.
+> Keep it focused: project-wide rules, project map (if monorepo), conventions.
+> Anything else belongs in skills, agents, or per-subproject CLAUDE.md files.
+
+## Always-on rules
+
+1. **Requirements → Plan → Code → Review → Doc** — five stages, no skipping.
+   - No code change without an approved `Plans.md` (or `REQUIREMENTS.md`).
+   - Run `/plan` first if there isn't one.
+2. **Big changes go in a git worktree** (`.claude/worktrees/<feature>`).
+3. **Never write secrets**. Reading is OK; writing to `.env`, `*.pem`, `*credentials*` is blocked by hook anyway.
+4. **No `rm -rf` on broad paths, no `git push --force`, no `git reset --hard origin/*`** — these are blocked by hook. If you're blocked, reconsider the intent.
+5. Output language: <choose>.
+
+## Project map (edit for your workspace)
+
+| Directory | Type | Stack | Notes |
+|---|---|---|---|
+| `<service-a>/` | API | Python, FastAPI | |
+| `<service-b>/` | Worker | Python, Airflow | |
+| `<frontend>/` | UI | TypeScript, React | |
+| `docs/` | Shared docs | — | |
+
+## Harness usage
+
+```text
+/plan         → Plans.md from requirements (planner subagent, opus)
+/work N       → implement Phase N (coder + tester subagents)
+/review       → 4-lens gate (reviewer subagent, opus)
+/release      → 🔒 PR + docs (must type manually)
+/setup        → bootstrap a new subproject
+/orchestrator → full loop with checkpoints (experimental, ~5x cost)
+```
+
+## Subagents
+
+`@agent-explorer @agent-planner @agent-coder @agent-tester @agent-reviewer @agent-documenter`
+
+- planner / reviewer: opus (expensive decisions)
+- explorer / coder / tester / documenter: sonnet (execution)
+
+## MCP / external services
+
+(Add your `.mcp.json` configs here as documentation, not the actual tokens.)
+
+## Safety nets installed
+
+- `PreToolUse` Bash guard (blocks destructive commands) — `.claude/hooks/block-destructive.sh`
+- `PreToolUse` Edit/Write guard (blocks secret writes) — `.claude/hooks/protect-secrets.sh`
+- Per-subproject `.claude/` overrides take precedence (don't load this CLAUDE.md inside them)
