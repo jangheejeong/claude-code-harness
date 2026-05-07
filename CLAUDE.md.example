@@ -18,9 +18,9 @@
 
 | Directory | Type | Stack | Notes |
 |---|---|---|---|
-| `<service-a>/` | API | Python, FastAPI | |
-| `<service-b>/` | Worker | Python, Airflow | |
-| `<frontend>/` | UI | TypeScript, React | |
+| `<service-a>/` | API | _<lang>, <framework>_ | |
+| `<service-b>/` | Worker | _<lang>, <framework>_ | |
+| `<frontend>/` | UI | _<lang>, <framework>_ | |
 | `docs/` | Shared docs | — | |
 
 ## Harness usage

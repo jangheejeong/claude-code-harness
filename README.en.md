@@ -1,6 +1,6 @@
 # claude-code-harness
 
-> A pragmatic Plan → Work → Review → Release harness for **Claude Code v2.1+**, tuned for Python / Django / FastAPI / Airflow projects.
+> A pragmatic Plan → Work → Review → Release harness for **Claude Code v2.1+**. **Stack-agnostic by default — fill in your own stack-specific rules.**
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1+-purple)](https://code.claude.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -140,17 +140,19 @@ For short tasks, skip the harness entirely:
 
 Read [HARNESS.md](HARNESS.md) for the comprehensive guide (12 sections + cheat sheet + troubleshooting).
 
-## Stack-specific reviewer
+## Reviewer — Stack-Agnostic by Default
 
-The `reviewer` agent (Opus) applies a 4-lens × 4-stack matrix:
+The `reviewer` agent (Opus) applies a 4-lens review:
 
-| Lens | General | Django | FastAPI | Airflow |
-|---|---|---|---|---|
-| **Security** | secrets, PII logging | raw SQL f-string, mark_safe XSS | `Depends` auth, `response_model` leakage | BashOperator injection, plaintext Connections |
-| **Correctness** | comprehensions, mutable defaults, EAFP, `with` | `save()` override, signals, migration reversibility | async-sync mixing, Pydantic v1↔v2 | idempotency, top-level imports, `xcom` payload size, Jinja templates |
-| **Performance** | generators | **N+1** (`select_related`/`prefetch_related`), `bulk_*`, `.exists()` vs `len()` | unbounded queries, sync logging in async | dynamic task mapping, sensor reschedule mode, pool/priority |
+| Lens | Universal checks |
+|---|---|
+| **Spec** | Acceptance bullet ↔ code line mapping |
+| **Security** | secrets, PII logging, injection (SQL/command/template), SSRF, path traversal, AuthZ |
+| **Correctness** | edge cases, error handling, naming, dead code, test coverage |
+| **Performance** | memory blowup, blocking I/O, logging / tracing / metrics |
 
-Findings are tagged `[BLOCK]` / `[CHANGES]` / `[NIT]` / `[EXISTING]` (the last one for pre-existing bugs that don't block this PR).
+**Stack-specific rules are intentionally empty placeholders** — fill them in for your stack. See next section.
+
 
 ## Safety hooks — what they block
 
@@ -175,49 +177,43 @@ Findings are tagged `[BLOCK]` / `[CHANGES]` / `[NIT]` / `[EXISTING]` (the last o
 - **Cost matters.** A full `/orchestrator` run costs ~5-6× a single chat. Phase your work small, or skip the harness for trivial changes.
 - **Multi-repo refactors** are not the harness's strength. One repo at a time.
 
-## Other stacks? Java?
+## Customize for Your Stack
 
-This harness is tuned for Python/Django/FastAPI/Airflow, but **most of it is generic**. To adapt for Java/Spring Boot, you essentially modify **one file (reviewer.md) plus a few tool-name lines**.
+This harness is intentionally **language- and framework-agnostic** out of the box. Fill in your stack as follows.
 
-### 🔴 Major rewrite (1 file)
+### What to edit, where
 
-**`.claude/agents/reviewer.md`** — Replace the `Python/Django/FastAPI/Airflow` checks with `Java/Spring Boot/JPA/...`.
+| What you want to customize | File to edit | How / reference |
+|---|---|---|
+| **Stack-specific review rules** (ORM N+1, async/sync mixing, migration safety, framework pitfalls) | `.claude/agents/reviewer.md` — the "Stack-specific" subsections | Use `examples/reviewer-python.md` (Python+Django+FastAPI+Airflow) or `examples/reviewer-java-spring.md` (Java+Spring+JPA+WebFlux) as a starting point |
+| **Dependency manager / lint / type-check / test runner names** | `.claude/agents/coder.md`, `tester.md` | Already generic — Coder/Tester auto-detect from your project's `pyproject.toml`/`package.json`/`pom.xml`. Override only if you want to enforce a specific tool. |
+| **Build artifact dirs to skip** | `.claude/agents/explorer.md` skip list | `target/`, `build/`, `dist/`, `node_modules/`, `.venv/` already included. Add project-specific dirs as you find them. |
+| **Test directory layout** | `.claude/agents/tester.md` | Auto-inferred (`tests/`, `src/test/java/`, `__tests__/`). Override only if non-standard. |
+| **Project map / always-on rules** | `CLAUDE.md` | Copy from `CLAUDE.md.example` and fill in for your project. |
+| **Requirements / acceptance criteria per subproject** | `<subproject>/REQUIREMENTS.md` | Copy from `docs/harness/REQUIREMENTS.template.md`. |
 
-Sample Java/Spring checks (full example: [`examples/reviewer-java-spring.md`](examples/reviewer-java-spring.md)):
+### Full reference reviewers (copy → modify)
 
-| Lens | Java/Spring rule |
+| Stack | File |
 |---|---|
-| **Security** | Missing `@PreAuthorize`, unvalidated `@RequestParam`, native-query string concatenation, `@Value` plaintext secrets, JPA `@EntityListeners` side effects |
-| **Correctness** | Lombok `@Data` on JPA entities (equals/hashCode infinite loop), `Optional` as field/parameter, `Stream` consumed twice, `@Transactional` on private methods (no-op), swallowed checked exceptions |
-| **Performance** | **JPA N+1** (`@OneToMany(fetch=LAZY)` + loop → `JOIN FETCH` or `@EntityGraph`), `findAll()` without pagination, unbounded ExecutorService instead of virtual threads |
-| **Operability** | Non-reversible Flyway migration, `@Async` default executor with unbounded queue, PII at log level INFO |
+| Python (Django / FastAPI / Airflow) | [`examples/reviewer-python.md`](examples/reviewer-python.md) |
+| Java (Spring Boot / JPA / WebFlux) | [`examples/reviewer-java-spring.md`](examples/reviewer-java-spring.md) |
+| _Kotlin / Scala / Go / Rust / Ruby / ..._ | (PRs welcome) |
 
-### 🟡 Light edits (3 files)
+Copy command:
+```bash
+cp examples/reviewer-<your-stack>.md .claude/agents/reviewer.md
+```
 
-| File | Change |
-|---|---|
-| **`.claude/agents/coder.md`** | `uv`/`pip`/`poetry` → `mvn`/`gradle`. `ruff`/`mypy` → `checkstyle`/`spotbugs`/`errorprone`/`spotless` |
-| **`.claude/agents/tester.md`** | `pytest`/`pytest-asyncio`/`freezegun`/`fakeredis`/`respx`/`xfail` → `JUnit 5`/`Mockito`/`Testcontainers`/`AssertJ`/`@Disabled`. `tests/` → `src/test/java/` |
-| **`.claude/agents/explorer.md`** | Add `target/`, `build/`, `.gradle/` to skip paths |
+### 30-Minute Stack-ification Checklist
 
-### 🟢 Untouched (everything else)
+1. **Reviewer**: copy your stack's example to `.claude/agents/reviewer.md`. If your stack isn't covered, fill in the 4 lens × stack-specific subsections yourself.
+2. **CLAUDE.md**: copy `CLAUDE.md.example` and fill in your project map and rules.
+3. **REQUIREMENTS**: for new subprojects, copy `docs/harness/REQUIREMENTS.template.md` to `<subproject>/REQUIREMENTS.md`. The `/setup` skill automates this.
+4. **Restart `claude`** → `/plan` for your first feature.
 
-- 6 verb skills (`/plan`, `/work`, `/review`, `/release`, `/setup`, `/orchestrator`) — language-agnostic
-- `planner`, `documenter` — same logic
-- 2 hooks — shell-command guards, language-agnostic
-- `run_phase.py` — wraps the Claude CLI, language-agnostic
-- REQUIREMENTS / ADR / DOC_SYNC_POLICY templates — language-agnostic
+The other agents (planner, coder, tester, explorer, documenter) are all stack-agnostic. No edits needed.
 
-### 30-minute Java-ification checklist
-
-1. Copy [`examples/reviewer-java-spring.md`](examples/reviewer-java-spring.md) over `.claude/agents/reviewer.md`
-2. In `.claude/agents/coder.md`, swap Python tool names for Java
-3. In `.claude/agents/tester.md`, swap `pytest` → `JUnit 5`, `tests/` → `src/test/java/`
-4. In `.claude/agents/explorer.md`, add `target/ build/ .gradle/` to skip paths
-5. Fill in `CLAUDE.md` with your Java project map
-6. Restart `claude`, run `/plan` for your first feature
-
-**Kotlin / Scala / Go / Rust follow the same pattern** — only the reviewer's stack rules change. PRs adding new stack guides welcome.
 
 ## License
 

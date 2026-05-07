@@ -1,6 +1,6 @@
 # claude-code-harness
 
-> **Claude Code v2.1+** 용 Plan → Work → Review → Release 하네스. Python / Django / FastAPI / Airflow 프로젝트에 맞춰 튜닝됨.
+> **Claude Code v2.1+** 용 Plan → Work → Review → Release 하네스. **언어/프레임워크 무관 generic 기본 + 본인 스택 룰 채우기** 구조.
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1+-purple)](https://code.claude.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -140,21 +140,19 @@ $ cd ~/your-project && claude
 
 자세한 사용법은 [HARNESS.md](HARNESS.md) 참고 (12 섹션 + 부록 + 트러블슈팅).
 
-## Reviewer — Stack-Specific Checklist
+## Reviewer — Stack-Agnostic by Default
 
-`reviewer` agent (Opus) 가 4 lens × 4 stack 매트릭스로 검토:
+`reviewer` agent (Opus) 가 4 lens 로 검토:
 
-| Lens | 일반 | Django | FastAPI | Airflow |
-|---|---|---|---|---|
-| **Security** | secrets, PII 로깅 | raw SQL f-string, mark_safe XSS | `Depends` 인증, `response_model` 누설 | BashOperator 인젝션, Connection 평문 |
-| **Correctness** | comprehension, mutable default, EAFP, `with` | `save()` override, signals, migration reversibility | async-sync 혼합, Pydantic v1↔v2 | 멱등성, 최상위 import, `xcom` 페이로드 크기, Jinja 템플릿 |
-| **Performance** | generator | **N+1** (`select_related`/`prefetch_related`), `bulk_*`, `.exists()` vs `len()` | unbounded query, sync logging in async | dynamic task mapping, sensor reschedule mode, pool/priority |
+| Lens | 무엇을 보나 (universal) |
+|---|---|
+| **Spec** | Acceptance bullet ↔ 코드 라인 매핑 |
+| **Security** | secrets, PII 로깅, injection (SQL/command/template), SSRF, path traversal, AuthZ |
+| **Correctness** | 엣지 케이스, 에러 핸들링, 네이밍, dead code, 테스트 커버리지 |
+| **Performance** | 메모리 폭주, 블로킹 I/O, 로깅 / 트레이싱 / 메트릭 |
 
-발견 사항 태그:
-- `[BLOCK]` — 머지 차단
-- `[CHANGES]` — 머지 전 수정 권장
-- `[NIT]` — 선택적 개선
-- `[EXISTING]` — 기존 코드 이슈 (이번 PR 차단 안 함, 별도 티켓 권장)
+**스택 특화 룰은 비어있음** (`<placeholder>` 만 있음). 본인 프로젝트 스택에 맞게 채우는 게 다음 섹션.
+
 
 ## Safety Hooks — What They Block
 
@@ -179,50 +177,44 @@ $ cd ~/your-project && claude
 - **비용 감각.** 풀 `/orchestrator` 한 사이클은 단순 채팅 대비 ~5-6배. Phase 잘게 쪼개거나 사소한 작업은 하네스 우회.
 - **멀티 repo 동시 변경**은 하네스가 잘 못 다룸. 한 번에 한 저장소.
 
-## Other Stacks — For Java Developers
+## Customize for Your Stack
 
-이 하네스는 Python/Django/FastAPI/Airflow 에 맞춰 튜닝됐지만, **나머지는 거의 다 generic** 입니다. Java/Spring Boot 프로젝트에 적용하려면 사실상 **reviewer.md 한 파일 + 도구명 줄 한두 개** 만 수정.
+이 하네스는 의도적으로 **언어/프레임워크 비종속** 으로 출발합니다. 본인 스택에 맞춰 다음 표대로 채우세요.
 
-### 🔴 Major Rewrite (1 file)
+### 어떤 파일을 무엇으로 채우나
 
-**`.claude/agents/reviewer.md`** — 4 lens × 4 stack 매트릭스에서 `Python/Django/FastAPI/Airflow` 부분을 `Java/Spring Boot/JPA/...` 로 교체.
+| 커스터마이즈 대상 | 수정할 파일 | 어떻게 채우나 / 참고 |
+|---|---|---|
+| **스택 특화 리뷰 룰** (ORM N+1, async/sync 혼합, 마이그레이션 안전성, 프레임워크 함정 등) | `.claude/agents/reviewer.md` 의 "Stack-specific" 서브섹션들 | `examples/reviewer-python.md` (Python+Django+FastAPI+Airflow) 또는 `examples/reviewer-java-spring.md` (Java+Spring+JPA+WebFlux) 참고해서 본인 스택 버전 작성 |
+| **의존성 매니저 / 린트 / 타입체크 / 테스트 러너 이름** | `.claude/agents/coder.md`, `tester.md` | 이미 generic — Coder/Tester 가 본인 프로젝트의 `pyproject.toml`/`package.json`/`pom.xml` 등을 보고 자동 추론. 특정 도구를 강제하고 싶으면 그 줄에 명시 추가. |
+| **빌드 산출물 폴더 (skip 대상)** | `.claude/agents/explorer.md` 의 skip 경로 | `target/`, `build/`, `dist/` 등 이미 포함. 본인 프로젝트 특수 폴더가 있으면 추가 |
+| **테스트 폴더 위치** | `.claude/agents/tester.md` | 자동 추론 (`tests/`, `src/test/java/`, `__tests__/` 등). 명시하고 싶으면 한 줄 추가 |
+| **프로젝트 지도 / 작업 규칙** | `CLAUDE.md` | `CLAUDE.md.example` 복사해서 본인 프로젝트로 채움 |
+| **요구사항 / 인수 기준** | `<subproject>/REQUIREMENTS.md` | `docs/harness/REQUIREMENTS.template.md` 복사해서 채움 |
 
-대표적인 Java/Spring 특화 체크 (전체 예시는 [`examples/reviewer-java-spring.md`](examples/reviewer-java-spring.md) 참고):
+### 풀 예시 (그대로 복사 → 수정 시작점)
 
-| Lens | Java/Spring 룰 |
+| 스택 | 파일 |
 |---|---|
-| **Security** | `@PreAuthorize` 누락, `@RequestParam` 검증 없음, native query 의 f-string 인젝션, `@Value` 평문 비밀, JPA `@EntityListeners` 부작용 |
-| **Correctness** | Lombok `@Data` 를 JPA 엔티티에 (equals/hashCode 무한루프), `Optional` 을 필드/매개변수에, `Stream` 두 번 소비, `@Transactional` private 메서드 (안 먹음), checked exception 무시 |
-| **Performance** | **JPA N+1** (`@OneToMany(fetch=LAZY)` + loop → `JOIN FETCH` 또는 `@EntityGraph`), `findAll()` 페이징 없이, virtual thread 안 쓰고 ExecutorService 무한 생성 |
-| **Operability** | Flyway 마이그레이션 reversible 안 됨, `@Async` 기본 ThreadPoolTaskExecutor 무한큐, log INFO 에 PII 박힘 |
+| Python (Django / FastAPI / Airflow) | [`examples/reviewer-python.md`](examples/reviewer-python.md) |
+| Java (Spring Boot / JPA / WebFlux) | [`examples/reviewer-java-spring.md`](examples/reviewer-java-spring.md) |
+| _Kotlin / Scala / Go / Rust / Ruby / ..._ | (PR 환영) |
 
-### 🟡 Light Edits (3 files)
+복사 명령:
+```bash
+# 본인 스택 버전을 reviewer 자리에 덮어씌우기
+cp examples/reviewer-<your-stack>.md .claude/agents/reviewer.md
+```
 
-| 파일 | 바꿀 것 |
-|---|---|
-| **`.claude/agents/coder.md`** | "match existing conventions" 의 `uv` / `pip` / `poetry` → `mvn` / `gradle`. `ruff` / `mypy` → `checkstyle` / `spotbugs` / `errorprone` / `spotless` |
-| **`.claude/agents/tester.md`** | `pytest` / `pytest-asyncio` / `freezegun` / `fakeredis` / `respx` / `xfail` → `JUnit 5` / `Mockito` / `Testcontainers` / `AssertJ` / `@Disabled`. `tests/` 폴더 → `src/test/java/` |
-| **`.claude/agents/explorer.md`** | Skip 경로에 `node_modules`, `.venv` 외 `target/`, `build/`, `.gradle/` 추가 |
+### 30분 안에 본인 스택 화 체크리스트
 
-### 🟢 Untouched (everything else)
+1. **Reviewer**: `examples/` 의 본인 스택 버전을 `.claude/agents/reviewer.md` 로 복사. 없으면 본인이 4 lens 매트릭스 채워서 작성.
+2. **CLAUDE.md**: `CLAUDE.md.example` 복사해서 본인 프로젝트 지도 / 규칙 채움.
+3. **REQUIREMENTS**: 신규 서브프로젝트라면 `docs/harness/REQUIREMENTS.template.md` 복사 → `<subproject>/REQUIREMENTS.md`. `/setup` 스킬도 이 작업 자동화함.
+4. **claude 재시작** → `/plan` 으로 첫 작업 시작.
 
-- 6 verb skill (`/plan`, `/work`, `/review`, `/release`, `/setup`, `/orchestrator`) — 언어 무관
-- `planner` — 분해 방식은 동일
-- `documenter` — README/CHANGELOG/ADR 동기화는 동일
-- 2 hooks (`block-destructive.sh`, `protect-secrets.sh`) — 셸 명령 가드라 언어 무관
-- `run_phase.py` — Claude CLI 호출 스크립트라 Java 프로젝트에서도 그대로 사용
-- REQUIREMENTS / ADR / DOC_SYNC_POLICY 템플릿 — 언어 무관
+다른 agent (planner, coder, tester, explorer, documenter) 는 모두 stack-agnostic 으로 작성됨. 건드릴 필요 없음.
 
-### 30-Minute Java-ification Checklist
-
-1. [`examples/reviewer-java-spring.md`](examples/reviewer-java-spring.md) 를 `.claude/agents/reviewer.md` 로 복사
-2. `.claude/agents/coder.md` 에서 Python 도구명 grep + 교체
-3. `.claude/agents/tester.md` 에서 `pytest` → `JUnit 5`, `tests/` → `src/test/java/`
-4. `.claude/agents/explorer.md` 의 skip 경로에 `target/ build/ .gradle/` 추가
-5. `CLAUDE.md` 의 프로젝트 지도를 본인 Java 프로젝트로 채우기
-6. `claude` 재시작 → `/plan` 으로 첫 작업
-
-**Kotlin / Scala / Go / Rust 도 같은 패턴.** reviewer 의 스택 룰만 갈아끼우면 됩니다. 새 스택 가이드 추가 PR 환영.
 
 ## License
 
