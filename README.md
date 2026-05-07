@@ -72,7 +72,7 @@ Claude Code 는 강력하지만 기본 동작에 절제가 없다. 자연어 작
 > Claude Code 자체에도 [plan mode](https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode) (read-only 탐색 + Plan agent) 가 있음. 본 하네스의 `/plan` 은 그 위에 phase 분해 + acceptance criteria + 영속화 (`Plans.md` 파일) 를 더한 것.
 
 ### 2. 한 phase 씩
-한 phase = 한 reviewable 단위 (~400 LoC diff). 4-7 phase 로 나누고 각각 독립 머지 가능. 1000줄 PR 은 사람이 제대로 못 본다.
+한 phase = 한 reviewable 단위 (~400 LoC diff 권장). 4-7 phase 로 나누고 각 phase 가 독립 머지 가능하도록 설계한다. 큰 diff 는 `reviewer` agent 도 사람도 놓치는 게 늘어난다 — context window 가 길어질수록 모델이 엣지 케이스나 회귀를 놓치는 빈도가 올라가고, 사람의 리뷰도 형식적이 된다. 작게 쪼갤수록 양쪽의 정확도가 모두 올라간다.
 
 ### 3. 4-lens review + 스택 룰
 머지 전 `reviewer` (Opus) 가 4 관점 — spec / security / correctness / performance — 적용. 거기에 본인 스택의 함정을 추가: Django ORM N+1, Spring `@Transactional` on private method (proxy 우회), FastAPI `async def` 안의 sync DB 호출 (event loop 블록) 등.
