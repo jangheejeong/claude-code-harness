@@ -1,6 +1,6 @@
 # claude-code-harness
 
-> A pragmatic Plan → Work → Review → Release harness for **Claude Code v2.1+**. **Stack-agnostic by default — fill in your own stack-specific rules.**
+> A workflow harness layered on top of **Claude Code v2.1+**. Type `/orchestrator` once and it runs plan → code → review → PR for you. Language/framework-neutral by default — you fill in stack-specific review rules.
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1+-purple)](https://code.claude.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)

@@ -1,6 +1,6 @@
 # claude-code-harness
 
-> **Claude Code v2.1+** 용 하네스. 평소엔 **`/orchestrator` 한 번만** 타이핑하면 plan 부터 PR 까지 자동. 언어/프레임워크 무관 generic 기본 + 본인 스택 룰 채우기.
+> **Claude Code v2.1+** 위에 얹는 작업 절차 묶음. 평소엔 **`/orchestrator` 한 번** 입력하면 계획부터 PR까지 자동. 언어/프레임워크는 무관, 스택별 리뷰 룰만 본인이 채우는 구조.
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1+-purple)](https://code.claude.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -11,13 +11,28 @@
 
 ## What This Is
 
-Claude Code 를 "절차에 따라 일하는 개발 파트너" 로 만들어주는 drop-in `.claude/` 설정 모음:
+Claude Code 는 그 자체로도 코딩을 도와주지만, 기본 상태로는 **계획 없이 바로 코드부터 치고**, **위험한 명령도 깜빡하면 실행**합니다. 이 하네스는 그 위에 얹는 "**규칙대로 일하는 동료**" 같은 절차 묶음이에요.
 
-- **Subagent 6개** (explorer, planner, coder, tester, reviewer, documenter) — 각자 격리된 컨텍스트 윈도우에서 동작. verbose 출력이 메인 세션에 흘러들어오지 않음.
-- **Verb 스킬 6개** (`/plan`, `/work`, `/review`, `/release`, `/setup`, `/orchestrator`) — 명시적인 워크플로우 단계 + 필수 게이트.
-- **안전 hook 2개** — 위험한 셸 명령(`rm -rf /`, `git push --force`, `git reset --hard origin/*`) 차단 + 시크릿 파일(`.env`, `*.pem`, `credentials.json`, `.mcp.json`) 쓰기 거부. 모델 판단이 아니라 코드로 강제.
-- **Phase 러너 스크립트** — `scripts/harness/run_phase.py` 로 긴 phase 작업을 메인 컨텍스트 밖으로 격리.
-- **문서 템플릿** — `REQUIREMENTS.md`, `ADR-NNN.md`, `DOC_SYNC_POLICY.md`.
+설치 = 본인 프로젝트 폴더에 `.claude/` 등 설정 폴더를 그대로 복사해 넣기. Claude Code 를 그 폴더에서 띄우면 자동 인식.
+
+### 들어있는 것 5가지
+
+**1. 6명의 전문 작업자**
+`explorer`, `planner`, `coder`, `tester`, `reviewer`, `documenter` — 각자 본인 일만 함.
+이들을 **subagent** 라고 부르는데, 각자 격리된 자리에서 일하고 결과만 메인 채팅에 돌려주기 때문에 **작업 로그가 메인을 어지럽히지 않음**. 또 똑똑한 일 (planner, reviewer) 만 Opus, 나머진 Sonnet 으로 비용 분리.
+
+**2. 6가지 슬래시 명령어**
+`/orchestrator` (메인) + `/plan`, `/work`, `/review`, `/release`, `/setup` (옵션). 채팅창에 입력하면 발동. 이걸 **skill** 이라 부름. 평소엔 `/orchestrator` 하나만 쓰면 됨.
+
+**3. 위험 명령 차단 장치 2개**
+`rm -rf /`, `git push --force`, `.env` 파일 쓰기 같은 위험한 일을 AI 가 시도하면 **모델이 참아주는 게 아니라 셸 스크립트가 먼저 막음**. 모델은 깜빡해도 스크립트는 안 깜빡함. 이걸 **hook** 이라 부름.
+
+**4. 긴 작업 분리 스크립트**
+phase 작업이 길어지면 메인 채팅창이 로그로 폭주하니까, 별도 셸로 분리해서 결과 한 줄만 메인에 돌리는 도구.
+
+**5. 문서 양식 3종**
+요구사항 (REQUIREMENTS), 결정 기록 (ADR), 문서 동기화 정책. 매번 새로 짜지 않게 미리 만든 빈 양식.
+
 
 ## Why a Harness — In Plain Words
 
@@ -251,51 +266,72 @@ $ cd ~/your-project && claude
 
 ```
 .
-├── CLAUDE.md.example         # 템플릿 — CLAUDE.md 로 복사 후 본인 프로젝트에 맞게 수정
-├── HARNESS.md                # 종합 사용 가이드 (한글, 12 섹션)
+├── CLAUDE.md.example              # 작업 규칙 + 프로젝트 지도 (CLAUDE.md 로 복사해서 사용)
+├── HARNESS.md                     # 종합 사용 가이드 (한글)
 ├── .claude/
-│   ├── agents/               # 6 subagent 정의
-│   ├── skills/               # 6 verb 스킬
-│   └── hooks/                # 2 안전 hook
+│   ├── agents/                    # 6명의 작업자 정의
+│   │   ├── explorer.md            #   - 코드베이스 탐색 (read-only)
+│   │   ├── planner.md             #   - 작업을 phase 로 분해 (Opus)
+│   │   ├── coder.md               #   - 한 phase 만 구현
+│   │   ├── tester.md              #   - 테스트 작성/실행
+│   │   ├── reviewer.md            #   - 4관점 + 스택 룰 검토 (Opus)
+│   │   └── documenter.md          #   - README/CHANGELOG/ADR 동기화
+│   ├── skills/                    # 6개 슬래시 명령어
+│   │   ├── orchestrator/          #   - /orchestrator (메인, plan→PR 전부)
+│   │   ├── plan/                  #   - /plan (청사진만)
+│   │   ├── work/                  #   - /work N (한 phase 만)
+│   │   ├── review/                #   - /review (리뷰만)
+│   │   ├── release/               #   - /release (PR 생성)
+│   │   └── setup/                 #   - /setup (신규 프로젝트 부트스트랩)
+│   └── hooks/                     # 위험 명령 차단 장치
+│       ├── block-destructive.sh   #   - rm -rf, git push --force 등 차단
+│       └── protect-secrets.sh     #   - .env, .pem, credentials 쓰기 거부
 ├── scripts/harness/
-│   └── run_phase.py          # 컨텍스트 격리 phase 러너
-└── docs/harness/
-    ├── REQUIREMENTS.template.md
-    ├── ADR.template.md
-    └── DOC_SYNC_POLICY.md
+│   └── run_phase.py               # 긴 작업 분리 도구
+├── docs/harness/
+│   ├── REQUIREMENTS.template.md   # 요구사항 양식
+│   ├── ADR.template.md            # 결정 기록 양식
+│   └── DOC_SYNC_POLICY.md         # 문서 동기화 정책
+└── examples/
+    ├── reviewer-python.md         # Python (Django/FastAPI/Airflow) 리뷰어 룰
+    └── reviewer-java-spring.md    # Java (Spring/JPA/WebFlux) 리뷰어 룰
 ```
 
-자세한 사용법은 [HARNESS.md](HARNESS.md) 참고 (12 섹션 + 부록 + 트러블슈팅).
+자세한 사용법 / 트러블슈팅 / 비용 가이드는 [HARNESS.md](HARNESS.md) 참고.
 
-## Reviewer — Stack-Agnostic by Default
 
-`reviewer` agent (Opus) 가 4 lens 로 검토:
+## Reviewer — 기본은 언어 무관
 
-| Lens | 무엇을 보나 (universal) |
+`reviewer` 작업자가 PR 직전에 4가지 관점으로 검토:
+
+| 관점 | 무엇을 보나 (모든 언어 공통) |
 |---|---|
-| **Spec** | Acceptance bullet ↔ 코드 라인 매핑 |
-| **Security** | secrets, PII 로깅, injection (SQL/command/template), SSRF, path traversal, AuthZ |
-| **Correctness** | 엣지 케이스, 에러 핸들링, 네이밍, dead code, 테스트 커버리지 |
-| **Performance** | 메모리 폭주, 블로킹 I/O, 로깅 / 트레이싱 / 메트릭 |
+| **Spec** | 처음 합의한 acceptance 기준이 진짜 충족됐나 |
+| **Security** | 시크릿 노출, 인증 누락, SQL/명령 인젝션, PII 로깅 |
+| **Correctness** | 엣지 케이스, 에러 처리, 네이밍, 죽은 코드, 테스트 커버리지 |
+| **Performance** | 메모리 폭주, 블로킹 I/O, 로깅/트레이싱/메트릭 |
 
-**스택 특화 룰은 비어있음** (`<placeholder>` 만 있음). 본인 프로젝트 스택에 맞게 채우는 게 다음 섹션.
+**언어 특유의 함정 룰** (예: Django N+1, Spring JPA lazy loading, FastAPI async-sync 혼합) **은 비어있는 채로 옵션**. 본인 스택에 맞게 채우는 게 다음 섹션 (Customize for Your Stack).
 
 
-## Safety Hooks — What They Block
+## Safety Hooks — 위험 명령 차단
+
+**Hook 이란**: AI 가 셸 명령이나 파일 쓰기를 시도하기 **직전에** 끼어들어 검사하는 작은 스크립트. AI 의 판단에 의존하지 않고 코드로 강제.
 
 ```
-# block-destructive.sh — 18 케이스 테스트 통과:
-✓ block: rm -rf /, ~, $HOME, /usr/*, /etc/*, /Library/* ...
-✓ block: git push --force, --force-with-lease, -f
-✓ block: git reset --hard origin/<branch>
-✓ block: dd of=/dev/sd*
-✓ allow: rm -rf node_modules, /tmp/foo, .venv (false positive: 0)
-✓ allow: git push -u origin feat/x
+# block-destructive.sh — 위험한 셸 명령 차단 (18 케이스 테스트 통과)
+✓ 차단: rm -rf /, ~, $HOME, /usr/*, /etc/*, /Library/* ...
+✓ 차단: git push --force, --force-with-lease, -f
+✓ 차단: git reset --hard origin/<branch>
+✓ 차단: dd of=/dev/sd*
+✓ 통과: rm -rf node_modules, /tmp/foo, .venv  (오탐 0건)
+✓ 통과: git push -u origin feat/x
 
-# protect-secrets.sh — 11 케이스 테스트 통과:
-✓ block: .env*, *.pem, *.key, credentials.json, tokens.yaml, .mcp.json
-✓ allow: README.md, main.py, credentials.md (문서)
+# protect-secrets.sh — 시크릿 파일 쓰기 거부 (11 케이스 테스트 통과)
+✓ 차단: .env*, *.pem, *.key, credentials.json, tokens.yaml, .mcp.json
+✓ 통과: README.md, main.py, credentials.md  (문서 파일은 OK)
 ```
+
 
 ## Honest Limitations
 
