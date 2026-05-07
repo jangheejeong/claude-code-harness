@@ -95,30 +95,240 @@ JSON
 2. `CLAUDE.md` 의 프로젝트 지도 표를 본인 서브프로젝트들로 채움.
 3. 워크스페이스 루트에서 `claude` 실행 — Claude Code 가 그 안의 모든 서브프로젝트에 대해 하네스 적용.
 
-## Usage — 30-Second Flow
+## Usage — Step by Step
+
+처음 굴리면 30초가 아니라 30분 걸려요. 흐름 익히면 그때부터 빨라집니다. 아래는 **"`api-server` 의 webhook 에 HMAC 검증 추가"** 라는 가상의 작업으로 처음부터 끝까지 따라가는 가이드.
+
+### Step 0 · Claude Code 켜기
+
+새 터미널에서:
+
+```bash
+cd ~/your-project       # 본인 프로젝트 루트
+claude                  # Claude Code 실행
+```
+
+확인:
+```
+> /agents
+```
+→ Project agents 섹션에 `coder`, `documenter`, `explorer`, `planner`, `reviewer`, `tester` 6개 보이면 OK.
 
 ```
-$ cd ~/your-project && claude
+> /
+```
+→ 슬래시 메뉴에 `/plan`, `/work`, `/review`, `/release`, `/setup`, `/orchestrator` 6개 보이면 OK.
 
-> api-server 의 webhook 에 HMAC 검증 붙여줘. /plan 가자
-   ⛔ STOP — 생성된 Plans.md 검토 + Approval ✓
+---
 
-> /work 1
-   ⛔ STOP — diff 한 번 보기
+### Step 1 · 작업 의도 던지고 `/plan`
 
+원하는 걸 자연어로 한 문장 + `/plan`:
+
+```
+> api-server 의 webhook 에 HMAC 검증 붙이고 싶어. /plan 으로 가자
+```
+
+**Claude 가 자동으로 하는 일** (1-2분 소요):
+1. `explorer` agent 가 `api-server/` 코드를 탐색
+2. `planner` agent (Opus) 가 작업을 **Phase 단위로 분해**
+3. `api-server/Plans.md` 파일에 Plan 저장
+4. 채팅창에 "Plans.md 저장 완료, 검토하세요" 메시지
+
+**⛔ 여기서 자동으로 멈춤.** 다음 사용자 액션 필요.
+
+> 💡 **Phase 가 뭔가요?**
+> 한 번에 머지할 수 있는 작은 변경 단위 (대략 400줄 이하). 큰 기능을 3-7개 Phase 로 잘게 쪼갬. Phase 1, 2, 3 순서대로 한 개씩 진행.
+
+---
+
+### Step 2 · ⛔ 사용자 액션: Plans.md 검토 + 승인
+
+별도 에디터에서 파일 열기:
+
+```bash
+# 새 터미널에서 (Claude 채팅은 그대로 두고)
+cursor api-server/Plans.md
+# 또는 vim, vscode, etc.
+```
+
+Plans.md 안에서 **확인할 것 4가지**:
+
+- [ ] 각 Phase 의 **Acceptance criteria** 가 측정 가능한가?
+   - 좋은 예: `pytest tests/api/test_webhook.py::test_valid_signature passes`
+   - 나쁜 예: `webhook 이 잘 작동함`
+- [ ] **Out of scope** (이번에 안 할 것) 가 명확히 적혀있는가?
+- [ ] **Open questions** (열린 질문) 이 다 답변됐는가?
+- [ ] 최하단 **Approval** 섹션 두 박스에 ✓ 체크
+
+이상하면 Claude 채팅으로 돌아가서:
+```
+> Phase 2 가 너무 크다. webhook 등록과 secret 로테이션 둘로 쪼개서 다시 짜줘
+```
+→ Planner 가 다시 돔. Plans.md 갱신됨.
+
+OK 면 다음 단계로.
+
+---
+
+### Step 3 · Phase 1 구현 — `/work 1`
+
+Claude 채팅창에서:
+
+```
+> Plans.md 승인했어. /work 1
+```
+
+**Claude 가 자동으로 하는 일** (몇 분 소요):
+1. `coder` agent 가 Phase 1 의 Acceptance criteria 만 보면서 **최소한의 코드 변경** 으로 구현
+2. `tester` agent 가 Phase 1 의 Acceptance bullet 마다 **테스트 매핑 + 실행**
+3. 통과하면 채팅창에 diff 요약 + 테스트 결과 출력
+
+**⛔ 여기서 또 멈춤.**
+
+---
+
+### Step 4 · ⛔ 사용자 액션: diff 한 번 보기 (선택)
+
+```bash
+# 새 터미널
+cd ~/your-project
+git diff
+```
+
+이상하면 Claude 한테 자연어로:
+```
+> router.py 의 변수명 payload 를 request_body 로 바꿔줘
+```
+→ Coder 가 다시 돔.
+
+OK 면 다음 단계로.
+
+---
+
+### Step 5 · 리뷰 게이트 — `/review`
+
+Claude 채팅창에서:
+
+```
 > /review
-   ⛔ STOP — verdict 확인
-
-> /release   # ← 직접 타이핑 필요. 자동 호출 잠겨있음
-   ⛔ STOP — GitHub 에서 PR 머지
-
-> /work 2 ... 반복
 ```
 
-짧은 작업은 하네스 우회:
+**Claude 가 자동으로 하는 일** (1-2분 소요):
+1. `reviewer` agent (Opus) 가 git diff 를 읽고
+2. **4 lens** (spec / security / correctness / performance) + 본인 스택 룰로 검토
+3. **Verdict 출력**: `APPROVE` / `REQUEST CHANGES` / `BLOCK`
+4. 발견사항이 있으면 자동으로 Coder 에게 다시 핑 (최대 3회 자동 루프)
+
+**⛔ 여기서 또 멈춤.**
+
+| Verdict | 다음 행동 |
+|---|---|
+| **APPROVE** ✅ | Step 6 으로 |
+| **REQUEST CHANGES** 🟡 | 자동 루프 안 풀렸으면 직접 수정 후 다시 `/review` |
+| **BLOCK** 🔴 | 보안/정확성 이슈. 무조건 직접 수정하고 다시 `/review` |
+
+---
+
+### Step 6 · 배포 — `/release` (반드시 직접 타이핑)
+
+```
+> /release
+```
+
+> ⚠️ **이건 자동 차단 걸려있음.** Claude 가 알아서 발동 안 하니까 사용자가 직접 타이핑해야 함. 커밋/푸시/PR 같은 사이드 이펙트 보호용.
+
+**Claude 가 자동으로 하는 일**:
+1. `documenter` agent 가 README / CHANGELOG / ADR 문서 동기화
+2. Plans.md 의 Phase 1 체크박스 마킹
+3. `git commit` (Phase 1 파일 + 문서 + CHANGELOG 만)
+4. `git push -u origin <branch>`
+5. `gh pr create` → PR URL 출력
+
+**⛔ 여기서 또 멈춤.**
+
+---
+
+### Step 7 · ⛔ 사용자 액션: GitHub 에서 PR 머지
+
+```bash
+gh pr view <num> --web
+```
+브라우저에서 직접 머지 클릭. 또는 동료 리뷰 받고.
+
+> ⚠️ **자동 머지 절대 안 함.** main 브랜치 보호.
+
+---
+
+### Step 8 · 다음 Phase
+
+Claude 채팅창으로 돌아와서:
+```
+> /work 2
+```
+
+→ Step 3 ~ 7 반복. 모든 Phase 끝나면 작업 완료.
+
+---
+
+## Usage — 짧은 작업은 하네스 우회
+
+3 phase 안 들어가는 작업이면 그냥 평범하게 채팅:
+
 ```
 > apps/server.py 의 logger 레벨 INFO 로 바꿔줘
 ```
+
+→ Claude 가 그냥 평범하게 처리. 하네스 verb 안 거쳐도 됨.
+
+| 상황 | 권장 |
+|---|---|
+| 한 파일 한두 줄 수정 | 그냥 채팅 |
+| 빠른 디버깅 / 탐색 | 그냥 채팅 |
+| README 오타 수정 | 그냥 채팅 |
+| 3 phase 이상 들어가는 작업 | 하네스 풀 사용 |
+| 보안/정확성 중요한 변경 | 하네스 풀 사용 |
+
+---
+
+## Usage — 자주 쓰는 부가 명령
+
+```
+> /compact
+```
+컨텍스트 정리. **Phase 사이마다 권장** (안 하면 토큰이 95% 차면 자동 정리되긴 함).
+
+```
+> @agent-explorer api-server 의 webhook 라우팅 보여줘
+> @agent-reviewer 이 PR 다시 봐줘
+> @agent-documenter README 갱신해줘
+```
+특정 agent 직접 호출 (자동 라우팅 우회). `@` 입력하면 후보 typeahead.
+
+```
+> 이번엔 하네스 빼고 그냥 고쳐줘
+```
+일시적으로 하네스 우회.
+
+---
+
+## 30-Second Cheatsheet
+
+이미 흐름 익혔다면 이것만 보면 됨:
+
+```
+1. cd ~/your-project && claude
+2. > <뭐> 추가하고 싶어. /plan 가자
+3. ⛔ Plans.md 검토 + Approval ✓
+4. > /work 1
+5. ⛔ git diff 확인
+6. > /review
+7. ⛔ verdict 확인 (APPROVE 면 다음, 아니면 수정)
+8. > /release        ← 직접 타이핑
+9. ⛔ GitHub 에서 PR 머지
+10. > /work 2 ... 반복
+```
+
 
 ## Project Structure
 
