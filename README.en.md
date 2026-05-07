@@ -19,17 +19,35 @@ A drop-in `.claude/` configuration that turns Claude Code into a disciplined dev
 - **Phase runner script** — `scripts/harness/run_phase.py` keeps long phase work out of your main context window.
 - **Doc templates** — `REQUIREMENTS.md`, `ADR-NNN.md`, `DOC_SYNC_POLICY.md`.
 
-## Why a harness
+## Why a harness — in plain words
 
-Claude Code is powerful but undisciplined out of the box. This harness enforces:
+Claude Code is powerful but undisciplined out of the box. This harness enforces 5 things:
 
-1. **Plan-first** — no code change without a phased `Plans.md` with measurable acceptance criteria.
-2. **Phase boundaries** — one reviewable unit at a time (≤400 LoC diff target).
-3. **4-lens review** — spec correctness, security, correctness/maintainability, performance — with stack-specific checks for Django ORM N+1, FastAPI async/sync mixing, Airflow idempotency, etc.
-4. **Hooks over hopes** — destructive commands blocked by deterministic shell scripts, not by trusting the model.
-5. **Human gates** — the user still approves the plan, reviews the verdict, and merges the PR. The harness **reduces** human work, doesn't eliminate it.
+### 1. Plan-first — "no nailing without a blueprint"
+When you say "add this feature," Claude does NOT start typing code. It first writes a `Plans.md` design doc breaking the work into Phases with measurable acceptance criteria. **Only after you check the boxes does coding start.** Stops the AI from drifting off course.
 
-This is not "AI does it all". It's "AI does the expensive parts, human handles the gates."
+### 2. Phase boundary — "one bite at a time"
+A Phase is one reviewable unit (~400 LoC diff target). Don't ship one giant feature in one PR. **A 1000-line PR is too big for humans to review properly, and bugs slip through.**
+
+### 3. 4-lens review — "review with 4 different glasses"
+Before merge, the reviewer agent looks from 4 angles:
+- **spec**: did the diff actually meet what the Plan said
+- **security**: secrets, missing auth, injection
+- **correctness**: edge cases, error handling, naming
+- **performance**: slow paths, memory blowups
+
+Plus stack-specific checks. Example: Django's classic N+1 (looping over a queryset and accessing `.user.email` triggers 100 DB hits).
+
+### 4. Hooks over hopes — "block dangerous things in code, not in prompts"
+Instead of *asking* the model "please don't `rm -rf /`," a shell script intercepts the command before it runs and blocks it. **The model can forget, the script can't.**
+
+### 5. Human gates — "the AI doesn't do it all"
+Plan approval, BLOCK verdict decisions, PR merging — these 3 stay human. **You can't fall asleep and let the AI ship to production.**
+
+---
+
+Net effect: "AI handles the expensive parts (writing code, mapping tests to acceptance, 4-angle review), human handles the gates."
+
 
 ## Install
 
@@ -156,6 +174,50 @@ Findings are tagged `[BLOCK]` / `[CHANGES]` / `[NIT]` / `[EXISTING]` (the last o
 - **Plan quality determines everything.** A weak Plan produces weak code, weak tests, and a weak review. Spend Opus tokens on the planner.
 - **Cost matters.** A full `/orchestrator` run costs ~5-6× a single chat. Phase your work small, or skip the harness for trivial changes.
 - **Multi-repo refactors** are not the harness's strength. One repo at a time.
+
+## Other stacks? Java?
+
+This harness is tuned for Python/Django/FastAPI/Airflow, but **most of it is generic**. To adapt for Java/Spring Boot, you essentially modify **one file (reviewer.md) plus a few tool-name lines**.
+
+### 🔴 Major rewrite (1 file)
+
+**`.claude/agents/reviewer.md`** — Replace the `Python/Django/FastAPI/Airflow` checks with `Java/Spring Boot/JPA/...`.
+
+Sample Java/Spring checks (full example: [`examples/reviewer-java-spring.md`](examples/reviewer-java-spring.md)):
+
+| Lens | Java/Spring rule |
+|---|---|
+| **Security** | Missing `@PreAuthorize`, unvalidated `@RequestParam`, native-query string concatenation, `@Value` plaintext secrets, JPA `@EntityListeners` side effects |
+| **Correctness** | Lombok `@Data` on JPA entities (equals/hashCode infinite loop), `Optional` as field/parameter, `Stream` consumed twice, `@Transactional` on private methods (no-op), swallowed checked exceptions |
+| **Performance** | **JPA N+1** (`@OneToMany(fetch=LAZY)` + loop → `JOIN FETCH` or `@EntityGraph`), `findAll()` without pagination, unbounded ExecutorService instead of virtual threads |
+| **Operability** | Non-reversible Flyway migration, `@Async` default executor with unbounded queue, PII at log level INFO |
+
+### 🟡 Light edits (3 files)
+
+| File | Change |
+|---|---|
+| **`.claude/agents/coder.md`** | `uv`/`pip`/`poetry` → `mvn`/`gradle`. `ruff`/`mypy` → `checkstyle`/`spotbugs`/`errorprone`/`spotless` |
+| **`.claude/agents/tester.md`** | `pytest`/`pytest-asyncio`/`freezegun`/`fakeredis`/`respx`/`xfail` → `JUnit 5`/`Mockito`/`Testcontainers`/`AssertJ`/`@Disabled`. `tests/` → `src/test/java/` |
+| **`.claude/agents/explorer.md`** | Add `target/`, `build/`, `.gradle/` to skip paths |
+
+### 🟢 Untouched (everything else)
+
+- 6 verb skills (`/plan`, `/work`, `/review`, `/release`, `/setup`, `/orchestrator`) — language-agnostic
+- `planner`, `documenter` — same logic
+- 2 hooks — shell-command guards, language-agnostic
+- `run_phase.py` — wraps the Claude CLI, language-agnostic
+- REQUIREMENTS / ADR / DOC_SYNC_POLICY templates — language-agnostic
+
+### 30-minute Java-ification checklist
+
+1. Copy [`examples/reviewer-java-spring.md`](examples/reviewer-java-spring.md) over `.claude/agents/reviewer.md`
+2. In `.claude/agents/coder.md`, swap Python tool names for Java
+3. In `.claude/agents/tester.md`, swap `pytest` → `JUnit 5`, `tests/` → `src/test/java/`
+4. In `.claude/agents/explorer.md`, add `target/ build/ .gradle/` to skip paths
+5. Fill in `CLAUDE.md` with your Java project map
+6. Restart `claude`, run `/plan` for your first feature
+
+**Kotlin / Scala / Go / Rust follow the same pattern** — only the reviewer's stack rules change. PRs adding new stack guides welcome.
 
 ## License
 
