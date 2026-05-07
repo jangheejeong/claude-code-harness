@@ -394,7 +394,6 @@ allow: README.md, main.py, credentials.md, *.txt   (문서 파일은 OK)
 
 ## Honest Limitations
 
-- **"개발자 없이 자동 개발" 류 광고는 과장이다.** Plan 승인, BLOCK 시 결정, PR 머지는 여전히 사람의 판단을 요구한다.
 - **결과의 상한은 Plan 의 품질이 정한다.** Plan 이 모호하면 코드도 리뷰도 모호해진다. `planner` 에 Opus 를 할당하는 게 작업 전체에서 가장 가성비 좋은 결정이다.
 - **`/orchestrator` 한 번은 phase 수만큼의 subagent 호출 (`planner` + `coder` + `tester` + `reviewer` × phase 수) 을 포함하므로 단일 채팅보다 토큰 소비가 많다.** 정확한 배수는 코드베이스 크기, phase 분해 깊이, BLOCK 자동 fix 루프 횟수에 따라 크게 달라지므로 본인 환경에서 직접 측정하는 게 맞다.
 - **여러 repo 를 워크스페이스 루트 아래 두고 각각 작업하는 패턴은 정상 작동한다.** (모노레포 X, MSA 다중 repo 모음 OK — 상위 폴더에 `CLAUDE.md` 와 `.claude/` 만 있으면 됨.) 단, **한 phase 안에서 여러 repo 를 atomic 하게 동시 수정**해야 하는 작업 — 예: 인터페이스를 변경하면서 모든 컨슈머 코드를 같은 PR 로 묶어야 하는 경우 — 은 잘 다루지 못한다. git worktree 격리가 repo 경계를 못 넘기 때문이다.
