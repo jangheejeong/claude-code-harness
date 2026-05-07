@@ -146,7 +146,7 @@ The `reviewer` agent (Opus) applies a 4-lens review:
 
 | Lens | Universal checks |
 |---|---|
-| **Spec** | Acceptance bullet ↔ code line mapping |
+| **Spec** | each acceptance bullet from Plans.md is met by the diff |
 | **Security** | secrets, PII logging, injection (SQL/command/template), SSRF, path traversal, AuthZ |
 | **Correctness** | edge cases, error handling, naming, dead code, test coverage |
 | **Performance** | memory blowup, blocking I/O, logging / tracing / metrics |
@@ -221,5 +221,5 @@ MIT. See [LICENSE](LICENSE).
 
 ## Acknowledgments
 
-- Workflow shape inspired by 민세홍's 6-agent design for the heum monorepo.
+- Workflow shape inspired by a 6-agent design pattern.
 - Best-practice references: [Chachamaru127/claude-code-harness](https://github.com/Chachamaru127/claude-code-harness), [Anthropic Claude Code docs](https://code.claude.com/docs).
