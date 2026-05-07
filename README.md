@@ -230,6 +230,8 @@ $ cd ~/your-project && claude
 
 **Plan 승인.** `planner` 가 작성한 `Plans.md` 를 검토하고 Approval 박스에 체크해야 다음 단계로 넘어간다. Plan 이 부실하면 그 위에 쌓이는 코드, 테스트, 리뷰가 모두 부실해지므로 이 검토에 시간을 충분히 쓰는 게 작업 전체에서 가장 큰 레버리지다.
 
+수정이 필요하면 `Plans.md` 를 직접 편집하기보단 자연어로 요청하는 게 좋다 — _"Phase 2 가 너무 크다, 둘로 쪼개줘"_, _"acceptance 가 모호하다, 구체적인 status code 로 바꿔"_, _"만료 nonce 처리 phase 가 빠졌다, 추가해"_ 식. `planner` 가 다시 짜고 사용자는 다시 검토. 직접 편집은 planner 가 본인이 안 쓴 변경을 모르게 만들어 이후 단계와 어긋난다.
+
 **BLOCK verdict.** `reviewer` 가 BLOCK 을 내고 자동 fix 루프 (최대 3회) 가 풀지 못하면 흐름이 멈춘다.
 
 3회 안에 풀리지 않는 BLOCK 은 보통 다음 셋 중 하나의 신호다:
