@@ -64,62 +64,35 @@
 
 ## Why a Harness
 
-> Claude Code 의 기본 동작은 절차 강제력이 약함. 이 하네스가 강제하는 **5가지 원칙**.
+Claude Code 는 강력하지만 기본 동작에 절제가 없다. 자연어 작업을 던지면 즉시 코드부터 치고, `rm -rf` 같은 위험 명령도 instruction 만으론 깜빡할 수 있다. 이 하네스는 그 위에 5개 강제력을 얹는다.
 
-| # | 원칙 | 메타포 |
-|:---:|---|---|
-| 1 | **Plan-first** | "설계도 없이 못 박지 마" |
-| 2 | **Phase 경계** | "한 입씩 먹어" |
-| 3 | **4-lens review** | "리뷰는 4개 안경 끼고" |
-| 4 | **Hooks over hopes** | "막아야 할 건 코드로" |
-| 5 | **Human gates** | "AI 에게 다 맡기고 자버린다 = NO" |
+### 1. Plan 먼저
+코드 수정 전에 `Plans.md` 가 있어야 한다. `planner` (Opus) 가 작업을 phase 단위로 분해하고 각 phase 의 acceptance criteria 를 적는다. Plan 이 부실하면 그 위에 쌓이는 모든 게 부실해지므로 Opus 토큰을 여기 투자한다.
 
-<details>
-<summary><strong>각 원칙 자세히</strong></summary>
+> Claude Code 자체에도 [plan mode](https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode) (read-only 탐색 + Plan agent) 가 있음. 본 하네스의 `/plan` 은 그 위에 phase 분해 + acceptance criteria + 영속화 (`Plans.md` 파일) 를 더한 것.
 
-<br>
+### 2. 한 phase 씩
+한 phase = 한 reviewable 단위 (~400 LoC diff). 4-7 phase 로 나누고 각각 독립 머지 가능. 1000줄 PR 은 사람이 제대로 못 본다.
 
-### 1. Plan-first
-자연어 요청 → 즉시 코드 변경이 아니라, `planner` (Opus) 가 phase 분해 + acceptance criteria 가 담긴 `Plans.md` 를 먼저 생성. 사용자가 approval 박스 ✓ 친 뒤에야 구현 시작.
+### 3. 4-lens review + 스택 룰
+머지 전 `reviewer` (Opus) 가 4 관점 — spec / security / correctness / performance — 적용. 거기에 본인 스택의 함정을 추가: Django ORM N+1, Spring `@Transactional` on private method (proxy 우회), FastAPI `async def` 안의 sync DB 호출 (event loop 블록) 등.
 
-> Plan 이 부실하면 그 위에 쌓이는 모든 게 부실해짐 — 그래서 Opus 토큰을 이 단계에 투자.
+### 4. Hook 으로 강제
+instruction 은 모델이 깜빡할 수 있다. PreToolUse hook 이 셸 레벨에서 deny 한다. exit code 2 + JSON deny → Claude 에게 차단 사유가 표시됨. `--dangerously-skip-permissions` 모드에서도 hook 차단은 작동.
 
-> Claude Code 자체에도 [plan mode](https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode) (read-only 탐색 + Plan agent) 가 있음. 본 하네스의 `/plan` 은 그 위에 **phase 분해 + acceptance criteria + 영속화 (Plans.md 파일)** 를 더한 것.
+### 5. 사람 게이트 3개
+다음 3개는 자동화 안 함:
 
-### 2. Phase 경계
-1 phase = 1 reviewable 단위 (~400 LoC diff 권장). 4-7 phase 로 분해, 각 phase 가 독립 머지 가능.
+1. Plan 승인
+2. BLOCK verdict 시 결정
+3. PR 머지
 
-> 1000줄 PR 은 사람도 제대로 못 봐서 형식적 리뷰가 됨.
-
-### 3. 4-lens review + 스택별 룰
-머지 전 `reviewer` (Opus) 가 4 lens 적용:
-
-| Lens | 무엇을 보나 |
-|---|---|
-| **Spec** | Plan 에 적힌 성공 조건이 실제 코드에서 충족됐는지 |
-| **Security** | 시크릿 노출, 인젝션 (SQL/명령/템플릿), AuthZ, PII 로깅 |
-| **Correctness** | 엣지 케이스, 에러 처리, 네이밍, dead code, 테스트 커버리지 |
-| **Performance** | 메모리 폭주, async 경로의 blocking I/O, 관측성 결함 |
-
-여기에 스택별 룰 추가. 예: Django ORM N+1, Spring `@Transactional` on private method, FastAPI `async def` 안의 sync DB 호출.
-
-### 4. Hooks over hopes
-"`rm -rf` 하지 마세요" 같은 instruction 은 모델이 깜빡할 수 있음. PreToolUse hook 으로 셸 레벨 차단 — 모델이 깜빡해도 hook 은 안 깜빡함. exit code 2 + JSON deny → Claude 에게 차단 사유 표시.
-
-### 5. Human gates
-다음 3개는 사람이 직접:
-
-1. **Plan 승인**
-2. **BLOCK verdict** 시 결정
-3. **PR 머지**
-
-그 외엔 자동.
-
-</details>
-
-> **Net effect**: AI 가 비싼 부분 (분해, 구현, 테스트 매핑, 4관점 리뷰, 자동 fix 루프) 을 처리, 사람은 게이트만 통과.
+그 외엔 전부 자동.
 
 ---
+
+> AI 가 분해 / 구현 / 테스트 매핑 / 4관점 리뷰 / 자동 fix 루프를 처리. 사람은 게이트만 통과시킨다.
+
 
 ## Install
 
@@ -213,7 +186,7 @@ flowchart TD
 
 > **Reviewer 의 3단계 판단**: 1번 (Plan 성공 조건) → 2번 (보안/정확성) → 3번 (테스트) 순서로 검사. 셋 다 통과해야 APPROVE, 하나라도 실패하면 BLOCK 후 자동 fix 루프 진입.
 
-### The 1-verb flow
+### 사용 방법
 
 ```bash
 $ cd ~/your-project && claude
@@ -221,25 +194,25 @@ $ cd ~/your-project && claude
 > /orchestrator api-server 의 webhook 에 HMAC 검증 추가
 ```
 
-| Step | What happens | Time |
-|---|---|---|
-| **1.** Plan | `planner` 가 phase 분해 + acceptance criteria 작성 → `Plans.md` 저장 | 1-3분 |
-| **⛔ Gate** | 사용자가 `Plans.md` 검토 + Approval ✓ | 사람 |
-| **2.** Loop | Phase 별 `coder` → `tester` → `reviewer`. BLOCK 이면 자동 fix 루프 (최대 3회) | phase × 5-10분 |
-| **3.** Release | `documenter` 가 README/CHANGELOG 갱신 → commit → push → `gh pr create` | 1-2분 |
-| **⛔ Gate** | 사용자가 GitHub 에서 PR 머지 | 사람 |
+| Step | What happens |
+|---|---|
+| **1.** Plan | `planner` 가 phase 분해 + acceptance criteria 작성 → `Plans.md` 저장 |
+| **⛔ Gate** | 사용자가 `Plans.md` 검토 + Approval ✓ |
+| **2.** Loop | Phase 별 `coder` → `tester` → `reviewer`. BLOCK 이면 자동 fix 루프 (최대 3회) |
+| **3.** Release | `documenter` 가 README/CHANGELOG 갱신 → commit → push → `gh pr create` |
+| **⛔ Gate** | 사용자가 GitHub 에서 PR 머지 |
 
-> **외울 verb**: `/orchestrator` 1개. 끝.
+> 외울 verb: `/orchestrator` 1개.
 
-### Gates — 사용자 개입 지점
+### 사용자가 개입하는 3 지점
 
-| # | Gate | Why | What you do |
-|:---:|---|---|---|
-| 1 | **Plan 승인** | 잘못된 청사진 = 전체 망함 | `Plans.md` 검토 + Approval ✓ |
-| 2 | **BLOCK verdict** (3회 fix 실패) | 보안/correctness 사람 결정 | 직접 수정 후 `/orchestrator` 재실행 |
-| 3 | **PR 머지** | `main` 보호 | GitHub 에서 직접 |
+자동으로 안 넘어가는 단계 3개. 그 외엔 자동.
 
-이 3개 외엔 자동.
+**Plan 승인.** `planner` 가 작성한 `Plans.md` 를 사용자가 검토하고 Approval 박스에 체크해야 다음으로 넘어간다. 청사진이 부실하면 그 위에 쌓이는 코드, 테스트, 리뷰 모두 부실해지므로 여기서 5분 쓰는 게 가장 효과적이다.
+
+**BLOCK verdict.** `reviewer` 가 BLOCK 내고 자동 fix 루프 (최대 3회) 가 풀지 못하면 멈춘다. 3회에도 안 풀린다면 보통 Plan 의 가정이 틀렸거나 architecture 결정이 필요한 경우. 사용자가 직접 수정 (또는 `/plan` 으로 청사진 다시 짜기) 후 `/orchestrator` 재실행.
+
+**PR 머지.** GitHub 에서 직접. `main` 자동 머지 안 함 — 동료 리뷰 / CI 통과 후 사람이 클릭.
 
 ---
 
