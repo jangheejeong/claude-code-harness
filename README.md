@@ -94,7 +94,7 @@
 
 | Lens | 무엇을 보나 |
 |---|---|
-| **Spec** | `Plans.md` 의 acceptance ↔ diff 라인 매핑 |
+| **Spec** | Plan 에 적힌 성공 조건이 실제 코드에서 충족됐는지 |
 | **Security** | 시크릿 노출, 인젝션 (SQL/명령/템플릿), AuthZ, PII 로깅 |
 | **Correctness** | 엣지 케이스, 에러 처리, 네이밍, dead code, 테스트 커버리지 |
 | **Performance** | 메모리 폭주, async 경로의 blocking I/O, 관측성 결함 |
@@ -181,21 +181,35 @@ flowchart TD
 
     Phase --> Coder[coder]
     Coder --> Tester[tester]
-    Tester --> Reviewer[reviewer Opus]
+    Tester --> R[reviewer Opus 검토 시작]
 
-    Reviewer -->|APPROVE| Next{다음 phase?}
-    Reviewer -->|BLOCK| Fix[자동 fix 루프 max 3]
+    R --> C1{1. Plan 의 성공 조건<br/>모두 충족?}
+    C1 -->|No| BLOCK[BLOCK]
+    C1 -->|Yes| C2{2. 보안 / 정확성<br/>이슈 있나?}
+    C2 -->|Yes| BLOCK
+    C2 -->|No| C3{3. 테스트 모두 통과?}
+    C3 -->|No| BLOCK
+    C3 -->|Yes| APPROVE[APPROVE]
+
+    BLOCK --> Fix[자동 fix 루프 max 3]
     Fix -->|fail| Gate2[STOP: 사용자 결정]
-    Fix -->|success| Reviewer
+    Fix -->|success| R
     Gate2 -.수정 후.-> Phase
 
+    APPROVE --> Next{다음 phase?}
     Next -->|Yes| Phase
     Next -->|No| PR[PR 생성]
     PR --> Gate3[STOP: GitHub 머지]
 
     classDef gate fill:#f59e0b,stroke:#92400e,stroke-width:2.5px,color:#000
     class Gate1,Gate2,Gate3 gate
+    classDef block fill:#ef4444,stroke:#7f1d1d,stroke-width:2px,color:#fff
+    class BLOCK block
+    classDef approve fill:#22c55e,stroke:#14532d,stroke-width:2px,color:#fff
+    class APPROVE approve
 ```
+
+> **Reviewer 의 3단계 판단**: 1번 (Plan 성공 조건) → 2번 (보안/정확성) → 3번 (테스트) 순서로 검사. 셋 다 통과해야 APPROVE, 하나라도 실패하면 BLOCK 후 자동 fix 루프 진입.
 
 ### The 1-verb flow
 
@@ -349,7 +363,7 @@ $ cd ~/your-project && claude
 
 | Lens | Universal checks |
 |---|---|
-| **Spec** | `Plans.md` acceptance bullet ↔ diff line 매핑 |
+| **Spec** | Plan 에 적힌 성공 조건이 실제 코드에서 충족됐는지 |
 | **Security** | 시크릿 노출, 인젝션 (SQL/명령/템플릿), SSRF, path traversal, AuthZ, PII 로깅 |
 | **Correctness** | 엣지 케이스, 에러 처리, 네이밍, dead code, 테스트 커버리지 |
 | **Performance** | 메모리 폭주, async 경로의 blocking I/O, 관측성 결함 |
@@ -452,6 +466,6 @@ cp examples/reviewer-<your-stack>.md .claude/agents/reviewer.md
 
 ## Contributing & Acknowledgments
 
-- 워크플로우 구조: 민세홍님의 6-agent 디자인 (heum 모노레포용) 에서 시작.
+- 워크플로우 구조: 민세홍님의 6-agent 디자인에서 시작.
 - Best-practice 참고: [Chachamaru127/claude-code-harness](https://github.com/Chachamaru127/claude-code-harness), [Anthropic Claude Code 공식 문서](https://code.claude.com/docs).
 - 새 스택 reviewer 추가 PR 환영.
