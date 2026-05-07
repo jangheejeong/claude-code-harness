@@ -69,10 +69,12 @@ Claude Code 는 강력하지만 기본 동작에 절제가 없다. 자연어 작
 ### 1. Plan 먼저
 코드 수정 전에 `Plans.md` 가 있어야 한다. `planner` (Opus) 가 작업을 phase 단위로 분해하고 각 phase 의 acceptance criteria 를 적는다. Plan 이 부실하면 그 위에 쌓이는 모든 게 부실해지므로 Opus 토큰을 여기 투자한다.
 
+각 phase 는 **vertical slice** 로 분해한다 — 한 phase 가 DB + service + UI (또는 본인 스택의 모든 레이어) 를 가로지르게. horizontal phasing (DB 먼저 다 만들고, 그 다음 service 다, 그 다음 UI 다) 은 end-to-end 피드백을 늦춰서 권장하지 않는다.
+
 > Claude Code 자체에도 [plan mode](https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode) (read-only 탐색 + Plan agent) 가 있음. 본 하네스의 `/plan` 은 그 위에 phase 분해 + acceptance criteria + 영속화 (`Plans.md` 파일) 를 더한 것.
 
 ### 2. 한 phase 씩
-한 phase = 한 reviewable 단위 (~400 LoC diff 권장). 4-7 phase 로 나누고 각 phase 가 독립 머지 가능하도록 설계한다. 큰 diff 는 `reviewer` agent 도 사람도 놓치는 게 늘어난다 — context window 가 길어질수록 모델이 엣지 케이스나 회귀를 놓치는 빈도가 올라가고, 사람의 리뷰도 형식적이 된다. 작게 쪼갤수록 양쪽의 정확도가 모두 올라간다.
+한 phase = 한 reviewable 단위 — 보통 수백 줄 diff (경험상 300-500 줄 정도가 무리 없음) 안에서 끊는다. 작업 크기에 따라 phase 수는 달라지지만 보통 3-7개 정도, 각 phase 가 독립 머지 가능하도록 설계한다. 큰 diff 는 `reviewer` agent 도 사람도 놓치는 게 늘어난다 — context window 가 길어질수록 모델이 엣지 케이스나 회귀를 놓치는 빈도가 올라가고, 사람의 리뷰도 형식적이 된다. 작게 쪼갤수록 양쪽의 정확도가 모두 올라간다.
 
 ### 3. 4-lens review + 스택 룰
 머지 전 `reviewer` (Opus) 가 4 관점 — spec / security / correctness / performance — 적용. 거기에 본인 스택의 함정을 추가: Django ORM N+1, Spring `@Transactional` on private method (proxy 우회), FastAPI `async def` 안의 sync DB 호출 (event loop 블록) 등.
@@ -210,7 +212,7 @@ $ cd ~/your-project && claude
 
 **Plan 승인.** `planner` 가 작성한 `Plans.md` 를 검토하고 Approval 박스에 체크해야 다음 단계로 넘어간다. Plan 이 부실하면 그 위에 쌓이는 코드, 테스트, 리뷰가 모두 부실해지므로 이 검토에 시간을 충분히 쓰는 게 작업 전체에서 가장 큰 레버리지다.
 
-**BLOCK verdict.** `reviewer` 가 BLOCK 으로 판정하고 자동 fix 루프 (최대 3회) 가 그것을 해결하지 못하면 흐름이 멈춘다. 3회 안에 풀리지 않는 BLOCK 은 보통 Plan 의 가정이 잘못됐거나 architectural 결정이 필요하다는 신호다. 직접 코드를 수정하거나, 더 큰 방향 전환이 필요하면 `/plan` 으로 Plan 을 다시 짠 뒤 `/orchestrator` 를 재실행한다.
+**BLOCK verdict.** `reviewer` 가 BLOCK 으로 판정하고 자동 fix 루프 (최대 3회) 가 그것을 해결하지 못하면 흐름이 멈춘다. 3회 안에 풀리지 않는 BLOCK 은 대개 다음 셋 중 하나의 신호다 — Plan 의 가정이 잘못됐거나, 더 큰 architectural 결정이 필요하거나, reviewer 의 finding 자체가 false positive 거나. 어느 쪽이든 사용자가 직접 코드를 손대는 게 첫 번째 선택은 아니다. 자연어로 방향을 다시 잡아주는 게 우선이다 — "Phase 2 의 가정이 틀렸다, X 대신 Y 로 가자", "이건 false positive 다, reviewer 에게 다시 보라고 해", 또는 더 큰 방향 전환이면 `/plan` 으로 Plan 을 다시 짠 뒤 `/orchestrator` 를 재실행한다. 직접 편집은 위 모든 게 막혔을 때의 마지막 수단이다.
 
 **PR 머지.** 머지는 GitHub 에서 사람이 직접 클릭한다. `main` 으로의 자동 머지는 의도적으로 비활성화 — 동료 리뷰와 CI 가 통과한 뒤 사람의 손이 한 번 들어가는 흐름을 강제한다.
 
@@ -282,7 +284,7 @@ $ cd ~/your-project && claude
 2. > /orchestrator <자연어 작업 설명>
 3. ⛔ Plans.md 검토 + Approval ✓
 4. (자동 진행)
-5. ⛔ BLOCK 났으면 직접 수정 → /orchestrator 재실행
+5. ⛔ BLOCK 났으면 자연어로 방향 재지시 → /orchestrator 재실행
 6. ⛔ GitHub 에서 PR 머지
 7. 다음 작업 → /orchestrator <다음 작업>
 ```
@@ -394,8 +396,8 @@ allow: README.md, main.py, credentials.md, *.txt   (문서 파일은 OK)
 
 - **"개발자 없이 자동 개발" 류 광고는 과장이다.** Plan 승인, BLOCK 시 결정, PR 머지는 여전히 사람의 판단을 요구한다.
 - **결과의 상한은 Plan 의 품질이 정한다.** Plan 이 모호하면 코드도 리뷰도 모호해진다. `planner` 에 Opus 를 할당하는 게 작업 전체에서 가장 가성비 좋은 결정이다.
-- **`/orchestrator` 의 토큰 비용은 manual 단계 분해와 큰 차이 없다.** 단순 채팅 대비 phase 당 약 3-5배 수준.
-- **여러 repo 를 동시에 수정하는 작업은 잘 다루지 못한다.** 한 번에 한 repo 를 다루는 워크플로우에 맞춰 설계됐다.
+- **`/orchestrator` 한 번은 phase 수만큼의 subagent 호출 (`planner` + `coder` + `tester` + `reviewer` × phase 수) 을 포함하므로 단일 채팅보다 토큰 소비가 많다.** 정확한 배수는 코드베이스 크기, phase 분해 깊이, BLOCK 자동 fix 루프 횟수에 따라 크게 달라지므로 본인 환경에서 직접 측정하는 게 맞다.
+- **여러 repo 를 워크스페이스 루트 아래 두고 각각 작업하는 패턴은 정상 작동한다.** (모노레포 X, MSA 다중 repo 모음 OK — 상위 폴더에 `CLAUDE.md` 와 `.claude/` 만 있으면 됨.) 단, **한 phase 안에서 여러 repo 를 atomic 하게 동시 수정**해야 하는 작업 — 예: 인터페이스를 변경하면서 모든 컨슈머 코드를 같은 PR 로 묶어야 하는 경우 — 은 잘 다루지 못한다. git worktree 격리가 repo 경계를 못 넘기 때문이다.
 - **단일 세션 subagent 패턴을 따른다.** Claude Code 의 [Agent Teams](https://code.claude.com/docs/en/agent-teams) — teammates 끼리 직접 메시지를 주고받고 공유 task list 를 다루는 패턴 — 는 의도적으로 채택하지 않았다. 일반적인 phase 단위 작업에는 단일 세션 + 격리 컨텍스트가 더 단순하고 디버깅하기 쉽다. 10명 이상의 worker 가 자율 토론하며 동시에 작업하는 시나리오라면 Agent Teams 쪽이 토큰 효율도 3-5배 좋다.
 
 ---
@@ -412,7 +414,7 @@ allow: README.md, main.py, credentials.md, *.txt   (문서 파일은 OK)
 | **의존성 매니저 / 린트 / 테스트 러너** | `.claude/agents/coder.md`, `tester.md` | 자동 추론 — 강제 시 한 줄 추가 |
 | **빌드 산출물 skip 폴더** | `.claude/agents/explorer.md` | 표준 폴더 (`node_modules`, `.venv`, `target`, `build`, `dist`) 이미 포함 |
 | **테스트 디렉토리** | `.claude/agents/tester.md` | 자동 추론 — 명시 원하면 한 줄 추가 |
-| **프로젝트 지도 / 작업 규칙** | `CLAUDE.md` | `CLAUDE.md.example` 복사 후 채움 |
+| **프로젝트 지도 / 작업 규칙** | `CLAUDE.md` | `CLAUDE.md.example` 복사 후 채움. **Anthropic 권장 200 줄 / 150 instruction 이내**. 그 이상은 `@import` 로 분리 |
 | **요구사항 / 인수 기준** | `<subproject>/REQUIREMENTS.md` | `docs/harness/REQUIREMENTS.template.md` 복사 후 채움 (또는 `/setup` 자동화) |
 
 ### Reference reviewers
@@ -438,6 +440,28 @@ cp examples/reviewer-<your-stack>.md .claude/agents/reviewer.md
 
 > 다른 agent (`planner`, `coder`, `tester`, `explorer`, `documenter`) 는 모두 stack-agnostic. 건드릴 필요 없음.
 
+### Advanced — TDD-first 로 바꾸기
+
+본 하네스는 `coder` → `tester` (test-after) 가 디폴트다. TDD red-green-refactor 사이클을 강제하려면 `.claude/agents/coder.md` 에 다음 instruction 을 추가한다:
+
+> 각 phase 시작 시 (1) acceptance criteria 를 충족하는 실패 테스트부터 작성, (2) red 확인, (3) 최소 구현, (4) green 확인, (5) refactor — 순서로 진행한다.
+
+`tester` 는 그대로 두고 `coder` 의 행동 순서만 바뀌면 됨. 2026 트렌드는 TDD-first 쪽으로 이동 중 (cc-sdd, Superpowers 등).
+
+### Advanced — Subagent persistent memory
+
+특정 agent 가 **cross-session 으로 학습**하길 원하면 frontmatter 에 `memory: project` 추가:
+
+```yaml
+---
+name: reviewer
+memory: project
+...
+---
+```
+
+→ `.claude/agent-memory/reviewer/MEMORY.md` 에 자주 발견되는 이슈 / 코드베이스 특화 패턴이 누적된다. 다음 세션에서 reviewer 가 그 메모리를 참고. 같은 옵션을 다른 agent 에도 적용 가능.
+
 ---
 
 ## License
@@ -449,5 +473,6 @@ cp examples/reviewer-<your-stack>.md .claude/agents/reviewer.md
 ## Contributing & Acknowledgments
 
 - 워크플로우 구조: 민세홍님의 6-agent 디자인에서 시작.
-- Best-practice 참고: [Chachamaru127/claude-code-harness](https://github.com/Chachamaru127/claude-code-harness), [Anthropic Claude Code 공식 문서](https://code.claude.com/docs).
+- Best-practice 참고: [Chachamaru127/claude-code-harness](https://github.com/Chachamaru127/claude-code-harness), [Anthropic Claude Code 공식 문서](https://code.claude.com/docs), [Martin Fowler — Harness engineering](https://martinfowler.com/articles/harness-engineering.html).
+- Spec-Driven Development 패밀리 (본 하네스보다 무겁지만 같은 계보): [gotalab/cc-sdd](https://github.com/gotalab/cc-sdd), Superpowers, GSD.
 - 새 스택 reviewer 추가 PR 환영.
