@@ -161,6 +161,31 @@ JSON
 
 여러 독립 git repo 가 한 폴더 아래 모인 환경 (모노레포 X) 이라면, 그 폴더 루트에 `.claude/` 등을 떨어뜨리고 `CLAUDE.md` 의 프로젝트 지도를 본인 서브프로젝트로 채움. 거기서 `claude` 띄우면 모든 서브프로젝트에 하네스 적용.
 
+### 업데이트 — 이미 설치된 하네스를 최신으로
+
+설치 명령은 `.harness-tmp` 를 지우면서 끝나기 때문에 `git pull` 로 갱신 못 함. 대신 `update.sh` 한 줄:
+
+```bash
+cd ~/your-project
+curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/main/update.sh | bash -s -- --yes
+```
+
+동작:
+
+- 변경될 파일 목록 보여줌 (e.g., `~ .claude/agents/coder.md  (112 lines changed)`)
+- **사용자 파일은 보존**: `CLAUDE.md`, `.claude/settings*.json`, `.claude/agents/reviewer.md` (스택 커스텀), `Plans.md`, `REQUIREMENTS.md`, `.claude/notes/`, `worktrees/`, `agent-memory/`
+- **managed 파일만 갱신**: 5 generic agents (coder/tester/planner/explorer/documenter), 6 verb skills, 2 hooks, `run_phase.py`, doc 템플릿, `HARNESS.md`, `examples/`
+- 갱신 전 상태는 `.claude/.harness-backup-<timestamp>/` 에 자동 백업 → 문제 시 롤백 가능
+- 업스트림 최신 `reviewer.md` 는 `<backup>/reviewer.md.upstream-latest` 로 따로 저장 (사용자가 본인 스택 버전과 diff 떠서 새 패턴만 가져갈 수 있게)
+
+> ⚠️ `--yes` 빼면 인터랙티브 [y/N] prompt 가 나와야 하지만, `curl | bash` 는 stdin 이 pipe 라 prompt 가 자동으로 N 으로 읽혀 abort 됨. 인터랙티브로 확인하면서 진행하고 싶으면 파일로 받아서 실행:
+> ```bash
+> curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/main/update.sh -o /tmp/u.sh
+> bash /tmp/u.sh
+> ```
+
+적용 후 **Claude Code 재시작** (`/exit` → `claude`) 필수 — 새 agent/skill 정의 로딩.
+
 ---
 
 ## Usage
