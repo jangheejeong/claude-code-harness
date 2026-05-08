@@ -459,6 +459,55 @@ allow: README.md, main.py, credentials.md, *.txt   (문서 파일은 OK)
 
 > 11 / 11 케이스 통과.
 
+### `announce-agent.sh` · matcher: `SubagentStart|SubagentStop`
+
+작업 중 어느 agent 가 실행/종료되는지 **메인 터미널 포그라운드에 직접 출력**. Claude Code CLI 자체엔 active subagent 표시가 없어서 ([issue #27916](https://github.com/anthropics/claude-code/issues/27916)) hook 이 빈 자리를 채움.
+
+표시 예:
+```text
+▶ 14:32:15  agent 시작: explorer
+■ 14:32:48  agent 종료: explorer
+▶ 14:32:51  agent 시작: planner
+■ 14:35:22  agent 종료: planner
+▶ 14:36:01  agent 시작: coder
+...
+```
+
+`/dev/tty` 로 직접 출력 → stdout/stderr 캡처와 무관하게 항상 보임. 동일 내용을 `.claude/notes/agent-activity.log` 에도 기록 (사후 검증용).
+
+#### 활성화 방법
+
+1. `update.sh` 가 이미 `announce-agent.sh` 를 설치함 (최신 버전 한정).
+2. `.claude/settings.json` 의 `hooks` 에 다음 두 entry 추가 (사용자 직접):
+
+```json
+"SubagentStart": [
+  {
+    "hooks": [{ "type": "command", "command": ""$CLAUDE_PROJECT_DIR"/.claude/hooks/announce-agent.sh" }]
+  }
+],
+"SubagentStop": [
+  {
+    "hooks": [{ "type": "command", "command": ""$CLAUDE_PROJECT_DIR"/.claude/hooks/announce-agent.sh" }]
+  }
+]
+```
+
+3. Claude Code 재시작 → 다음 `/orchestrator` 부터 agent 시작/종료가 터미널에 한 줄씩 출력됨.
+
+#### 검증
+
+작업 끝나고 로그로 어느 agent 가 진짜 spawn 됐는지 확인:
+
+```bash
+cat .claude/notes/agent-activity.log
+# 14:32:15  SubagentStart  explorer
+# 14:32:48  SubagentStop   explorer
+# ...
+```
+
+이게 ground truth — skill 본문이 의도한 대로 진짜 agent 가 spawn 됐는지 **사후 검증** 가능.
+
 ---
 
 ## Honest Limitations

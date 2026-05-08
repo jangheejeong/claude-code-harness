@@ -78,7 +78,7 @@ for s in plan work review release setup orchestrator; do
 done
 
 # Hooks
-for h in block-destructive protect-secrets; do
+for h in block-destructive protect-secrets announce-agent; do
   report_diff "$TMP/harness/.claude/hooks/$h.sh" ".claude/hooks/$h.sh" ".claude/hooks/$h.sh"
 done
 
@@ -158,7 +158,7 @@ for s in plan work review release setup orchestrator; do
 done
 
 # Hooks
-for h in block-destructive protect-secrets; do
+for h in block-destructive protect-secrets announce-agent; do
   cp "$TMP/harness/.claude/hooks/$h.sh" ".claude/hooks/$h.sh"
   chmod +x ".claude/hooks/$h.sh"
 done
