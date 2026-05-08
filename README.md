@@ -166,9 +166,11 @@ JSON
 설치 명령은 `.harness-tmp` 를 지우면서 끝나기 때문에 `git pull` 로 갱신 못 함. 대신 `update.sh` 한 줄:
 
 ```bash
-cd ~/your-project
+cd ~/your-project          # ← 하네스를 사용 중인 프로젝트의 루트
 curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/main/update.sh | bash -s -- --yes
 ```
+
+> **어디서 실행하나**: `.claude/` 가 있는 **사용 중 프로젝트의 루트** 에서. 하네스 repo (`claude-code-harness/`) 자체에서 실행하는 게 아님 — 하네스 repo 는 `git pull` 로 받음. 사용 중 프로젝트가 여러 개라면 각각의 루트에서 따로 실행해야 함 (`overtax_sole/`, `heum/` 등 각자).
 
 동작:
 
