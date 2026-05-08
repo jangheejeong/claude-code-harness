@@ -192,6 +192,14 @@ curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/mai
 
 ## Usage
 
+### Lifecycle — skill 이 agent 를 부르는 구조
+
+`/orchestrator` 한 번 호출되면 skill 들이 시간 순으로 호출되고, 각 skill 이 본인 agent 들을 spawn 한다.
+
+![orchestrator lifecycle](docs/harness/assets/orchestrator-lifecycle.svg)
+
+> 메인 Claude 가 `orchestrator/SKILL.md` 본문을 읽고 → `/plan` → `/work` → `/review` → `/release` 를 차례로 invoke. 각 skill 이 본인 [@agent-…](.claude/agents) 들을 spawn 하고, 결과를 메인 세션으로 요약 반환. 자세한 verdict 분기는 아래 Flow 다이어그램 참고.
+
 ### Flow
 
 ```mermaid

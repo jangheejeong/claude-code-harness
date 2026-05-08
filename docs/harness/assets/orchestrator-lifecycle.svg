@@ -1,0 +1,157 @@
+<svg viewBox="0 0 880 720" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, BlinkMacSystemFont, system-ui, sans-serif">
+  <title>/orchestrator 호출 시 생명주기</title>
+  <desc>/orchestrator skill 호출 후 plan/work/review/release skill 들이 순차 호출되며 각 skill이 해당 agent들을 spawn하는 흐름</desc>
+
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+    </marker>
+    <marker id="arrLight" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9ca3af"/>
+    </marker>
+  </defs>
+
+  <rect width="880" height="720" fill="#ffffff"/>
+
+  <text x="440" y="30" text-anchor="middle" font-size="17" font-weight="600" fill="#111827">
+    /orchestrator 호출 시 생명주기
+  </text>
+  <text x="440" y="50" text-anchor="middle" font-size="11" fill="#6b7280">
+    skill 이 시간 순으로 호출 · 각 skill 이 본인 agent들을 spawn · ⛔는 사용자 STOP 게이트
+  </text>
+
+  <text x="20" y="103" font-size="10" font-weight="600" fill="#9ca3af">USER</text>
+  <text x="20" y="173" font-size="10" font-weight="600" fill="#9ca3af">SKILL</text>
+  <text x="20" y="263" font-size="10" font-weight="600" fill="#9ca3af">SKILL</text>
+  <text x="20" y="383" font-size="10" font-weight="600" fill="#9ca3af">AGENT</text>
+  <text x="20" y="613" font-size="10" font-weight="600" fill="#9ca3af">GATE</text>
+
+  <line x1="60" y1="80" x2="60" y2="700" stroke="#e5e7eb" stroke-dasharray="2,3"/>
+
+  <rect x="340" y="80" width="200" height="44" rx="8" fill="#f3f4f6" stroke="#d1d5db" stroke-width="1"/>
+  <text x="440" y="98" text-anchor="middle" font-size="11" font-weight="500" fill="#374151">사용자 입력</text>
+  <text x="440" y="115" text-anchor="middle" font-size="13" font-family="ui-monospace, monospace" fill="#111827">/orchestrator &lt;task&gt;</text>
+
+  <line x1="440" y1="125" x2="440" y2="148" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <rect x="200" y="150" width="480" height="46" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="440" y="170" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">orchestrator skill</text>
+  <text x="440" y="187" text-anchor="middle" font-size="11" fill="#1e40af">SKILL.md 본문이 메인 세션에 주입 → 메인 Claude 가 절차 실행</text>
+
+  <line x1="440" y1="200" x2="440" y2="223" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <rect x="80" y="225" width="180" height="44" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="170" y="244" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">/plan</text>
+  <text x="170" y="260" text-anchor="middle" font-size="10" fill="#1e40af">계획 — 한 번만</text>
+
+  <line x1="262" y1="247" x2="278" y2="247" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <rect x="280" y="225" width="180" height="44" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="370" y="244" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">/work N</text>
+  <text x="370" y="260" text-anchor="middle" font-size="10" fill="#1e40af">시공 (TDD)</text>
+
+  <line x1="462" y1="247" x2="478" y2="247" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <rect x="480" y="225" width="180" height="44" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="570" y="244" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">/review</text>
+  <text x="570" y="260" text-anchor="middle" font-size="10" fill="#1e40af">4-lens + 스택 룰</text>
+
+  <line x1="662" y1="247" x2="678" y2="247" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <rect x="680" y="225" width="180" height="44" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5"/>
+  <text x="770" y="244" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">/release</text>
+  <text x="770" y="260" text-anchor="middle" font-size="10" fill="#1e40af">PR 생성</text>
+
+  <path d="M 770 269 Q 770 295, 730 295 L 410 295 Q 370 295, 370 280" fill="none" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrLight)"/>
+  <text x="570" y="312" text-anchor="middle" font-size="10" font-style="italic" fill="#9ca3af">phase 마다 반복</text>
+
+  <line x1="170" y1="320" x2="170" y2="340" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="370" y1="320" x2="370" y2="340" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="570" y1="320" x2="570" y2="340" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="770" y1="320" x2="770" y2="340" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <text x="170" y="335" text-anchor="middle" font-size="9" font-style="italic" fill="#9ca3af">spawns</text>
+  <text x="370" y="335" text-anchor="middle" font-size="9" font-style="italic" fill="#9ca3af">spawns</text>
+  <text x="570" y="335" text-anchor="middle" font-size="9" font-style="italic" fill="#9ca3af">spawns</text>
+  <text x="770" y="335" text-anchor="middle" font-size="9" font-style="italic" fill="#9ca3af">spawns</text>
+
+  <rect x="90" y="345" width="160" height="32" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1"/>
+  <text x="170" y="361" text-anchor="middle" font-size="11" font-weight="500" fill="#78350f">explorer</text>
+  <text x="170" y="372" text-anchor="middle" font-size="9" fill="#92400e">코드 인덱싱 · sonnet</text>
+
+  <rect x="90" y="382" width="160" height="32" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1"/>
+  <text x="170" y="398" text-anchor="middle" font-size="11" font-weight="500" fill="#78350f">planner</text>
+  <text x="170" y="409" text-anchor="middle" font-size="9" fill="#92400e">phase 분해 · Opus</text>
+
+  <rect x="290" y="345" width="160" height="32" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1"/>
+  <text x="370" y="361" text-anchor="middle" font-size="11" font-weight="500" fill="#78350f">coder</text>
+  <text x="370" y="372" text-anchor="middle" font-size="9" fill="#92400e">red→green→refactor · sonnet</text>
+
+  <rect x="290" y="382" width="160" height="32" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1"/>
+  <text x="370" y="398" text-anchor="middle" font-size="11" font-weight="500" fill="#78350f">tester</text>
+  <text x="370" y="409" text-anchor="middle" font-size="9" fill="#92400e">TDD 검증 + 엣지 · sonnet</text>
+
+  <rect x="490" y="345" width="160" height="32" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1"/>
+  <text x="570" y="361" text-anchor="middle" font-size="11" font-weight="500" fill="#78350f">reviewer</text>
+  <text x="570" y="372" text-anchor="middle" font-size="9" fill="#92400e">verdict · Opus</text>
+
+  <rect x="490" y="382" width="160" height="32" rx="6" fill="#fff" stroke="#b45309" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="570" y="398" text-anchor="middle" font-size="10" font-style="italic" fill="#92400e">BLOCK 시 coder 재호출</text>
+  <text x="570" y="409" text-anchor="middle" font-size="9" fill="#a16207">(자동 fix 루프, max 3)</text>
+
+  <rect x="690" y="345" width="160" height="32" rx="6" fill="#fef3c7" stroke="#b45309" stroke-width="1"/>
+  <text x="770" y="361" text-anchor="middle" font-size="11" font-weight="500" fill="#78350f">documenter</text>
+  <text x="770" y="372" text-anchor="middle" font-size="9" fill="#92400e">README/CHANGELOG · sonnet</text>
+
+  <rect x="690" y="382" width="160" height="32" rx="6" fill="#fff" stroke="#b45309" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="770" y="398" text-anchor="middle" font-size="10" font-style="italic" fill="#92400e">commit + push + gh pr</text>
+  <text x="770" y="409" text-anchor="middle" font-size="9" fill="#a16207">(메인 세션이 직접)</text>
+
+  <line x1="170" y1="425" x2="170" y2="525" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="2,3"/>
+  <line x1="370" y1="425" x2="370" y2="525" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="2,3"/>
+  <line x1="570" y1="425" x2="570" y2="525" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="2,3"/>
+  <line x1="770" y1="425" x2="770" y2="525" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="2,3"/>
+
+  <text x="170" y="487" text-anchor="middle" font-size="10" fill="#6b7280">한 번 후</text>
+  <text x="370" y="487" text-anchor="middle" font-size="10" fill="#6b7280">phase 마다</text>
+  <text x="570" y="487" text-anchor="middle" font-size="10" fill="#6b7280">phase 마다</text>
+  <text x="770" y="487" text-anchor="middle" font-size="10" fill="#6b7280">phase 마다</text>
+
+  <rect x="90" y="540" width="160" height="42" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="2.5"/>
+  <text x="170" y="558" text-anchor="middle" font-size="12" font-weight="600" fill="#7c2d12">⛔ Plan 승인</text>
+  <text x="170" y="572" text-anchor="middle" font-size="10" fill="#92400e">Plans.md 검토 + ✓</text>
+
+  <rect x="290" y="540" width="160" height="42" rx="8" fill="#fff" stroke="#d97706" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="370" y="558" text-anchor="middle" font-size="11" font-style="italic" fill="#7c2d12">(선택) diff 한 번 보기</text>
+  <text x="370" y="572" text-anchor="middle" font-size="10" fill="#92400e">--auto 면 생략</text>
+
+  <rect x="490" y="540" width="160" height="42" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="2.5"/>
+  <text x="570" y="558" text-anchor="middle" font-size="12" font-weight="600" fill="#7c2d12">⛔ BLOCK 결정</text>
+  <text x="570" y="572" text-anchor="middle" font-size="10" fill="#92400e">3회 fix 실패 시</text>
+
+  <rect x="690" y="540" width="160" height="42" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="2.5"/>
+  <text x="770" y="558" text-anchor="middle" font-size="12" font-weight="600" fill="#7c2d12">⛔ PR 머지</text>
+  <text x="770" y="572" text-anchor="middle" font-size="10" fill="#92400e">GitHub 에서 직접</text>
+
+  <line x1="60" y1="615" x2="860" y2="615" stroke="#e5e7eb" stroke-dasharray="2,3"/>
+  <text x="80" y="640" font-size="11" font-weight="600" fill="#374151">범례</text>
+
+  <rect x="80" y="650" width="20" height="14" rx="3" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1"/>
+  <text x="108" y="661" font-size="10" fill="#374151">skill (메인 세션)</text>
+
+  <rect x="220" y="650" width="20" height="14" rx="3" fill="#fef3c7" stroke="#b45309" stroke-width="1"/>
+  <text x="248" y="661" font-size="10" fill="#374151">agent (격리 컨텍스트)</text>
+
+  <rect x="380" y="650" width="20" height="14" rx="3" fill="#fef3c7" stroke="#d97706" stroke-width="2.5"/>
+  <text x="408" y="661" font-size="10" fill="#374151">사용자 STOP 게이트</text>
+
+  <line x1="540" y1="657" x2="565" y2="657" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="575" y="661" font-size="10" fill="#374151">호출 / spawn</text>
+
+  <line x1="650" y1="657" x2="675" y2="657" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrLight)"/>
+  <text x="685" y="661" font-size="10" fill="#374151">반복 / 조건부</text>
+
+  <text x="440" y="697" text-anchor="middle" font-size="10" fill="#6b7280">
+    3-phase 작업: skill 호출 11회 · agent spawn 14회+ (BLOCK 루프 시 증가) · 사용자 STOP 2-7회
+  </text>
+</svg>
