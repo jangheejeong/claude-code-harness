@@ -99,10 +99,18 @@ APPROVE | REQUEST CHANGES | BLOCK
 
 ## Tag 의미
 
+태그는 두 축으로 나뉜다 — **scope** (신규 vs 기존) + **severity** (차단 정도).
+
+**Scope**
+- `[NEW]` — 본 Phase diff 가 만든 이슈. severity 태그와 조합 (예: `[NEW][BLOCK]`). 기본값이므로 단독으로 `[BLOCK]` 만 써도 `[NEW]` 의미.
+- `[EXISTING]` — 기존 코드 이슈. 발견은 적되 PR 차단 사유 아님.
+
+**Severity** (신규 이슈에만 적용)
 - `[BLOCK]` — 머지 차단. 보안 / 정확성 / 스펙 미달.
 - `[CHANGES]` — 머지 전 수정 권장.
 - `[NIT]` — 선택적 개선.
-- `[EXISTING]` — 기존 코드 이슈. 발견은 적되 PR 차단 사유 아님.
+
+어휘는 `tester` subagent 및 메인 세션 응답 (CLAUDE.md BLUF 템플릿) 과 일치 — 보고 ↔ 리뷰 결과 전환 시 어휘 변화 없음.
 
 If verdict is BLOCK, the coder must fix and re-submit. Do not soften BLOCK to "minor" if security or correctness is at stake.
 

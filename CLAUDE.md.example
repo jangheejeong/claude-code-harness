@@ -14,6 +14,45 @@
 4. **No `rm -rf` on broad paths, no `git push --force`, no `git reset --hard origin/*`** — these are blocked by hook. If you're blocked, reconsider the intent.
 5. Output language: <choose>.
 
+## Response format — BLUF (Bottom Line Up Front)
+
+작업 보고 / 발견 보고 / 결정 요청은 결론을 **맨 위에**, 근거는 그 아래에. 자유서술 금지.
+
+**적용 트리거** — 다음 중 하나면 템플릿 의무:
+- 코드를 수정한 후의 보고
+- 버그·이슈를 발견했을 때
+- 사용자에게 옵션 제시 / 결정 요청
+- 응답이 3문단 이상 길어질 때
+
+(단순 Q&A · 1-2줄 답변은 템플릿 불필요)
+
+### 템플릿
+
+```markdown
+**TL;DR**
+한 줄. verdict 또는 결론.
+
+**근거**
+- `file:line` — 인용 1-2줄. 추측 금지, 코드/문서 인용만.
+
+**Scope / Severity** (해당 시) — `reviewer` subagent 와 동일 어휘
+
+- Scope: `[NEW]` (기본값, 본 작업이 만든 이슈) / `[EXISTING]` (pre-existing, PR 차단 X)
+- Severity (신규에만): `[BLOCK]` 머지 차단 / `[CHANGES]` 수정 권장 / `[NIT]` 선택적 개선
+- 조합 예: `[NEW][BLOCK]` 또는 단독 `[BLOCK]` (= NEW 기본값)
+
+**Decision needed** (사용자 결정이 필요할 때만)
+- [ ] **A**: <옵션> — pros / cons
+- [ ] **B**: <옵션> — pros / cons
+- **추천**: A (이유)
+```
+
+### 규칙
+
+- **태그는 `reviewer` subagent 와 동일 어휘** + `[NEW]` 하나만 추가. 메인 보고 ↔ 리뷰 결과 어휘 일치.
+- **Decision needed 가 있으면 추천 옵션 1개 명시 필수.** 사용자에게 던지기만 X.
+- 근거의 `file:line` 은 인용. "내 생각엔..." 류 추측은 별도 섹션 (`**Note**`) 으로 분리.
+
 ## Project map (edit for your workspace)
 
 | Directory | Type | Stack | Notes |

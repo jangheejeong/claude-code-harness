@@ -70,6 +70,12 @@ Write each new test with the same red-green discipline: confirm it fails with cu
 - coverage: apps/api/channel 92% → 97%
 
 ### Findings
-- Production code OK
-- (or: bug at apps/api/router.py:88 in concurrent path — coder action needed)
+태그로 분류 (reviewer 와 동일 어휘 + `[NEW]`):
+- `[NEW]` 본 Phase 가 만든 이슈 — 코더 재호출 대상
+- `[EXISTING]` pre-existing — 본 Phase scope 밖, 별개 PR 로 처리
+
+예시:
+- Production code OK — findings none
+- `[NEW]` bug at apps/api/router.py:88 in concurrent path — coder action needed
+- `[EXISTING]` race condition at apps/api/legacy.py:42 — pre-existing, out of scope
 ```
