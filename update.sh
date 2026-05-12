@@ -96,23 +96,42 @@ done
 [ -f "$TMP/harness/HARNESS.md" ] && \
   report_diff "$TMP/harness/HARNESS.md" "HARNESS.md" "HARNESS.md"
 
-# Special handling: reviewer.md
+# Special handling: reviewer.md — 3-way auto-merge against cached previous upstream
+# .claude/.harness-cache/upstream-prev/reviewer.md holds the upstream version that
+# was current at the time of the *previous* update.sh run (= the merge ancestor).
+# Strategy:
+#   - First run (no cache)  → fall back to "preserve, do not overwrite" + seed cache
+#   - Subsequent runs       → git merge-file <user> <cache> <new>
+#                              clean   → file updated, no manual work
+#                              conflict → marker-laden file + explicit warning
+RV_CACHE_DIR=".claude/.harness-cache/upstream-prev"
+RV_CACHE="$RV_CACHE_DIR/reviewer.md"
+RV_USER=".claude/agents/reviewer.md"
+RV_NEW="$TMP/harness/.claude/agents/reviewer.md"
+RV_PLAN="skip"           # skip | seed | merge | nochange
 RV_MSG=""
-if [ -f .claude/agents/reviewer.md ]; then
-  if ! diff -q "$TMP/harness/.claude/agents/reviewer.md" .claude/agents/reviewer.md >/dev/null 2>&1; then
+
+if [ -f "$RV_USER" ] && [ -f "$RV_NEW" ]; then
+  if diff -q "$RV_NEW" "$RV_USER" >/dev/null 2>&1; then
+    RV_PLAN="nochange"
+  elif [ ! -f "$RV_CACHE" ]; then
+    RV_PLAN="seed"
     RV_MSG="
-⚠️  .claude/agents/reviewer.md is different upstream.
-    This file is expected to be customized per stack.
-    The script will NOT overwrite it. Backup will be saved if you want to inspect."
+⚠️  reviewer.md: first-time run — no merge ancestor cached.
+    This run will NOT overwrite your reviewer.md (preserved).
+    Cache seeded → future update.sh runs will auto-merge using git 3-way."
     echo "$RV_MSG"
+  else
+    RV_PLAN="merge"
+    echo "  ↻ .claude/agents/reviewer.md  (will 3-way merge)"
   fi
 fi
 
 echo
-echo "→ user files NOT touched:"
+echo "→ user files NOT touched (or auto-merged):"
 echo "  · CLAUDE.md"
 echo "  · .claude/settings*.json"
-echo "  · .claude/agents/reviewer.md"
+echo "  · .claude/agents/reviewer.md  ↻ 3-way auto-merge if cache exists"
 echo "  · .claude/notes/, worktrees/, agent-memory*/"
 echo "  · <subproject>/REQUIREMENTS.md, Plans.md"
 
@@ -177,10 +196,41 @@ done
 # HARNESS.md
 [ -f "$TMP/harness/HARNESS.md" ] && cp "$TMP/harness/HARNESS.md" HARNESS.md
 
-# Save the latest reviewer.md as a side reference (don't overwrite user's)
-if [ -f "$TMP/harness/.claude/agents/reviewer.md" ]; then
-  cp "$TMP/harness/.claude/agents/reviewer.md" "$BACKUP/reviewer.md.upstream-latest"
-fi
+# reviewer.md handling per RV_PLAN decided earlier
+# Always keep the latest upstream as a side reference in backup
+[ -f "$RV_NEW" ] && cp "$RV_NEW" "$BACKUP/reviewer.md.upstream-latest"
+
+RV_RESULT=""
+case "$RV_PLAN" in
+  nochange)
+    # user == new upstream; just refresh cache
+    mkdir -p "$RV_CACHE_DIR"
+    cp "$RV_NEW" "$RV_CACHE"
+    ;;
+  seed)
+    # first run — preserve user file, seed cache for next time
+    mkdir -p "$RV_CACHE_DIR"
+    cp "$RV_NEW" "$RV_CACHE"
+    RV_RESULT="seed"
+    ;;
+  merge)
+    # 3-way merge: user file with cache as ancestor, new upstream as their version
+    MERGED=$(mktemp)
+    # git merge-file: --quiet suppresses conflict count; outputs to stdout with -p
+    if git merge-file -p --quiet "$RV_USER" "$RV_CACHE" "$RV_NEW" > "$MERGED" 2>/dev/null; then
+      cp "$MERGED" "$RV_USER"
+      RV_RESULT="clean"
+    else
+      # conflict — file has <<<<<<< markers; still write it so user can resolve
+      cp "$MERGED" "$RV_USER"
+      RV_RESULT="conflict"
+    fi
+    rm -f "$MERGED"
+    # Advance the cache pointer to the new upstream regardless of conflict outcome
+    mkdir -p "$RV_CACHE_DIR"
+    cp "$RV_NEW" "$RV_CACHE"
+    ;;
+esac
 
 # Save examples/ as reference (always)
 if [ -d "$TMP/harness/examples" ]; then
@@ -191,7 +241,20 @@ fi
 echo
 echo "✅ Done."
 echo "   Backup of previous state: $BACKUP/"
-[ -n "$RV_MSG" ] && echo "   Latest upstream reviewer.md: $BACKUP/reviewer.md.upstream-latest"
+case "$RV_RESULT" in
+  clean)
+    echo "   reviewer.md: 3-way merged cleanly with new upstream"
+    ;;
+  conflict)
+    echo "   ⚠️  reviewer.md: 3-way merge produced CONFLICT MARKERS"
+    echo "       File: $RV_USER  — open and resolve <<<<<<< / ======= / >>>>>>>"
+    echo "       Upstream reference: $BACKUP/reviewer.md.upstream-latest"
+    ;;
+  seed)
+    echo "   reviewer.md: first-time cache seeded (next update will auto-merge)"
+    echo "       Upstream reference: $BACKUP/reviewer.md.upstream-latest"
+    ;;
+esac
 echo "   Restart Claude Code to load updated agent/skill definitions:"
 echo "     > /exit"
 echo "     $ claude"
