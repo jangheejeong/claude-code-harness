@@ -174,6 +174,33 @@ for h in block-destructive protect-secrets announce-agent; do
   chmod +x ".gemini/hooks/$h.sh"
 done
 
+# Duplicate to .claude/ if it exists (ensures dual compatibility for different CLI configurations)
+if [ -d .claude ]; then
+  echo "→ syncing updates to .claude/ (dual compatibility)"
+  mkdir -p .claude/agents .claude/skills .claude/hooks
+  
+  for a in coder tester planner explorer documenter; do
+    cp "$TMP/harness/.gemini/agents/$a.md" ".claude/agents/$a.md"
+  done
+  
+  for s in plan work review release setup orchestrator; do
+    if [ -d "$TMP/harness/.gemini/skills/$s" ]; then
+      rm -rf ".claude/skills/$s"
+      cp -r "$TMP/harness/.gemini/skills/$s" ".claude/skills/$s"
+    fi
+  done
+  
+  for h in block-destructive protect-secrets announce-agent; do
+    cp "$TMP/harness/.gemini/hooks/$h.sh" ".claude/hooks/$h.sh"
+    chmod +x ".claude/hooks/$h.sh"
+  done
+  
+  # Also handle reviewer.md caching/sync for .claude if it is first-time
+  if [ -f "$RV_NEW" ] && [ ! -f .claude/agents/reviewer.md ]; then
+    cp "$RV_NEW" .claude/agents/reviewer.md
+  fi
+fi
+
 # Phase runner
 [ -f "$TMP/harness/scripts/harness/run_phase.py" ] && {
   cp "$TMP/harness/scripts/harness/run_phase.py" "scripts/harness/run_phase.py"
