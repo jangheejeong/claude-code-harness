@@ -201,6 +201,27 @@ if [ -d .claude ]; then
   fi
 fi
 
+# Duplicate to .agents/ if it exists (ensures antigravity-cli Workspace skill compatibility)
+if [ -d .agents ]; then
+  echo "→ syncing updates to .agents/ (Workspace skill compatibility)"
+  mkdir -p .agents/agents .agents/skills
+  
+  for a in coder tester planner explorer documenter; do
+    cp "$TMP/harness/.gemini/agents/$a.md" ".agents/agents/$a.md"
+  done
+  
+  for s in plan work review release setup orchestrator; do
+    if [ -d "$TMP/harness/.gemini/skills/$s" ]; then
+      rm -rf ".agents/skills/$s"
+      cp -r "$TMP/harness/.gemini/skills/$s" ".agents/skills/$s"
+    fi
+  done
+  
+  if [ -f "$RV_NEW" ] && [ ! -f .agents/agents/reviewer.md ]; then
+    cp "$RV_NEW" .agents/agents/reviewer.md
+  fi
+fi
+
 # Phase runner
 [ -f "$TMP/harness/scripts/harness/run_phase.py" ] && {
   cp "$TMP/harness/scripts/harness/run_phase.py" "scripts/harness/run_phase.py"
