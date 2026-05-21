@@ -1,8 +1,8 @@
 # claude-code-harness
 
-> A workflow harness layered on top of **Claude Code v2.1+**. Type `/orchestrator` once and it runs plan → code → review → PR for you. Language/framework-neutral by default — you fill in stack-specific review rules.
+> A workflow harness layered on top of **Gemini CLI v2.1+**. Type `/orchestrator` once and it runs plan → code → review → PR for you. Language/framework-neutral by default — you fill in stack-specific review rules.
 
-[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1+-purple)](https://code.claude.com)
+[![Gemini CLI](https://img.shields.io/badge/Gemini_Code-v2.1+-purple)](https://code.gemini.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [한국어](README.md) | **English**
 
@@ -11,7 +11,7 @@
 
 ## What this is
 
-A drop-in `.claude/` configuration that turns Claude Code into a disciplined development partner:
+A drop-in `.gemini/` configuration that turns Gemini CLI into a disciplined development partner:
 
 - **6 subagents** (explorer, planner, coder, tester, reviewer, documenter) — each runs in its own context window so verbose output doesn't pollute your main session.
 - **6 verb skills** (`/plan`, `/work`, `/review`, `/release`, `/setup`, `/orchestrator`) — explicit workflow steps with required gates.
@@ -21,10 +21,10 @@ A drop-in `.claude/` configuration that turns Claude Code into a disciplined dev
 
 ## Why a harness — in plain words
 
-Claude Code is powerful but undisciplined out of the box. This harness enforces 5 things:
+Gemini CLI is powerful but undisciplined out of the box. This harness enforces 5 things:
 
 ### 1. Plan-first — "no nailing without a blueprint"
-When you say "add this feature," Claude does NOT start typing code. It first writes a `Plans.md` design doc breaking the work into Phases with measurable acceptance criteria. **Only after you check the boxes does coding start.** Stops the AI from drifting off course.
+When you say "add this feature," Gemini does NOT start typing code. It first writes a `Plans.md` design doc breaking the work into Phases with measurable acceptance criteria. **Only after you check the boxes does coding start.** Stops the AI from drifting off course.
 
 ### 2. Phase boundary — "one bite at a time"
 A Phase is one reviewable unit (~400 LoC diff target). Don't ship one giant feature in one PR. **A 1000-line PR is too big for humans to review properly, and bugs slip through.**
@@ -56,7 +56,7 @@ Net effect: "AI handles the expensive parts (writing code, mapping tests to acce
 ```bash
 cd ~/your-project
 git clone https://github.com/jangheejeong/claude-code-harness.git .claude-code-harness-tmp
-cp -r .claude-code-harness-tmp/.claude ./
+cp -r .claude-code-harness-tmp/.gemini ./
 cp -r .claude-code-harness-tmp/scripts ./
 cp -r .claude-code-harness-tmp/docs ./
 cp .claude-code-harness-tmp/CLAUDE.md.example ./CLAUDE.md     # then edit
@@ -64,20 +64,20 @@ cp .claude-code-harness-tmp/HARNESS.md ./
 rm -rf .claude-code-harness-tmp
 
 # Make hooks executable
-chmod +x .claude/hooks/*.sh
+chmod +x .gemini/hooks/*.sh
 
 # Wire hooks into settings (or merge with your existing settings.local.json)
-cat > .claude/settings.json <<'JSON'
+cat > .gemini/settings.json <<'JSON'
 {
   "hooks": {
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/block-destructive.sh" }]
+        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.gemini/hooks/block-destructive.sh" }]
       },
       {
         "matcher": "Edit|Write",
-        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-secrets.sh" }]
+        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.gemini/hooks/protect-secrets.sh" }]
       }
     ]
   }
@@ -85,20 +85,20 @@ cat > .claude/settings.json <<'JSON'
 JSON
 ```
 
-Then start `claude`, run `/agents` to confirm the 6 agents loaded, run `/` to confirm the 6 verb skills.
+Then start `gemini`, run `/agents` to confirm the 6 agents loaded, run `/` to confirm the 6 verb skills.
 
 ### Per-subproject (monorepo / multi-repo workspace)
 
 If your `~/projects/foo/` contains multiple independent git repos and you want one harness controlling all of them:
 
-1. Drop `.claude/`, `scripts/`, `docs/`, `CLAUDE.md`, `HARNESS.md` at the workspace root.
+1. Drop `.gemini/`, `scripts/`, `docs/`, `CLAUDE.md`, `HARNESS.md` at the workspace root.
 2. Edit the `CLAUDE.md` to list your subprojects.
-3. Run `claude` from the workspace root — Claude Code will pick up the harness for any subproject within it.
+3. Run `gemini` from the workspace root — Gemini CLI will pick up the harness for any subproject within it.
 
 ## Usage (30-second flow)
 
 ```
-$ cd ~/your-project && claude
+$ cd ~/your-project && gemini
 
 > add HMAC verification to the webhook handler. /plan let's go
    ⛔ STOP — review the generated Plans.md, check the Approval boxes
@@ -126,7 +126,7 @@ For short tasks, skip the harness entirely:
 .
 ├── CLAUDE.md.example         # template — copy to CLAUDE.md and customize
 ├── HARNESS.md                # full user guide (the doc to read)
-├── .claude/
+├── .gemini/
 │   ├── agents/               # 6 subagent definitions
 │   ├── skills/               # 6 verb skills
 │   └── hooks/                # 2 safety hooks
@@ -185,10 +185,10 @@ This harness is intentionally **language- and framework-agnostic** out of the bo
 
 | What you want to customize | File to edit | How / reference |
 |---|---|---|
-| **Stack-specific review rules** (ORM N+1, async/sync mixing, migration safety, framework pitfalls) | `.claude/agents/reviewer.md` — the "Stack-specific" subsections | Use `examples/reviewer-python.md` (Python+Django+FastAPI+Airflow) or `examples/reviewer-java-spring.md` (Java+Spring+JPA+WebFlux) as a starting point |
-| **Dependency manager / lint / type-check / test runner names** | `.claude/agents/coder.md`, `tester.md` | Already generic — Coder/Tester auto-detect from your project's `pyproject.toml`/`package.json`/`pom.xml`. Override only if you want to enforce a specific tool. |
-| **Build artifact dirs to skip** | `.claude/agents/explorer.md` skip list | `target/`, `build/`, `dist/`, `node_modules/`, `.venv/` already included. Add project-specific dirs as you find them. |
-| **Test directory layout** | `.claude/agents/tester.md` | Auto-inferred (`tests/`, `src/test/java/`, `__tests__/`). Override only if non-standard. |
+| **Stack-specific review rules** (ORM N+1, async/sync mixing, migration safety, framework pitfalls) | `.gemini/agents/reviewer.md` — the "Stack-specific" subsections | Use `examples/reviewer-python.md` (Python+Django+FastAPI+Airflow) or `examples/reviewer-java-spring.md` (Java+Spring+JPA+WebFlux) as a starting point |
+| **Dependency manager / lint / type-check / test runner names** | `.gemini/agents/coder.md`, `tester.md` | Already generic — Coder/Tester auto-detect from your project's `pyproject.toml`/`package.json`/`pom.xml`. Override only if you want to enforce a specific tool. |
+| **Build artifact dirs to skip** | `.gemini/agents/explorer.md` skip list | `target/`, `build/`, `dist/`, `node_modules/`, `.venv/` already included. Add project-specific dirs as you find them. |
+| **Test directory layout** | `.gemini/agents/tester.md` | Auto-inferred (`tests/`, `src/test/java/`, `__tests__/`). Override only if non-standard. |
 | **Project map / always-on rules** | `CLAUDE.md` | Copy from `CLAUDE.md.example` and fill in for your project. |
 | **Requirements / acceptance criteria per subproject** | `<subproject>/REQUIREMENTS.md` | Copy from `docs/harness/REQUIREMENTS.template.md`. |
 
@@ -202,15 +202,15 @@ This harness is intentionally **language- and framework-agnostic** out of the bo
 
 Copy command:
 ```bash
-cp examples/reviewer-<your-stack>.md .claude/agents/reviewer.md
+cp examples/reviewer-<your-stack>.md .gemini/agents/reviewer.md
 ```
 
 ### 30-Minute Stack-ification Checklist
 
-1. **Reviewer**: copy your stack's example to `.claude/agents/reviewer.md`. If your stack isn't covered, fill in the 4 lens × stack-specific subsections yourself.
+1. **Reviewer**: copy your stack's example to `.gemini/agents/reviewer.md`. If your stack isn't covered, fill in the 4 lens × stack-specific subsections yourself.
 2. **CLAUDE.md**: copy `CLAUDE.md.example` and fill in your project map and rules.
 3. **REQUIREMENTS**: for new subprojects, copy `docs/harness/REQUIREMENTS.template.md` to `<subproject>/REQUIREMENTS.md`. The `/setup` skill automates this.
-4. **Restart `claude`** → `/plan` for your first feature.
+4. **Restart `gemini`** → `/plan` for your first feature.
 
 The other agents (planner, coder, tester, explorer, documenter) are all stack-agnostic. No edits needed.
 
@@ -222,4 +222,4 @@ MIT. See [LICENSE](LICENSE).
 ## Acknowledgments
 
 - Workflow shape inspired by a 6-agent design pattern.
-- Best-practice references: [Chachamaru127/claude-code-harness](https://github.com/Chachamaru127/claude-code-harness), [Anthropic Claude Code docs](https://code.claude.com/docs).
+- Best-practice references: [Chachamaru127/claude-code-harness](https://github.com/Chachamaru127/claude-code-harness), [Anthropic Gemini CLI docs](https://code.gemini.com/docs).

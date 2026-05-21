@@ -2,13 +2,13 @@
 
 # claude-code-harness
 
-**Claude Code v2.1+ 용 워크플로우 하네스**
+**Gemini CLI v2.1+ 용 워크플로우 하네스**
 
 `/orchestrator` 한 번으로 계획 → 구현 → 리뷰 → PR 자동화
 
 `6 subagent` · `6 verb skill` · `2 PreToolUse hook` · `phase runner`
 
-[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1+-purple)](https://code.claude.com)
+[![Gemini CLI](https://img.shields.io/badge/Gemini_Code-v2.1+-purple)](https://code.gemini.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 **한국어** · [English](README.en.md)
@@ -19,17 +19,17 @@
 
 ## What This Is
 
-> Claude Code 가 기본 상태에서 흔히 보이는 두 문제 — **계획 없이 바로 코드부터 시작** + **위험 명령 무방비 실행** — 를 막는 절차 묶음.
+> Gemini CLI 가 기본 상태에서 흔히 보이는 두 문제 — **계획 없이 바로 코드부터 시작** + **위험 명령 무방비 실행** — 를 막는 절차 묶음.
 >
-> 프로젝트 루트에 `.claude/` 트리를 복사하면 활성화.
+> 프로젝트 루트에 `.gemini/` 트리를 복사하면 활성화.
 
 ### Components
 
 | 구성 | 위치 | 역할 |
 |---|---|---|
-| **Subagents** (6) | `.claude/agents/*.md` | 격리된 context 의 worker — `explorer` / `planner` / `coder` / `tester` / `reviewer` / `documenter` |
-| **Verb skills** (6) | `.claude/skills/*/SKILL.md` | 슬래시 명령어 — `/orchestrator` 외 5개 옵션 |
-| **PreToolUse hooks** (2) | `.claude/hooks/*.sh` | `block-destructive.sh`, `protect-secrets.sh` |
+| **Subagents** (6) | `.gemini/agents/*.md` | 격리된 context 의 worker — `explorer` / `planner` / `coder` / `tester` / `reviewer` / `documenter` |
+| **Verb skills** (6) | `.gemini/skills/*/SKILL.md` | 슬래시 명령어 — `/orchestrator` 외 5개 옵션 |
+| **PreToolUse hooks** (2) | `.gemini/hooks/*.sh` | `block-destructive.sh`, `protect-secrets.sh` |
 | **Phase runner** | `scripts/harness/run_phase.py` | 긴 phase 작업 분리 |
 | **Doc templates** | `docs/harness/*.md` | `REQUIREMENTS` / `ADR` / `DOC_SYNC_POLICY` |
 
@@ -53,7 +53,7 @@
 | `protect-secrets.sh` | `Edit\|Write` | `.env*`, `*.pem`, `credentials*`, `.mcp.json` | 11 / 11 |
 
 **Phase runner**
-`claude --agent <name> -p` 래퍼. 긴 phase 작업을 별도 process 로 spawn → `.claude/notes/phase-N-<agent>-<ts>.log` 에 stdout 캡처. 메인 세션 컨텍스트 보호.
+`gemini --agent <name> -p` 래퍼. 긴 phase 작업을 별도 process 로 spawn → `.gemini/notes/phase-N-<agent>-<ts>.log` 에 stdout 캡처. 메인 세션 컨텍스트 보호.
 
 **Doc templates**
 `REQUIREMENTS.template.md`, `ADR.template.md`, `DOC_SYNC_POLICY.md`.
@@ -64,7 +64,7 @@
 
 ## Why a Harness
 
-Claude Code 는 강력하지만 기본 동작에 절제가 없다. 자연어 작업을 던지면 즉시 코드부터 치고, `rm -rf` 같은 위험 명령도 instruction 만으론 깜빡할 수 있다. 이 하네스는 그 위에 6개 강제력을 얹는다.
+Gemini CLI 는 강력하지만 기본 동작에 절제가 없다. 자연어 작업을 던지면 즉시 코드부터 치고, `rm -rf` 같은 위험 명령도 instruction 만으론 깜빡할 수 있다. 이 하네스는 그 위에 6개 강제력을 얹는다.
 
 ### 1. Plan 먼저
 코드 수정 전에 `Plans.md` 가 있어야 한다. `planner` (Opus) 가 작업을 phase 단위로 분해하고 각 phase 의 acceptance criteria 를 적는다. Plan 이 부실하면 그 위에 쌓이는 모든 게 부실해지므로 Opus 토큰을 여기 투자한다.
@@ -78,7 +78,7 @@ Claude Code 는 강력하지만 기본 동작에 절제가 없다. 자연어 작
 
 horizontal 은 도중에 발견되는 문제 (DB 스키마가 UI 요구와 안 맞음 등) 를 마지막에야 발견하게 만들고, reviewer 가 phase 별로 검증할 거리도 빈약해진다 ("DB 만 추가됨 = valid" 정도). vertical 이 reviewer / 사람 양쪽에 더 쓸모 있는 단위.
 
-> Claude Code 자체에도 [plan mode](https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode) (read-only 탐색 + Plan agent) 가 있음. 본 하네스의 `/plan` 은 그 위에 phase 분해 + acceptance criteria + 영속화 (`Plans.md` 파일) 를 더한 것.
+> Gemini CLI 자체에도 [plan mode](https://code.gemini.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode) (read-only 탐색 + Plan agent) 가 있음. 본 하네스의 `/plan` 은 그 위에 phase 분해 + acceptance criteria + 영속화 (`Plans.md` 파일) 를 더한 것.
 
 ### 2. TDD red-green-refactor (default)
 각 phase 안에서 `coder` 는 강제로 TDD 사이클을 따른다:
@@ -98,7 +98,7 @@ horizontal 은 도중에 발견되는 문제 (DB 스키마가 UI 요구와 안 �
 머지 전 `reviewer` (Opus) 가 4 관점 — spec / security / correctness / performance — 적용. 거기에 본인 스택의 함정을 추가: Django ORM N+1, Spring `@Transactional` on private method (proxy 우회), FastAPI `async def` 안의 sync DB 호출 (event loop 블록) 등.
 
 ### 5. Hook 으로 강제
-instruction 은 모델이 깜빡할 수 있다. PreToolUse hook 이 셸 레벨에서 deny 한다. exit code 2 + JSON deny → Claude 에게 차단 사유가 표시됨. `--dangerously-skip-permissions` 모드에서도 hook 차단은 작동.
+instruction 은 모델이 깜빡할 수 있다. PreToolUse hook 이 셸 레벨에서 deny 한다. exit code 2 + JSON deny → Gemini 에게 차단 사유가 표시됨. `--dangerously-skip-permissions` 모드에서도 hook 차단은 작동.
 
 ### 6. 응답 포맷도 "결론 먼저, 근거 나중" 으로 강제
 LLM 의 자유서술은 결론이 본문 중간에 묻히고 범위 (본 작업 / 이전부터 있던 이슈) 가 안 갈린다. `CLAUDE.md` 에 [BLUF (Bottom Line Up Front)](https://en.wikipedia.org/wiki/BLUF_(communication)) 템플릿을 박아서 — **결론 → 근거(file:line) → 범위·심각도 태그 → 결정 필요(추천 선택지 명시)** 4섹션을 의무로 한다. 헤더 라벨은 한글로 명시 (영어 약자 `TL;DR / Decision needed` 금지 — 가독성 떨어짐), 태그 어휘 (`[NEW]/[EXISTING]/[BLOCK]/[CHANGES]/[NIT]`) 만 `reviewer`, `tester` subagent 와 통일 — 메인 세션 보고 ↔ 리뷰 결과 사이에 어휘 전환이 없게.
@@ -125,26 +125,26 @@ LLM 의 자유서술은 결론이 본문 중간에 묻히고 범위 (본 작업 
 cd ~/your-project
 
 git clone https://github.com/jangheejeong/claude-code-harness.git .harness-tmp
-cp -r .harness-tmp/.claude ./
+cp -r .harness-tmp/.gemini ./
 cp -r .harness-tmp/scripts ./
 cp -r .harness-tmp/docs ./
 cp .harness-tmp/CLAUDE.md.example ./CLAUDE.md   # 본인 프로젝트에 맞게 수정
 cp .harness-tmp/HARNESS.md ./
 rm -rf .harness-tmp
 
-chmod +x .claude/hooks/*.sh
+chmod +x .gemini/hooks/*.sh
 
-cat > .claude/settings.json <<'JSON'
+cat > .gemini/settings.json <<'JSON'
 {
   "hooks": {
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/block-destructive.sh" }]
+        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.gemini/hooks/block-destructive.sh" }]
       },
       {
         "matcher": "Edit|Write",
-        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-secrets.sh" }]
+        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.gemini/hooks/protect-secrets.sh" }]
       }
     ]
   }
@@ -155,14 +155,14 @@ JSON
 확인:
 
 ```text
-> claude
+> gemini
 > /agents              # 6 subagent 보여야 함
 > /                    # 6 verb skill 보여야 함
 ```
 
 ### 멀티-프로젝트 워크스페이스
 
-여러 독립 git repo 가 한 폴더 아래 모인 환경 (모노레포 X) 이라면, 그 폴더 루트에 `.claude/` 등을 떨어뜨리고 `CLAUDE.md` 의 프로젝트 지도를 본인 서브프로젝트로 채움. 거기서 `claude` 띄우면 모든 서브프로젝트에 하네스 적용.
+여러 독립 git repo 가 한 폴더 아래 모인 환경 (모노레포 X) 이라면, 그 폴더 루트에 `.gemini/` 등을 떨어뜨리고 `CLAUDE.md` 의 프로젝트 지도를 본인 서브프로젝트로 채움. 거기서 `gemini` 띄우면 모든 서브프로젝트에 하네스 적용.
 
 ### 업데이트 — 이미 설치된 하네스를 최신으로
 
@@ -173,17 +173,17 @@ cd ~/your-project          # ← 하네스를 사용 중인 프로젝트의 루�
 curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/main/update.sh | bash -s -- --yes
 ```
 
-> **어디서 실행하나**: `.claude/` 가 있는 **사용 중 프로젝트의 루트** 에서. 하네스 repo (`claude-code-harness/`) 자체에서 실행하는 게 아님 — 하네스 repo 는 `git pull` 로 받음. 사용 중 프로젝트가 여러 개라면 각각의 루트에서 따로 실행해야 함 (`overtax_sole/`, `heum/` 등 각자).
+> **어디서 실행하나**: `.gemini/` 가 있는 **사용 중 프로젝트의 루트** 에서. 하네스 repo (`claude-code-harness/`) 자체에서 실행하는 게 아님 — 하네스 repo 는 `git pull` 로 받음. 사용 중 프로젝트가 여러 개라면 각각의 루트에서 따로 실행해야 함 (`overtax_sole/`, `heum/` 등 각자).
 
 동작:
 
-- 변경될 파일 목록 보여줌 (e.g., `~ .claude/agents/coder.md  (112 lines changed)`)
-- **사용자 파일은 보존**: `CLAUDE.md`, `.claude/settings*.json`, `Plans.md`, `REQUIREMENTS.md`, `.claude/notes/`, `worktrees/`, `agent-memory/`
+- 변경될 파일 목록 보여줌 (e.g., `~ .gemini/agents/coder.md  (112 lines changed)`)
+- **사용자 파일은 보존**: `CLAUDE.md`, `.gemini/settings*.json`, `Plans.md`, `REQUIREMENTS.md`, `.gemini/notes/`, `worktrees/`, `agent-memory/`
 - **managed 파일은 단순 덮어쓰기**: 5 generic agents (coder/tester/planner/explorer/documenter), 6 verb skills, 2 hooks, `run_phase.py`, doc 템플릿, `HARNESS.md`, `examples/`
 - **`reviewer.md` 는 3-way auto-merge**: 스택 커스텀 영역 (Django N+1, FastAPI async 등) 과 공용 영역 (Tag 의미, 4-lens 골격) 이 한 파일에 섞여있어서 `git merge-file` 로 합침
-  - 첫 실행: cache 없으므로 보존 + cache 시드 (`.claude/.harness-cache/upstream-prev/reviewer.md`)
+  - 첫 실행: cache 없으므로 보존 + cache 시드 (`.gemini/.harness-cache/upstream-prev/reviewer.md`)
   - 다음 실행부터: 사용자/cache/새 upstream 3-way 머지 — 다른 영역 변경은 자동 합쳐짐, 같은 영역 동시 변경 시만 `<<<<<<<` marker 박힘 (수동 해결)
-- 갱신 전 상태는 `.claude/.harness-backup-<timestamp>/` 에 자동 백업 → 문제 시 롤백 가능
+- 갱신 전 상태는 `.gemini/.harness-backup-<timestamp>/` 에 자동 백업 → 문제 시 롤백 가능
 - 업스트림 최신 `reviewer.md` 는 `<backup>/reviewer.md.upstream-latest` 로 참고용 저장
 
 > ⚠️ `--yes` 빼면 인터랙티브 [y/N] prompt 가 나와야 하지만, `curl | bash` 는 stdin 이 pipe 라 prompt 가 자동으로 N 으로 읽혀 abort 됨. 인터랙티브로 확인하면서 진행하고 싶으면 파일로 받아서 실행:
@@ -192,7 +192,7 @@ curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/mai
 > bash /tmp/u.sh
 > ```
 
-적용 후 **Claude Code 재시작** (`/exit` → `claude`) 필수 — 새 agent/skill 정의 로딩.
+적용 후 **Gemini CLI 재시작** (`/exit` → `gemini`) 필수 — 새 agent/skill 정의 로딩.
 
 ---
 
@@ -204,7 +204,7 @@ curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/mai
 
 ![orchestrator lifecycle](docs/harness/assets/orchestrator-lifecycle.svg)
 
-> 메인 Claude 가 `orchestrator/SKILL.md` 본문을 읽고 → `/plan` → `/work` → `/review` → `/release` 를 차례로 invoke. 각 skill 이 본인 [@agent-…](.claude/agents) 들을 spawn 하고, 결과를 메인 세션으로 요약 반환. 자세한 verdict 분기는 아래 Flow 다이어그램 참고.
+> 메인 Gemini 가 `orchestrator/SKILL.md` 본문을 읽고 → `/plan` → `/work` → `/review` → `/release` 를 차례로 invoke. 각 skill 이 본인 [@agent-…](.gemini/agents) 들을 spawn 하고, 결과를 메인 세션으로 요약 반환. 자세한 verdict 분기는 아래 Flow 다이어그램 참고.
 
 ### Flow
 
@@ -250,7 +250,7 @@ flowchart TD
 ### 사용 방법
 
 ```bash
-$ cd ~/your-project && claude
+$ cd ~/your-project && gemini
 
 > /orchestrator api-server 의 webhook 에 HMAC 검증 추가
 ```
@@ -305,7 +305,7 @@ $ cd ~/your-project && claude
 | `/release` | 본인 commit/PR 스타일 따로 있어서 자동 PR 안 쓰고 싶을 때 — 사실 안 써도 됨. `disable-model-invocation: true` 로 잠가둠. <sup>[1]</sup> |
 | `/setup` | **신규 서브프로젝트** 첫 부트스트랩 (한 번만) |
 
-<sup>[1]</sup> Claude Code v2.1.74+ 에서 검증. 이전 버전은 슬래시 호출도 막힐 수 있음 ([issue #26251](https://github.com/anthropics/claude-code/issues/26251)). `claude --version` 으로 확인.
+<sup>[1]</sup> Gemini CLI v2.1.74+ 에서 검증. 이전 버전은 슬래시 호출도 막힐 수 있음 ([issue #26251](https://github.com/anthropics/gemini-code/issues/26251)). `gemini --version` 으로 확인.
 
 ---
 
@@ -355,7 +355,7 @@ $ cd ~/your-project && claude
 ## Cheatsheet
 
 ```text
-1. cd ~/your-project && claude
+1. cd ~/your-project && gemini
 2. > /orchestrator <자연어 작업 설명>
 3. ⛔ Plans.md 검토 + Approval ✓
 4. (자동 진행)
@@ -375,7 +375,7 @@ $ cd ~/your-project && claude
 ├── CLAUDE.md.example              # 작업 규칙 + 프로젝트 지도 (CLAUDE.md 로 복사)
 ├── HARNESS.md                     # 종합 사용 가이드
 │
-├── .claude/
+├── .gemini/
 │   ├── agents/                    # 6 subagent
 │   │   ├── explorer.md            #   read-only · 코드 탐색
 │   │   ├── planner.md             #   Opus · phase 분해
@@ -407,7 +407,7 @@ $ cd ~/your-project && claude
     └── reviewer-java-spring.md    # Java (Spring/JPA/WebFlux)
 ```
 
-> **빌트인과의 이름**: Claude Code 빌트인 subagent (`Explore`, `Plan`, `general-purpose`) 와 본 하네스 커스텀 (`explorer`, `planner`) 은 대소문자가 달라 충돌 안 함. 빌트인은 read-only quick-research 용, 본 커스텀은 Plans.md 연동 워크플로우 전용.
+> **빌트인과의 이름**: Gemini CLI 빌트인 subagent (`Explore`, `Plan`, `general-purpose`) 와 본 하네스 커스텀 (`explorer`, `planner`) 은 대소문자가 달라 충돌 안 함. 빌트인은 read-only quick-research 용, 본 커스텀은 Plans.md 연동 워크플로우 전용.
 
 자세한 사용법 / 트러블슈팅 / 비용 가이드는 [HARNESS.md](HARNESS.md) 참고.
 
@@ -437,7 +437,7 @@ $ cd ~/your-project && claude
 
 ## Safety Hooks — What They Block
 
-PreToolUse hooks. stdin JSON 으로 tool input 수신 → exit code `0` (allow) / `2` (deny + reason) 로 결정. `.claude/settings.local.json` 의 `hooks.PreToolUse` 에 wired.
+PreToolUse hooks. stdin JSON 으로 tool input 수신 → exit code `0` (allow) / `2` (deny + reason) 로 결정. `.gemini/settings.local.json` 의 `hooks.PreToolUse` 에 wired.
 
 > **권한 모드 우회 불가**: hook 의 `deny` 는 사용자가 `--dangerously-skip-permissions` 또는 `bypassPermissions` 모드로 띄워도 작동. 즉 사용자가 권한 검사 끄고 띄워도 hook 차단은 그대로. 팀 정책 / 보안 가드용으로 신뢰 가능.
 
@@ -467,7 +467,7 @@ allow: README.md, main.py, credentials.md, *.txt   (문서 파일은 OK)
 
 ### `announce-agent.sh` · matcher: `SubagentStart|SubagentStop`
 
-작업 중 어느 agent 가 실행/종료되는지 **메인 터미널 포그라운드에 직접 출력**. Claude Code CLI 자체엔 active subagent 표시가 없어서 ([issue #27916](https://github.com/anthropics/claude-code/issues/27916)) hook 이 빈 자리를 채움.
+작업 중 어느 agent 가 실행/종료되는지 **메인 터미널 포그라운드에 직접 출력**. Gemini CLI CLI 자체엔 active subagent 표시가 없어서 ([issue #27916](https://github.com/anthropics/gemini-code/issues/27916)) hook 이 빈 자리를 채움.
 
 표시 예:
 ```text
@@ -479,34 +479,34 @@ allow: README.md, main.py, credentials.md, *.txt   (문서 파일은 OK)
 ...
 ```
 
-`/dev/tty` 로 직접 출력 → stdout/stderr 캡처와 무관하게 항상 보임. 동일 내용을 `.claude/notes/agent-activity.log` 에도 기록 (사후 검증용).
+`/dev/tty` 로 직접 출력 → stdout/stderr 캡처와 무관하게 항상 보임. 동일 내용을 `.gemini/notes/agent-activity.log` 에도 기록 (사후 검증용).
 
 #### 활성화 방법
 
 1. `update.sh` 가 이미 `announce-agent.sh` 를 설치함 (최신 버전 한정).
-2. `.claude/settings.json` 의 `hooks` 에 다음 두 entry 추가 (사용자 직접):
+2. `.gemini/settings.json` 의 `hooks` 에 다음 두 entry 추가 (사용자 직접):
 
 ```json
 "SubagentStart": [
   {
-    "hooks": [{ "type": "command", "command": ""$CLAUDE_PROJECT_DIR"/.claude/hooks/announce-agent.sh" }]
+    "hooks": [{ "type": "command", "command": ""$CLAUDE_PROJECT_DIR"/.gemini/hooks/announce-agent.sh" }]
   }
 ],
 "SubagentStop": [
   {
-    "hooks": [{ "type": "command", "command": ""$CLAUDE_PROJECT_DIR"/.claude/hooks/announce-agent.sh" }]
+    "hooks": [{ "type": "command", "command": ""$CLAUDE_PROJECT_DIR"/.gemini/hooks/announce-agent.sh" }]
   }
 ]
 ```
 
-3. Claude Code 재시작 → 다음 `/orchestrator` 부터 agent 시작/종료가 터미널에 한 줄씩 출력됨.
+3. Gemini CLI 재시작 → 다음 `/orchestrator` 부터 agent 시작/종료가 터미널에 한 줄씩 출력됨.
 
 #### 검증
 
 작업 끝나고 로그로 어느 agent 가 진짜 spawn 됐는지 확인:
 
 ```bash
-cat .claude/notes/agent-activity.log
+cat .gemini/notes/agent-activity.log
 # 14:32:15  SubagentStart  explorer
 # 14:32:48  SubagentStop   explorer
 # ...
@@ -520,7 +520,7 @@ cat .claude/notes/agent-activity.log
 
 - **결과의 상한은 Plan 의 품질이 정한다.** Plan 이 모호하면 코드도 리뷰도 모호해진다. `planner` 에 Opus 를 할당하는 게 작업 전체에서 가장 가성비 좋은 결정이다.
 - **`/orchestrator` 한 번은 phase 수만큼의 subagent 호출 (`planner` + `coder` + `tester` + `reviewer` × phase 수) 을 포함하므로 단일 채팅보다 토큰 소비가 많다.** 정확한 배수는 코드베이스 크기, phase 분해 깊이, BLOCK 자동 fix 루프 횟수에 따라 크게 달라지므로 본인 환경에서 직접 측정하는 게 맞다.
-- **단일 세션 subagent 패턴을 따른다.** Claude Code 의 [Agent Teams](https://code.claude.com/docs/en/agent-teams) — teammates 끼리 직접 메시지를 주고받고 공유 task list 를 다루는 패턴 — 는 의도적으로 채택하지 않았다. 일반적인 phase 단위 작업에는 단일 세션 + 격리 컨텍스트가 더 단순하고 디버깅하기 쉽다. 10명 이상의 worker 가 자율 토론하며 동시에 작업하는 시나리오라면 Agent Teams 쪽이 토큰 효율도 3-5배 좋다.
+- **단일 세션 subagent 패턴을 따른다.** Gemini CLI 의 [Agent Teams](https://code.gemini.com/docs/en/agent-teams) — teammates 끼리 직접 메시지를 주고받고 공유 task list 를 다루는 패턴 — 는 의도적으로 채택하지 않았다. 일반적인 phase 단위 작업에는 단일 세션 + 격리 컨텍스트가 더 단순하고 디버깅하기 쉽다. 10명 이상의 worker 가 자율 토론하며 동시에 작업하는 시나리오라면 Agent Teams 쪽이 토큰 효율도 3-5배 좋다.
 
 ---
 
@@ -532,10 +532,10 @@ cat .claude/notes/agent-activity.log
 
 | 커스터마이즈 대상 | 수정할 파일 | How |
 |---|---|---|
-| **스택별 reviewer 룰** (ORM N+1, async/sync 혼합, 마이그레이션 안전성, 프레임워크 함정) | `.claude/agents/reviewer.md` 의 "Stack-specific" 서브섹션 | `examples/reviewer-python.md` / `examples/reviewer-java-spring.md` 참고하여 작성 |
-| **의존성 매니저 / 린트 / 테스트 러너** | `.claude/agents/coder.md`, `tester.md` | agent 가 `pyproject.toml`/`package.json`/`pom.xml` 등 lock file 을 읽고 따라가도록 instruction 작성됨. 특정 도구를 강제하려면 한 줄 추가 |
-| **빌드 산출물 skip 폴더** | `.claude/agents/explorer.md` | 표준 폴더 (`node_modules`, `.venv`, `target`, `build`, `dist`) 이미 포함 |
-| **테스트 디렉토리** | `.claude/agents/tester.md` | agent 가 `tests/`, `src/test/java/`, `__tests__/` 등 표준 위치를 인식하도록 instruction 작성됨. 비표준 위치면 한 줄 추가 |
+| **스택별 reviewer 룰** (ORM N+1, async/sync 혼합, 마이그레이션 안전성, 프레임워크 함정) | `.gemini/agents/reviewer.md` 의 "Stack-specific" 서브섹션 | `examples/reviewer-python.md` / `examples/reviewer-java-spring.md` 참고하여 작성 |
+| **의존성 매니저 / 린트 / 테스트 러너** | `.gemini/agents/coder.md`, `tester.md` | agent 가 `pyproject.toml`/`package.json`/`pom.xml` 등 lock file 을 읽고 따라가도록 instruction 작성됨. 특정 도구를 강제하려면 한 줄 추가 |
+| **빌드 산출물 skip 폴더** | `.gemini/agents/explorer.md` | 표준 폴더 (`node_modules`, `.venv`, `target`, `build`, `dist`) 이미 포함 |
+| **테스트 디렉토리** | `.gemini/agents/tester.md` | agent 가 `tests/`, `src/test/java/`, `__tests__/` 등 표준 위치를 인식하도록 instruction 작성됨. 비표준 위치면 한 줄 추가 |
 | **프로젝트 지도 / 작업 규칙** | `CLAUDE.md` | `CLAUDE.md.example` 복사 후 채움. **Anthropic 권장 200 줄 / 150 instruction 이내**. 그 이상은 `@import` 로 분리 |
 | **요구사항 / 인수 기준** | `<subproject>/REQUIREMENTS.md` | `docs/harness/REQUIREMENTS.template.md` 복사 후 채움 (또는 `/setup` 자동화) |
 
@@ -550,7 +550,7 @@ cat .claude/notes/agent-activity.log
 복사 명령:
 
 ```bash
-cp examples/reviewer-<your-stack>.md .claude/agents/reviewer.md
+cp examples/reviewer-<your-stack>.md .gemini/agents/reviewer.md
 ```
 
 ### Advanced — Subagent persistent memory
@@ -565,7 +565,7 @@ memory: project
 ---
 ```
 
-→ `.claude/agent-memory/reviewer/MEMORY.md` 에 자주 발견되는 이슈 / 코드베이스 특화 패턴이 누적된다. 다음 세션에서 reviewer 가 그 메모리를 참고. 같은 옵션을 다른 agent 에도 적용 가능.
+→ `.gemini/agent-memory/reviewer/MEMORY.md` 에 자주 발견되는 이슈 / 코드베이스 특화 패턴이 누적된다. 다음 세션에서 reviewer 가 그 메모리를 참고. 같은 옵션을 다른 agent 에도 적용 가능.
 
 ---
 
@@ -578,6 +578,6 @@ memory: project
 ## Contributing & Acknowledgments
 
 - 워크플로우 구조: 민세홍님의 6-agent 디자인에서 시작.
-- Best-practice 참고: [Chachamaru127/claude-code-harness](https://github.com/Chachamaru127/claude-code-harness), [Anthropic Claude Code 공식 문서](https://code.claude.com/docs), [Martin Fowler — Harness engineering](https://martinfowler.com/articles/harness-engineering.html).
+- Best-practice 참고: [Chachamaru127/claude-code-harness](https://github.com/Chachamaru127/claude-code-harness), [Anthropic Gemini CLI 공식 문서](https://code.gemini.com/docs), [Martin Fowler — Harness engineering](https://martinfowler.com/articles/harness-engineering.html).
 - Spec-Driven Development 패밀리 (본 하네스보다 무겁지만 같은 계보): [gotalab/cc-sdd](https://github.com/gotalab/cc-sdd), Superpowers, GSD.
 - 새 스택 reviewer 추가 PR 환영.

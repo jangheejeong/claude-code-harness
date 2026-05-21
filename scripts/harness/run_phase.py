@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-NOTES_DIR = REPO_ROOT / ".claude" / "notes"
+NOTES_DIR = REPO_ROOT / ".gemini" / "notes"
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,8 +56,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    if not shutil.which("claude"):
-        print("ERROR: `claude` CLI not on PATH. Install Claude Code v2.1+.",
+    if not shutil.which("gemini"):
+        print("ERROR: `gemini` CLI not on PATH. Install Gemini CLI.",
               file=sys.stderr)
         return 2
 
@@ -79,12 +79,12 @@ def main() -> int:
     prompt = (
         f"You are operating as the {args.agent} subagent for {args.subproject} "
         f"Phase {args.phase}. The plan is at {plans.relative_to(REPO_ROOT)}. "
-        f"Follow your agent definition at .claude/agents/{args.agent}.md "
+        f"Follow your agent definition at .gemini/agents/{args.agent}.md "
         f"strictly. Stop at the Phase boundary. {args.prompt}"
     )
 
     cmd = [
-        "claude",
+        "gemini",
         "--agent", args.agent,
         "--print",                    # non-interactive
         "--output-format", "text",

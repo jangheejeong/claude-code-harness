@@ -14,12 +14,12 @@ __pycache__/
 .venv/
 venv/
 
-# Local Claude Code state (don't commit)
-.claude/notes/
-.claude/worktrees/
-.claude/agent-memory*/
-.claude/state/
-.claude/settings.local.json     # personal settings, use settings.json for shared
+# Local Gemini CLI state (don't commit)
+.gemini/notes/
+.gemini/worktrees/
+.gemini/agent-memory*/
+.gemini/state/
+.gemini/settings.local.json     # personal settings, use settings.json for shared
 *.bak.*
 
 # Logs

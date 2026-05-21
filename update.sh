@@ -2,16 +2,16 @@
 # update.sh — pull latest claude-code-harness assets into the current project.
 #
 # Safe to re-run. Preserves user-customized files:
-#   - CLAUDE.md
-#   - .claude/settings*.json
-#   - .claude/agents/reviewer.md        (stack-specific customization expected)
-#   - .claude/notes/, worktrees/, agent-memory*/
+#   - GEMINI.md
+#   - .gemini/settings*.json
+#   - .gemini/agents/reviewer.md        (stack-specific customization expected)
+#   - .gemini/notes/, worktrees/, agent-memory*/
 #   - <subproject>/REQUIREMENTS.md, Plans.md
 #
 # Overwrites (managed harness assets):
-#   - .claude/agents/{coder,tester,planner,explorer,documenter}.md
-#   - .claude/skills/*/SKILL.md
-#   - .claude/hooks/*.sh
+#   - .gemini/agents/{coder,tester,planner,explorer,documenter}.md
+#   - .gemini/skills/*/SKILL.md
+#   - .gemini/hooks/*.sh
 #   - scripts/harness/run_phase.py
 #   - docs/harness/*.md
 #   - HARNESS.md
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 REPO="https://github.com/jangheejeong/claude-code-harness.git"
-BRANCH="main"
+BRANCH="google"
 ASSUME_YES=false
 
 while [[ $# -gt 0 ]]; do
@@ -35,9 +35,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# 0. Sanity — must be in a project that already has .claude/ (i.e., harness was installed before)
-if [ ! -d .claude ]; then
-  echo "ERROR: no .claude/ directory in $(pwd)."
+# 0. Sanity — must be in a project that already has .gemini/ (i.e., harness was installed before)
+if [ ! -d .gemini ]; then
+  echo "ERROR: no .gemini/ directory in $(pwd)."
   echo "       Run this from the project where the harness is installed."
   echo "       For first-time install, follow the README's Install section instead."
   exit 1
@@ -67,19 +67,19 @@ report_diff() {
 
 # Standard agent files (overwrite, but reviewer.md is special)
 for a in coder tester planner explorer documenter; do
-  report_diff "$TMP/harness/.claude/agents/$a.md" ".claude/agents/$a.md" ".claude/agents/$a.md"
+  report_diff "$TMP/harness/.gemini/agents/$a.md" ".gemini/agents/$a.md" ".gemini/agents/$a.md"
 done
 
 # Skills
 for s in plan work review release setup orchestrator; do
-  if [ -f "$TMP/harness/.claude/skills/$s/SKILL.md" ]; then
-    report_diff "$TMP/harness/.claude/skills/$s/SKILL.md" ".claude/skills/$s/SKILL.md" ".claude/skills/$s/SKILL.md"
+  if [ -f "$TMP/harness/.gemini/skills/$s/SKILL.md" ]; then
+    report_diff "$TMP/harness/.gemini/skills/$s/SKILL.md" ".gemini/skills/$s/SKILL.md" ".gemini/skills/$s/SKILL.md"
   fi
 done
 
 # Hooks
 for h in block-destructive protect-secrets announce-agent; do
-  report_diff "$TMP/harness/.claude/hooks/$h.sh" ".claude/hooks/$h.sh" ".claude/hooks/$h.sh"
+  report_diff "$TMP/harness/.gemini/hooks/$h.sh" ".gemini/hooks/$h.sh" ".gemini/hooks/$h.sh"
 done
 
 # Phase runner
@@ -97,17 +97,10 @@ done
   report_diff "$TMP/harness/HARNESS.md" "HARNESS.md" "HARNESS.md"
 
 # Special handling: reviewer.md — 3-way auto-merge against cached previous upstream
-# .claude/.harness-cache/upstream-prev/reviewer.md holds the upstream version that
-# was current at the time of the *previous* update.sh run (= the merge ancestor).
-# Strategy:
-#   - First run (no cache)  → fall back to "preserve, do not overwrite" + seed cache
-#   - Subsequent runs       → git merge-file <user> <cache> <new>
-#                              clean   → file updated, no manual work
-#                              conflict → marker-laden file + explicit warning
-RV_CACHE_DIR=".claude/.harness-cache/upstream-prev"
+RV_CACHE_DIR=".gemini/.harness-cache/upstream-prev"
 RV_CACHE="$RV_CACHE_DIR/reviewer.md"
-RV_USER=".claude/agents/reviewer.md"
-RV_NEW="$TMP/harness/.claude/agents/reviewer.md"
+RV_USER=".gemini/agents/reviewer.md"
+RV_NEW="$TMP/harness/.gemini/agents/reviewer.md"
 RV_PLAN="skip"           # skip | seed | merge | nochange
 RV_MSG=""
 
@@ -123,16 +116,16 @@ if [ -f "$RV_USER" ] && [ -f "$RV_NEW" ]; then
     echo "$RV_MSG"
   else
     RV_PLAN="merge"
-    echo "  ↻ .claude/agents/reviewer.md  (will 3-way merge)"
+    echo "  ↻ .gemini/agents/reviewer.md  (will 3-way merge)"
   fi
 fi
 
 echo
 echo "→ user files NOT touched (or auto-merged):"
-echo "  · CLAUDE.md"
-echo "  · .claude/settings*.json"
-echo "  · .claude/agents/reviewer.md  ↻ 3-way auto-merge if cache exists"
-echo "  · .claude/notes/, worktrees/, agent-memory*/"
+echo "  · GEMINI.md"
+echo "  · .gemini/settings*.json"
+echo "  · .gemini/agents/reviewer.md  ↻ 3-way auto-merge if cache exists"
+echo "  · .gemini/notes/, worktrees/, agent-memory*/"
 echo "  · <subproject>/REQUIREMENTS.md, Plans.md"
 
 # 3. Confirm
@@ -145,15 +138,15 @@ if [ "$ASSUME_YES" = false ]; then
   esac
 fi
 
-# 4. Backup whole .claude/agents and .claude/skills and .claude/hooks before overwrite
+# 4. Backup whole .gemini/agents and .gemini/skills and .gemini/hooks before overwrite
 TS=$(date +%Y%m%d-%H%M%S)
-BACKUP=".claude/.harness-backup-$TS"
+BACKUP=".gemini/.harness-backup-$TS"
 echo
 echo "→ backup → $BACKUP/"
 mkdir -p "$BACKUP"
-[ -d .claude/agents ] && cp -r .claude/agents "$BACKUP/agents"
-[ -d .claude/skills ] && cp -r .claude/skills "$BACKUP/skills"
-[ -d .claude/hooks  ] && cp -r .claude/hooks  "$BACKUP/hooks"
+[ -d .gemini/agents ] && cp -r .gemini/agents "$BACKUP/agents"
+[ -d .gemini/skills ] && cp -r .gemini/skills "$BACKUP/skills"
+[ -d .gemini/hooks  ] && cp -r .gemini/hooks  "$BACKUP/hooks"
 [ -d scripts/harness ] && mkdir -p "$BACKUP/scripts" && cp -r scripts/harness "$BACKUP/scripts/"
 [ -d docs/harness   ] && mkdir -p "$BACKUP/docs"    && cp -r docs/harness    "$BACKUP/docs/"
 [ -f HARNESS.md     ] && cp HARNESS.md "$BACKUP/HARNESS.md"
@@ -161,25 +154,25 @@ mkdir -p "$BACKUP"
 # 5. Apply updates (selective)
 echo "→ updating managed files"
 
-mkdir -p .claude/agents .claude/skills .claude/hooks scripts/harness docs/harness
+mkdir -p .gemini/agents .gemini/skills .gemini/hooks scripts/harness docs/harness
 
 # Standard agents (NOT reviewer)
 for a in coder tester planner explorer documenter; do
-  cp "$TMP/harness/.claude/agents/$a.md" ".claude/agents/$a.md"
+  cp "$TMP/harness/.gemini/agents/$a.md" ".gemini/agents/$a.md"
 done
 
 # Skills
 for s in plan work review release setup orchestrator; do
-  if [ -d "$TMP/harness/.claude/skills/$s" ]; then
-    rm -rf ".claude/skills/$s"
-    cp -r "$TMP/harness/.claude/skills/$s" ".claude/skills/$s"
+  if [ -d "$TMP/harness/.gemini/skills/$s" ]; then
+    rm -rf ".gemini/skills/$s"
+    cp -r "$TMP/harness/.gemini/skills/$s" ".gemini/skills/$s"
   fi
 done
 
 # Hooks
 for h in block-destructive protect-secrets announce-agent; do
-  cp "$TMP/harness/.claude/hooks/$h.sh" ".claude/hooks/$h.sh"
-  chmod +x ".claude/hooks/$h.sh"
+  cp "$TMP/harness/.gemini/hooks/$h.sh" ".gemini/hooks/$h.sh"
+  chmod +x ".gemini/hooks/$h.sh"
 done
 
 # Phase runner
@@ -197,36 +190,29 @@ done
 [ -f "$TMP/harness/HARNESS.md" ] && cp "$TMP/harness/HARNESS.md" HARNESS.md
 
 # reviewer.md handling per RV_PLAN decided earlier
-# Always keep the latest upstream as a side reference in backup
 [ -f "$RV_NEW" ] && cp "$RV_NEW" "$BACKUP/reviewer.md.upstream-latest"
 
 RV_RESULT=""
 case "$RV_PLAN" in
   nochange)
-    # user == new upstream; just refresh cache
     mkdir -p "$RV_CACHE_DIR"
     cp "$RV_NEW" "$RV_CACHE"
     ;;
   seed)
-    # first run — preserve user file, seed cache for next time
     mkdir -p "$RV_CACHE_DIR"
     cp "$RV_NEW" "$RV_CACHE"
     RV_RESULT="seed"
     ;;
   merge)
-    # 3-way merge: user file with cache as ancestor, new upstream as their version
     MERGED=$(mktemp)
-    # git merge-file: --quiet suppresses conflict count; outputs to stdout with -p
     if git merge-file -p --quiet "$RV_USER" "$RV_CACHE" "$RV_NEW" > "$MERGED" 2>/dev/null; then
       cp "$MERGED" "$RV_USER"
       RV_RESULT="clean"
     else
-      # conflict — file has <<<<<<< markers; still write it so user can resolve
       cp "$MERGED" "$RV_USER"
       RV_RESULT="conflict"
     fi
     rm -f "$MERGED"
-    # Advance the cache pointer to the new upstream regardless of conflict outcome
     mkdir -p "$RV_CACHE_DIR"
     cp "$RV_NEW" "$RV_CACHE"
     ;;
@@ -255,6 +241,6 @@ case "$RV_RESULT" in
     echo "       Upstream reference: $BACKUP/reviewer.md.upstream-latest"
     ;;
 esac
-echo "   Restart Claude Code to load updated agent/skill definitions:"
+echo "   Restart Gemini CLI to load updated agent/skill definitions:"
 echo "     > /exit"
-echo "     $ claude"
+echo "     $ gemini"

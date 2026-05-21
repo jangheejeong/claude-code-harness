@@ -11,7 +11,7 @@ Goal: docs never lie. If code says X and docs say Y, the next reader (or agent) 
 | New CLI subcommand | README + `--help` snippet in README |
 | New external dependency | README + ADR + CHANGELOG |
 | Routing / endpoint changes | routing-map.md (if exists) |
-| Architectural pattern shift | ADR + top-level CLAUDE.md if cross-project |
+| Architectural pattern shift | ADR + top-level GEMINI.md if cross-project |
 
 ## Cadence
 

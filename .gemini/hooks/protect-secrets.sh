@@ -11,7 +11,7 @@ block() {
   local reason="$1"
   jq -n --arg r "$reason" '{
     hookSpecificOutput: {
-      hookEventName: "PreToolUse",
+      hookEventName: "BeforeTool",
       permissionDecision: "deny",
       permissionDecisionReason: $r
     }

@@ -9,7 +9,7 @@ CMD=$(jq -r '.tool_input.command // ""' 2>/dev/null || true)
 block() {
   jq -n --arg r "$1" '{
     hookSpecificOutput: {
-      hookEventName: "PreToolUse",
+      hookEventName: "BeforeTool",
       permissionDecision: "deny",
       permissionDecisionReason: $r
     }

@@ -34,7 +34,7 @@ esac
 { echo -e "$MSG" > /dev/tty; } 2>/dev/null || echo -e "$MSG" >&2
 
 # Also log to file for post-mortem inspection
-mkdir -p .claude/notes 2>/dev/null
-echo "${TS}  ${EVENT}  ${AGENT}" >> .claude/notes/agent-activity.log 2>/dev/null
+mkdir -p .gemini/notes 2>/dev/null
+echo "${TS}  ${EVENT}  ${AGENT}" >> .gemini/notes/agent-activity.log 2>/dev/null
 
 exit 0
