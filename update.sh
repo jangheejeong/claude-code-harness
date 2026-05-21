@@ -4,8 +4,7 @@
 # Safe to re-run. Preserves user-customized files:
 #   - GEMINI.md
 #   - .gemini/settings*.json
-#   - .gemini/agents/reviewer.md        (stack-specific customization expected)
-#   - .gemini/notes/, worktrees/, agent-memory*/
+#   - .gemini/agents/reviewer.md        (stack-specific customization expected)#   - .gemini/notes/, worktrees/
 #   - <subproject>/REQUIREMENTS.md, Plans.md
 #
 # Overwrites (managed harness assets):
@@ -20,13 +19,13 @@
 #   bash update.sh                              # interactive
 #   bash update.sh --yes                        # skip confirmation
 #   bash update.sh --branch <name>              # use non-default branch
-
+ 
 set -euo pipefail
-
+ 
 REPO="https://github.com/jangheejeong/claude-code-harness.git"
 BRANCH="google"
 ASSUME_YES=false
-
+ 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --yes|-y) ASSUME_YES=true; shift ;;
@@ -34,7 +33,7 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
 done
-
+ 
 # 0. Sanity — must be in a project that already has .gemini/ (i.e., harness was installed before)
 if [ ! -d .gemini ]; then
   echo "ERROR: no .gemini/ directory in $(pwd)."
@@ -125,7 +124,7 @@ echo "→ user files NOT touched (or auto-merged):"
 echo "  · GEMINI.md"
 echo "  · .gemini/settings*.json"
 echo "  · .gemini/agents/reviewer.md  ↻ 3-way auto-merge if cache exists"
-echo "  · .gemini/notes/, worktrees/, agent-memory*/"
+echo "  · .gemini/notes/, worktrees/"
 echo "  · <subproject>/REQUIREMENTS.md, Plans.md"
 
 # 3. Confirm

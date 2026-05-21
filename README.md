@@ -162,7 +162,7 @@ JSON
 
 ### 멀티-프로젝트 워크스페이스
 
-여러 독립 git repo 가 한 폴더 아래 모인 환경 (모노레포 X) 이라면, 그 폴더 루트에 `.gemini/` 등을 떨어뜨리고 `CLAUDE.md` 의 프로젝트 지도를 본인 서브프로젝트로 채움. 거기서 `gemini` 띄우면 모든 서브프로젝트에 하네스 적용.
+여러 독립 git repo 가 한 폴더 아래 모인 환경 (모노레포 X) 이라면, 그 폴더 루트에 `.gemini/` 등을 떨어뜨리고 `GEMINI.md` 의 프로젝트 지도를 본인 서브프로젝트로 채움. 거기서 `gemini` 띄우면 모든 서브프로젝트에 하네스 적용.
 
 ### 업데이트 — 이미 설치된 하네스를 최신으로
 
@@ -170,7 +170,7 @@ JSON
 
 ```bash
 cd ~/your-project          # ← 하네스를 사용 중인 프로젝트의 루트
-curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/main/update.sh | bash -s -- --yes
+curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/google/update.sh | bash -s -- --yes
 ```
 
 > **어디서 실행하나**: `.gemini/` 가 있는 **사용 중 프로젝트의 루트** 에서. 하네스 repo (`claude-code-harness/`) 자체에서 실행하는 게 아님 — 하네스 repo 는 `git pull` 로 받음. 사용 중 프로젝트가 여러 개라면 각각의 루트에서 따로 실행해야 함 (`overtax_sole/`, `heum/` 등 각자).
@@ -178,7 +178,7 @@ curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/mai
 동작:
 
 - 변경될 파일 목록 보여줌 (e.g., `~ .gemini/agents/coder.md  (112 lines changed)`)
-- **사용자 파일은 보존**: `CLAUDE.md`, `.gemini/settings*.json`, `Plans.md`, `REQUIREMENTS.md`, `.gemini/notes/`, `worktrees/`, `agent-memory/`
+- **사용자 파일은 보존**: `GEMINI.md`, `.gemini/settings*.json`, `Plans.md`, `REQUIREMENTS.md`, `.gemini/notes/`, `worktrees/`
 - **managed 파일은 단순 덮어쓰기**: 5 generic agents (coder/tester/planner/explorer/documenter), 6 verb skills, 2 hooks, `run_phase.py`, doc 템플릿, `HARNESS.md`, `examples/`
 - **`reviewer.md` 는 3-way auto-merge**: 스택 커스텀 영역 (Django N+1, FastAPI async 등) 과 공용 영역 (Tag 의미, 4-lens 골격) 이 한 파일에 섞여있어서 `git merge-file` 로 합침
   - 첫 실행: cache 없으므로 보존 + cache 시드 (`.gemini/.harness-cache/upstream-prev/reviewer.md`)
@@ -188,7 +188,7 @@ curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/mai
 
 > ⚠️ `--yes` 빼면 인터랙티브 [y/N] prompt 가 나와야 하지만, `curl | bash` 는 stdin 이 pipe 라 prompt 가 자동으로 N 으로 읽혀 abort 됨. 인터랙티브로 확인하면서 진행하고 싶으면 파일로 받아서 실행:
 > ```bash
-> curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/main/update.sh -o /tmp/u.sh
+> curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/google/update.sh -o /tmp/u.sh
 > bash /tmp/u.sh
 > ```
 
@@ -552,20 +552,6 @@ cat .gemini/notes/agent-activity.log
 ```bash
 cp examples/reviewer-<your-stack>.md .gemini/agents/reviewer.md
 ```
-
-### Advanced — Subagent persistent memory
-
-특정 agent 가 **cross-session 으로 학습**하길 원하면 frontmatter 에 `memory: project` 추가:
-
-```yaml
----
-name: reviewer
-memory: project
-...
----
-```
-
-→ `.gemini/agent-memory/reviewer/MEMORY.md` 에 자주 발견되는 이슈 / 코드베이스 특화 패턴이 누적된다. 다음 세션에서 reviewer 가 그 메모리를 참고. 같은 옵션을 다른 agent 에도 적용 가능.
 
 ---
 

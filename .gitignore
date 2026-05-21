@@ -17,7 +17,6 @@ venv/
 # Local Gemini CLI state (don't commit)
 .gemini/notes/
 .gemini/worktrees/
-.gemini/agent-memory*/
 .gemini/state/
 .gemini/settings.local.json     # personal settings, use settings.json for shared
 *.bak.*
