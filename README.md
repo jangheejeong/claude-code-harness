@@ -6,7 +6,7 @@
 
 `/orchestrator` 한 번으로 계획 → 구현 → 리뷰 → PR 자동화
 
-`6 subagent` · `6 verb skill` · `2 PreToolUse hook` · `phase runner`
+`6 subagent` · `6 verb skill` · `2 PreToolUse + 1 PostToolUse hook` · `phase runner`
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1+-purple)](https://code.claude.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -30,6 +30,7 @@
 | **Subagents** (6) | `.claude/agents/*.md` | 격리된 context 의 worker — `explorer` / `planner` / `coder` / `tester` / `reviewer` / `documenter` |
 | **Verb skills** (6) | `.claude/skills/*/SKILL.md` | 슬래시 명령어 — `/orchestrator` 외 5개 옵션 |
 | **PreToolUse hooks** (2) | `.claude/hooks/*.sh` | `block-destructive.sh`, `protect-secrets.sh` |
+| **PostToolUse hook** (1) | `.claude/hooks/post-edit-lint.sh` | Edit/Write 후 자동 `ruff format` (또는 `black`) — low-nit policy 자동화 |
 | **Phase runner** | `scripts/harness/run_phase.py` | 긴 phase 작업 분리 |
 | **Doc templates** | `docs/harness/*.md` | `REQUIREMENTS` / `ADR` / `DOC_SYNC_POLICY` |
 
@@ -49,8 +50,9 @@
 
 | Hook | matcher | 차단 대상 | 테스트 |
 |---|---|---|---|
-| `block-destructive.sh` | `Bash` | `rm -rf` 시스템 경로, `git push --force`, `git reset --hard origin/*`, `dd of=/dev/sd*` | 18 / 18, 오탐 0 |
-| `protect-secrets.sh` | `Edit\|Write` | `.env*`, `*.pem`, `credentials*`, `.mcp.json` | 11 / 11 |
+| `block-destructive.sh` | `Bash` (Pre) | `rm -rf` 시스템 경로, `git push --force`, `git reset --hard origin/*`, `dd of=/dev/sd*` | 18 / 18, 오탐 0 |
+| `protect-secrets.sh` | `Edit\|Write` (Pre) | `.env*`, `*.pem`, `credentials*`, `.mcp.json` | 11 / 11 |
+| `post-edit-lint.sh` | `Edit\|Write\|MultiEdit` (Post) | `.py` 파일 자동 `ruff format` (없으면 `black`) — 도구 없으면 silent skip. 코더 차단 X (`exit 0`), 변경 시만 stdout 안내 | 3 / 3 |
 
 **Phase runner**
 `claude --agent <name> -p` 래퍼. 긴 phase 작업을 별도 process 로 spawn → `.claude/notes/phase-N-<agent>-<ts>.log` 에 stdout 캡처. 메인 세션 컨텍스트 보호.
@@ -145,6 +147,12 @@ cat > .claude/settings.json <<'JSON'
       {
         "matcher": "Edit|Write",
         "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-secrets.sh" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-edit-lint.sh" }]
       }
     ]
   }
@@ -391,8 +399,9 @@ $ cd ~/your-project && claude
 │   │   ├── release/               #   /release (locked)
 │   │   └── setup/                 #   /setup
 │   └── hooks/
-│       ├── block-destructive.sh   # 위험 셸 명령 차단
-│       └── protect-secrets.sh     # 시크릿 파일 쓰기 거부
+│       ├── block-destructive.sh   # Pre · 위험 셸 명령 차단
+│       ├── protect-secrets.sh     # Pre · 시크릿 파일 쓰기 거부
+│       └── post-edit-lint.sh      # Post · .py 자동 ruff format (low-nit 자동화)
 │
 ├── scripts/harness/
 │   └── run_phase.py               # /orchestrator 가 호출, 긴 phase 출력 분리
@@ -435,9 +444,9 @@ $ cd ~/your-project && claude
 
 ---
 
-## Safety Hooks — What They Block
+## Safety + Polish Hooks — What They Do
 
-PreToolUse hooks. stdin JSON 으로 tool input 수신 → exit code `0` (allow) / `2` (deny + reason) 로 결정. `.claude/settings.local.json` 의 `hooks.PreToolUse` 에 wired.
+PreToolUse 는 차단 (exit `2` + JSON deny), PostToolUse 는 후처리 (exit `0`, stdout 안내). stdin JSON 으로 tool input 수신.
 
 > **권한 모드 우회 불가**: hook 의 `deny` 는 사용자가 `--dangerously-skip-permissions` 또는 `bypassPermissions` 모드로 띄워도 작동. 즉 사용자가 권한 검사 끄고 띄워도 hook 차단은 그대로. 팀 정책 / 보안 가드용으로 신뢰 가능.
 
@@ -464,6 +473,19 @@ allow: README.md, main.py, credentials.md, *.txt   (문서 파일은 OK)
 ```
 
 > 11 / 11 케이스 통과.
+
+### `post-edit-lint.sh` · matcher: `Edit|Write|MultiEdit` (PostToolUse)
+
+```text
+target:  *.py 변경 직후
+action:  ruff format <file>   (없으면 black --quiet <file>)
+notify:  파일이 실제로 변경됐을 때만 stdout 에 "↳ auto-formatted by <tool>: <file>"
+exit:    항상 0 — 코더 차단 X (lint 실패는 reviewer 영역)
+```
+
+목적: `reviewer.md` 의 **low-nit policy** 자동화. 포맷/공백/임포트 정렬 같은 NIT 를 formatter 가 흡수 → reviewer 는 진짜 이슈 (BLOCK/CHANGES) 에 집중. `ruff format` 만 사용 (`ruff check --fix` 는 너무 적극적이라 제외 — semantic 변경 위험).
+
+도구 없으면 silent skip → CI 환경 / 새 프로젝트에서 noise 없음.
 
 ### `announce-agent.sh` · matcher: `SubagentStart|SubagentStop`
 
