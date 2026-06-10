@@ -21,7 +21,7 @@ Claude Code 는 강력하지만 기본 상태로는 절제가 부족합니다. �
 한 Phase = 한 번에 리뷰할 수 있는 작은 단위 (대략 400줄 변경 이하). 큰 기능 한 번에 다 짜지 말고 잘게 쪼갬. 1000줄짜리 PR 은 사람도 제대로 못 봐서 버그가 새어나감.
 
 ### 3. 4-lens 리뷰 — "리뷰는 4개 안경 끼고"
-머지 전에 reviewer 가 4가지 관점에서 봅니다 — **spec / security / correctness / performance**. 여기에 본인 스택 특유의 함정도 추가로 검사. 예: Django 의 N+1 쿼리, Spring JPA 의 lazy loading 폭발.
+머지 전에 reviewer 가 4가지 관점에서 봅니다 — **spec / security / correctness / performance**. 여기에 본인 스택 특유의 함정도 추가로 검사. 예: Django 의 N+1 쿼리, FastAPI `async def` 안의 sync DB 호출.
 
 ### 4. Hooks over hopes — "막아야 할 건 코드로 막아"
 "`rm -rf /` 하지 마세요" 같은 걸 모델에게 부탁하는 게 아니라, 셸 스크립트가 명령 실행 직전에 검사해서 위험하면 차단. 모델은 깜빡할 수 있지만 스크립트는 안 깜빡함.
@@ -243,7 +243,7 @@ Claude 가 어떤 도구(Bash, Edit, Write)를 호출하기 **직전에** 셸 �
 | **Correctness** | 엣지 케이스, 에러 핸들링, 네이밍, 테스트 커버리지 |
 | **Performance** | 메모리, 블로킹 I/O, 로깅/트레이싱 |
 
-**스택 특화 룰은 본문에 비워둠.** `examples/reviewer-python.md`, `examples/reviewer-java-spring.md` 참고해서 본인 스택 버전 작성 → `.claude/agents/reviewer.md` 자리에 덮어쓰기.
+**스택 특화 룰은 본문에 비워둠.** `examples/reviewer-python.md` 참고해서 본인 스택 버전 작성 → `.claude/agents/reviewer.md` 자리에 덮어쓰기.
 
 **출력 형식**:
 
@@ -472,8 +472,7 @@ See the directory tree in §2 of this document, or run `find .claude scripts doc
 | 스택 | 파일 |
 |---|---|
 | Python (Django / FastAPI / Airflow) | `examples/reviewer-python.md` |
-| Java (Spring Boot / JPA / WebFlux) | `examples/reviewer-java-spring.md` |
-| _Kotlin / Scala / Go / Rust / Ruby / ..._ | (PR 환영) |
+| _Java / Kotlin / Scala / Go / Rust / Ruby / ..._ | (PR 환영) |
 
 ```bash
 cp examples/reviewer-<your-stack>.md .claude/agents/reviewer.md

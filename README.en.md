@@ -185,10 +185,10 @@ This harness is intentionally **language- and framework-agnostic** out of the bo
 
 | What you want to customize | File to edit | How / reference |
 |---|---|---|
-| **Stack-specific review rules** (ORM N+1, async/sync mixing, migration safety, framework pitfalls) | `.claude/agents/reviewer.md` — the "Stack-specific" subsections | Use `examples/reviewer-python.md` (Python+Django+FastAPI+Airflow) or `examples/reviewer-java-spring.md` (Java+Spring+JPA+WebFlux) as a starting point |
-| **Dependency manager / lint / type-check / test runner names** | `.claude/agents/coder.md`, `tester.md` | Already generic — Coder/Tester auto-detect from your project's `pyproject.toml`/`package.json`/`pom.xml`. Override only if you want to enforce a specific tool. |
+| **Stack-specific review rules** (ORM N+1, async/sync mixing, migration safety, framework pitfalls) | `.claude/agents/reviewer.md` — the "Stack-specific" subsections | Use `examples/reviewer-python.md` (Python+Django+FastAPI+Airflow) as a starting point |
+| **Dependency manager / lint / type-check / test runner names** | `.claude/agents/coder.md`, `tester.md` | Already generic — Coder/Tester auto-detect from your project's `pyproject.toml`/`package.json`. Override only if you want to enforce a specific tool. |
 | **Build artifact dirs to skip** | `.claude/agents/explorer.md` skip list | `target/`, `build/`, `dist/`, `node_modules/`, `.venv/` already included. Add project-specific dirs as you find them. |
-| **Test directory layout** | `.claude/agents/tester.md` | Auto-inferred (`tests/`, `src/test/java/`, `__tests__/`). Override only if non-standard. |
+| **Test directory layout** | `.claude/agents/tester.md` | Auto-inferred (`tests/`, `__tests__/`). Override only if non-standard. |
 | **Project map / always-on rules** | `CLAUDE.md` | Copy from `CLAUDE.md.example` and fill in for your project. |
 | **Requirements / acceptance criteria per subproject** | `<subproject>/REQUIREMENTS.md` | Copy from `docs/harness/REQUIREMENTS.template.md`. |
 
@@ -197,8 +197,7 @@ This harness is intentionally **language- and framework-agnostic** out of the bo
 | Stack | File |
 |---|---|
 | Python (Django / FastAPI / Airflow) | [`examples/reviewer-python.md`](examples/reviewer-python.md) |
-| Java (Spring Boot / JPA / WebFlux) | [`examples/reviewer-java-spring.md`](examples/reviewer-java-spring.md) |
-| _Kotlin / Scala / Go / Rust / Ruby / ..._ | (PRs welcome) |
+| _Java / Kotlin / Scala / Go / Rust / Ruby / ..._ | (PRs welcome) |
 
 Copy command:
 ```bash

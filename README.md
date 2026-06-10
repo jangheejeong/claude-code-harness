@@ -97,7 +97,7 @@ horizontal 은 도중에 발견되는 문제 (DB 스키마가 UI 요구와 안 �
 한 phase = 한 reviewable 단위 — 보통 수백 줄 diff (경험상 300-500 줄 정도가 무리 없음) 안에서 끊는다. 작업 크기에 따라 phase 수는 달라지지만 보통 3-7개 정도, 각 phase 가 독립 머지 가능하도록 설계한다. 큰 diff 는 `reviewer` agent 도 사람도 놓치는 게 늘어난다 — context window 가 길어질수록 모델이 엣지 케이스나 회귀를 놓치는 빈도가 올라가고, 사람의 리뷰도 형식적이 된다. 작게 쪼갤수록 양쪽의 정확도가 모두 올라간다.
 
 ### 4. 4-lens review + 스택 룰
-머지 전 `reviewer` (Opus) 가 4 관점 — spec / security / correctness / performance — 적용. 거기에 본인 스택의 함정을 추가: Django ORM N+1, Spring `@Transactional` on private method (proxy 우회), FastAPI `async def` 안의 sync DB 호출 (event loop 블록) 등.
+머지 전 `reviewer` (Opus) 가 4 관점 — spec / security / correctness / performance — 적용. 거기에 본인 스택의 함정을 추가: Django ORM N+1, FastAPI `async def` 안의 sync DB 호출 (event loop 블록) 등.
 
 ### 5. Hook 으로 강제
 instruction 은 모델이 깜빡할 수 있다. PreToolUse hook 이 셸 레벨에서 deny 한다. exit code 2 + JSON deny → Claude 에게 차단 사유가 표시됨. `--dangerously-skip-permissions` 모드에서도 hook 차단은 작동.
@@ -412,8 +412,7 @@ $ cd ~/your-project && claude
 │   └── DOC_SYNC_POLICY.md         # documenter 가 문서 갱신 판단 시 참고
 │
 └── examples/
-    ├── reviewer-python.md         # Python (Django/FastAPI/Airflow)
-    └── reviewer-java-spring.md    # Java (Spring/JPA/WebFlux)
+    └── reviewer-python.md         # Python (Django/FastAPI/Airflow)
 ```
 
 > **빌트인과의 이름**: Claude Code 빌트인 subagent (`Explore`, `Plan`, `general-purpose`) 와 본 하네스 커스텀 (`explorer`, `planner`) 은 대소문자가 달라 충돌 안 함. 빌트인은 read-only quick-research 용, 본 커스텀은 Plans.md 연동 워크플로우 전용.
@@ -554,10 +553,10 @@ cat .claude/notes/agent-activity.log
 
 | 커스터마이즈 대상 | 수정할 파일 | How |
 |---|---|---|
-| **스택별 reviewer 룰** (ORM N+1, async/sync 혼합, 마이그레이션 안전성, 프레임워크 함정) | `.claude/agents/reviewer.md` 의 "Stack-specific" 서브섹션 | `examples/reviewer-python.md` / `examples/reviewer-java-spring.md` 참고하여 작성 |
-| **의존성 매니저 / 린트 / 테스트 러너** | `.claude/agents/coder.md`, `tester.md` | agent 가 `pyproject.toml`/`package.json`/`pom.xml` 등 lock file 을 읽고 따라가도록 instruction 작성됨. 특정 도구를 강제하려면 한 줄 추가 |
+| **스택별 reviewer 룰** (ORM N+1, async/sync 혼합, 마이그레이션 안전성, 프레임워크 함정) | `.claude/agents/reviewer.md` 의 "Stack-specific" 서브섹션 | `examples/reviewer-python.md` 참고하여 작성 |
+| **의존성 매니저 / 린트 / 테스트 러너** | `.claude/agents/coder.md`, `tester.md` | agent 가 `pyproject.toml`/`package.json` 등 lock file 을 읽고 따라가도록 instruction 작성됨. 특정 도구를 강제하려면 한 줄 추가 |
 | **빌드 산출물 skip 폴더** | `.claude/agents/explorer.md` | 표준 폴더 (`node_modules`, `.venv`, `target`, `build`, `dist`) 이미 포함 |
-| **테스트 디렉토리** | `.claude/agents/tester.md` | agent 가 `tests/`, `src/test/java/`, `__tests__/` 등 표준 위치를 인식하도록 instruction 작성됨. 비표준 위치면 한 줄 추가 |
+| **테스트 디렉토리** | `.claude/agents/tester.md` | agent 가 `tests/`, `__tests__/` 등 표준 위치를 인식하도록 instruction 작성됨. 비표준 위치면 한 줄 추가 |
 | **프로젝트 지도 / 작업 규칙** | `CLAUDE.md` | `CLAUDE.md.example` 복사 후 채움. **Anthropic 권장 200 줄 / 150 instruction 이내**. 그 이상은 `@import` 로 분리 |
 | **요구사항 / 인수 기준** | `<subproject>/REQUIREMENTS.md` | `docs/harness/REQUIREMENTS.template.md` 복사 후 채움 (또는 `/setup` 자동화) |
 
@@ -566,8 +565,7 @@ cat .claude/notes/agent-activity.log
 | 스택 | 파일 |
 |---|---|
 | Python (Django / FastAPI / Airflow) | [`examples/reviewer-python.md`](examples/reviewer-python.md) |
-| Java (Spring Boot / JPA / WebFlux) | [`examples/reviewer-java-spring.md`](examples/reviewer-java-spring.md) |
-| Kotlin / Scala / Go / Rust / Ruby / ... | _PR 환영_ |
+| Java / Kotlin / Scala / Go / Rust / Ruby / ... | _PR 환영_ |
 
 복사 명령:
 
