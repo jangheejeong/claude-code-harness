@@ -21,14 +21,15 @@ for phase in Plans.md:
     /review                                   <- reviewer (Opus) 4-lens
                                               <- if BLOCK → auto-fix loop max 3
                                               ⛔ STOP if loop exhausts
-    /release                                  <- documenter + CHANGELOG + commit + push + gh pr create
+    release steps (inline)                    <- documenter + CHANGELOG + commit + push + gh pr create
 
 ⛔ STOP — user merges the PR on GitHub
 ```
 
 ## Defaults
 
-- One Phase at a time. After each phase the orchestrator continues automatically through `/review` and `/release` (creating one PR per phase by default, or one cumulative PR if the user requests it).
+- One Phase at a time. After each phase the orchestrator continues automatically through `/review` and the release steps (creating one PR per phase by default, or one cumulative PR if the user requests it).
+- `/release` is user-invocable only (`disable-model-invocation: true`), so the orchestrator does NOT invoke the skill. Instead it performs the same steps directly, following `.claude/skills/release/SKILL.md` (documenter → CHANGELOG → Plans.md checkboxes → commit → push → `gh pr create`).
 - The user types `next` to advance to the next phase, `pause` to stop, `parallel <N>` only on explicit signal.
 - `--auto` flag (off by default) skips the per-phase optional stop **only if** review verdict is APPROVE. Plan approval and final PR merge gates are always preserved.
 - A summary is posted at every gate: completed Phase, TDD cycle summary, diff size, verdict, next gate.

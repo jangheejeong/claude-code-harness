@@ -6,7 +6,7 @@
 
 `/orchestrator` 한 번으로 계획 → 구현 → 리뷰 → PR 자동화
 
-`6 subagent` · `6 verb skill` · `2 PreToolUse + 1 PostToolUse hook` · `phase runner`
+`6 subagent` · `6 verb skill` · `4 hooks` · `phase runner`
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1+-purple)](https://code.claude.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -31,6 +31,7 @@
 | **Verb skills** (6) | `.claude/skills/*/SKILL.md` | 슬래시 명령어 — `/orchestrator` 외 5개 옵션 |
 | **PreToolUse hooks** (2) | `.claude/hooks/*.sh` | `block-destructive.sh`, `protect-secrets.sh` |
 | **PostToolUse hook** (1) | `.claude/hooks/post-edit-lint.sh` | Edit/Write 후 자동 `ruff format` (또는 `black`) — low-nit policy 자동화 |
+| **Subagent hook** (1) | `.claude/hooks/announce-agent.sh` | SubagentStart/Stop 시 어느 agent 가 실행 중인지 터미널 출력 |
 | **Phase runner** | `scripts/harness/run_phase.py` | 긴 phase 작업 분리 |
 | **Doc templates** | `docs/harness/*.md` | `REQUIREMENTS` / `ADR` / `DOC_SYNC_POLICY` |
 
@@ -45,14 +46,8 @@
 **Verb skills**
 `/orchestrator` (메인) + `/plan`, `/work`, `/review`, `/release`, `/setup` (옵션). description 매칭으로 자연어 invocation 가능. `/release` 만 `disable-model-invocation: true` 로 잠가둠 — 커밋/푸시/PR 같은 side effect 가 있어서 사용자 직접 타이핑.
 
-**PreToolUse hooks**
-모델 prompt 에 의존하지 않고 stdin JSON → exit code 로 결정.
-
-| Hook | matcher | 차단 대상 | 테스트 |
-|---|---|---|---|
-| `block-destructive.sh` | `Bash` (Pre) | `rm -rf` 시스템 경로, `git push --force`, `git reset --hard origin/*`, `dd of=/dev/sd*` | 18 / 18, 오탐 0 |
-| `protect-secrets.sh` | `Edit\|Write` (Pre) | `.env*`, `*.pem`, `credentials*`, `.mcp.json` | 11 / 11 |
-| `post-edit-lint.sh` | `Edit\|Write\|MultiEdit` (Post) | `.py` 파일 자동 `ruff format` (없으면 `black`) — 도구 없으면 silent skip. 코더 차단 X (`exit 0`), 변경 시만 stdout 안내 | 3 / 3 |
+**Hooks**
+모델 prompt 에 의존하지 않고 stdin JSON → exit code 로 결정. 개별 hook 의 차단 대상 / 동작 / 테스트는 아래 [Safety + Polish Hooks](#safety--polish-hooks--what-they-do) 섹션 참고.
 
 **Phase runner**
 `claude --agent <name> -p` 래퍼. 긴 phase 작업을 별도 process 로 spawn → `.claude/notes/phase-N-<agent>-<ts>.log` 에 stdout 캡처. 메인 세션 컨텍스트 보호.
@@ -66,7 +61,7 @@
 
 ## Why a Harness
 
-Claude Code 는 강력하지만 기본 동작에 절제가 없다. 자연어 작업을 던지면 즉시 코드부터 치고, `rm -rf` 같은 위험 명령도 instruction 만으론 깜빡할 수 있다. 이 하네스는 그 위에 6개 강제력을 얹는다.
+Claude Code 는 강력하지만 기본 동작에 절제가 없다. 자연어 작업을 던지면 즉시 코드부터 치고, `rm -rf` 같은 위험 명령도 instruction 만으론 깜빡할 수 있다. 이 하네스는 그 위에 6개 강제력을 얹는다. (사람이 개입하는 게이트 3개 — Plan 승인 / BLOCK 결정 / PR 머지 — 는 아래 [사용자가 개입하는 3 지점](#사용자가-개입하는-3-지점) 참고.)
 
 ### 1. Plan 먼저
 코드 수정 전에 `Plans.md` 가 있어야 한다. `planner` (Opus) 가 작업을 phase 단위로 분해하고 각 phase 의 acceptance criteria 를 적는다. Plan 이 부실하면 그 위에 쌓이는 모든 게 부실해지므로 Opus 토큰을 여기 투자한다.
@@ -104,15 +99,6 @@ instruction 은 모델이 깜빡할 수 있다. PreToolUse hook 이 셸 레벨�
 
 ### 6. 응답 포맷도 "결론 먼저, 근거 나중" 으로 강제
 LLM 의 자유서술은 결론이 본문 중간에 묻히고 범위 (본 작업 / 이전부터 있던 이슈) 가 안 갈린다. `CLAUDE.md` 에 [BLUF (Bottom Line Up Front)](https://en.wikipedia.org/wiki/BLUF_(communication)) 템플릿을 박아서 — **결론 → 근거(file:line) → 범위·심각도 태그 → 결정 필요(추천 선택지 명시)** 4섹션을 의무로 한다. 헤더 라벨은 한글로 명시 (영어 약자 `TL;DR / Decision needed` 금지 — 가독성 떨어짐), 태그 어휘 (`[NEW]/[EXISTING]/[BLOCK]/[CHANGES]/[NIT]`) 만 `reviewer`, `tester` subagent 와 통일 — 메인 세션 보고 ↔ 리뷰 결과 사이에 어휘 전환이 없게.
-
-### 7. 사람 게이트 3개
-다음 3개는 자동화 안 함:
-
-1. Plan 승인
-2. BLOCK verdict 시 결정
-3. PR 머지
-
-그 외엔 전부 자동.
 
 ---
 
@@ -212,7 +198,7 @@ curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/mai
 
 ![orchestrator lifecycle](docs/harness/assets/orchestrator-lifecycle.svg)
 
-> 메인 Claude 가 `orchestrator/SKILL.md` 본문을 읽고 → `/plan` → `/work` → `/review` → `/release` 를 차례로 invoke. 각 skill 이 본인 [@agent-…](.claude/agents) 들을 spawn 하고, 결과를 메인 세션으로 요약 반환. 자세한 verdict 분기는 아래 Flow 다이어그램 참고.
+> 메인 Claude 가 `orchestrator/SKILL.md` 본문을 읽고 → `/plan` → `/work` → `/review` 를 차례로 invoke, 마지막 release 단계는 `/release` 가 잠겨 있어 (`disable-model-invocation: true`) 같은 절차를 직접 수행. 각 skill 이 본인 [@agent-…](.claude/agents) 들을 spawn 하고, 결과를 메인 세션으로 요약 반환. 자세한 verdict 분기는 아래 Flow 다이어그램 참고.
 
 ### Flow
 
@@ -401,7 +387,8 @@ $ cd ~/your-project && claude
 │   └── hooks/
 │       ├── block-destructive.sh   # Pre · 위험 셸 명령 차단
 │       ├── protect-secrets.sh     # Pre · 시크릿 파일 쓰기 거부
-│       └── post-edit-lint.sh      # Post · .py 자동 ruff format (low-nit 자동화)
+│       ├── post-edit-lint.sh      # Post · .py 자동 ruff format (low-nit 자동화)
+│       └── announce-agent.sh      # SubagentStart/Stop · agent 실행 알림
 │
 ├── scripts/harness/
 │   └── run_phase.py               # /orchestrator 가 호출, 긴 phase 출력 분리
@@ -510,12 +497,12 @@ exit:    항상 0 — 코더 차단 X (lint 실패는 reviewer 영역)
 ```json
 "SubagentStart": [
   {
-    "hooks": [{ "type": "command", "command": ""$CLAUDE_PROJECT_DIR"/.claude/hooks/announce-agent.sh" }]
+    "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/announce-agent.sh" }]
   }
 ],
 "SubagentStop": [
   {
-    "hooks": [{ "type": "command", "command": ""$CLAUDE_PROJECT_DIR"/.claude/hooks/announce-agent.sh" }]
+    "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/announce-agent.sh" }]
   }
 ]
 ```
