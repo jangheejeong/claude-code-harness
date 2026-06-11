@@ -77,16 +77,17 @@ horizontal 은 도중에 발견되는 문제 (DB 스키마가 UI 요구와 안 �
 
 > Claude Code 자체에도 [plan mode](https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode) (read-only 탐색 + Plan agent) 가 있음. 본 하네스의 `/plan` 은 그 위에 phase 분해 + acceptance criteria + 영속화 (`Plans.md` 파일) 를 더한 것.
 
-### 2. TDD red-green-refactor (default)
-각 phase 안에서 `coder` 는 강제로 TDD 사이클을 따른다:
+### 2. TDD red-green-refactor + commit 체크포인트 (default)
+각 phase 안에서 `coder` 는 강제로 TDD 사이클을 따르고, red/green 마다 work 브랜치에 커밋을 남긴다 (`/work` 가 main/master 위에서는 작업 브랜치를 먼저 만든다):
 
 1. acceptance criteria 를 충족하는 **실패 테스트** 부터 작성
-2. **red** 확인 (test runner 가 fail 출력)
+2. **red** 확인 (test runner 가 fail 출력) → `test(<scope>): red — …` 커밋
 3. **최소 구현** 으로 통과시킴
 4. **green** 확인 (test runner 가 pass 출력)
 5. (필요시) **refactor** — green 유지하면서
+6. `feat(<scope>): green — …` 커밋. push 는 안 함 — push/PR 은 `/release` 몫.
 
-테스트가 implementation 을 lead 한다. 이 순서를 어기면 코드는 본인 가정에 맞춘 자기충족적 코드가 되고 회귀에 취약해진다. `tester` 는 이후 단계에서 acceptance 외 엣지 케이스 테스트를 추가로 채우고, 모든 테스트가 deterministic 한지 검증.
+테스트가 implementation 을 lead 한다. 이 순서를 어기면 코드는 본인 가정에 맞춘 자기충족적 코드가 되고 회귀에 취약해진다. **실패 테스트를 먼저 커밋해두면 모델이 테스트를 약화시켜 통과시키는 우회를 git 이력이 잡아낸다** — Anthropic 권장 패턴 ([Claude Code best practices](https://code.claude.com/docs/en/best-practices)). `tester` 는 이후 단계에서 red 커밋이 green 커밋보다 먼저인지 git 이력으로 TDD 준수를 검증하고, acceptance 외 엣지 케이스 테스트를 추가로 채운다 (`test(<scope>): edge cases — phase <n>` 커밋). `reviewer` / `documenter` 는 이 커밋들의 누적 diff (`git merge-base` 기준) 를 읽는다.
 
 ### 3. 한 phase 씩
 한 phase = 한 reviewable 단위 — 보통 수백 줄 diff (경험상 300-500 줄 정도가 무리 없음) 안에서 끊는다. 작업 크기에 따라 phase 수는 달라지지만 보통 3-7개 정도, 각 phase 가 독립 머지 가능하도록 설계한다. 큰 diff 는 `reviewer` agent 도 사람도 놓치는 게 늘어난다 — context window 가 길어질수록 모델이 엣지 케이스나 회귀를 놓치는 빈도가 올라가고, 사람의 리뷰도 형식적이 된다. 작게 쪼갤수록 양쪽의 정확도가 모두 올라간다.
@@ -95,7 +96,7 @@ horizontal 은 도중에 발견되는 문제 (DB 스키마가 UI 요구와 안 �
 머지 전 `reviewer` (Opus) 가 4 관점 — spec / security / correctness / performance — 적용. 거기에 본인 스택의 함정을 추가: Django ORM N+1, FastAPI `async def` 안의 sync DB 호출 (event loop 블록) 등.
 
 ### 5. Hook 으로 강제
-instruction 은 모델이 깜빡할 수 있다. PreToolUse hook 이 셸 레벨에서 deny 한다. exit code 2 + JSON deny → Claude 에게 차단 사유가 표시됨. `--dangerously-skip-permissions` 모드에서도 hook 차단은 작동.
+instruction 은 모델이 깜빡할 수 있다. PreToolUse hook 이 셸 레벨에서 deny 한다. exit code 2 + stderr 사유 → Claude 에게 차단 사유가 표시됨. `--dangerously-skip-permissions` 모드에서도 hook 차단은 작동.
 
 ### 6. 응답 포맷도 "결론 먼저, 근거 나중" 으로 강제
 LLM 의 자유서술은 결론이 본문 중간에 묻히고 범위 (본 작업 / 이전부터 있던 이슈) 가 안 갈린다. `CLAUDE.md` 에 [BLUF (Bottom Line Up Front)](https://en.wikipedia.org/wiki/BLUF_(communication)) 템플릿을 박아서 — **결론 → 근거(file:line) → 범위·심각도 태그 → 결정 필요(추천 선택지 명시)** 4섹션을 의무로 한다. 헤더 라벨은 한글로 명시 (영어 약자 `TL;DR / Decision needed` 금지 — 가독성 떨어짐), 태그 어휘 (`[NEW]/[EXISTING]/[BLOCK]/[CHANGES]/[NIT]`) 만 `reviewer`, `tester` subagent 와 통일 — 메인 세션 보고 ↔ 리뷰 결과 사이에 어휘 전환이 없게.
@@ -113,7 +114,8 @@ LLM 의 자유서술은 결론이 본문 중간에 묻히고 범위 (본 작업 
 cd ~/your-project
 
 git clone https://github.com/jangheejeong/claude-code-harness.git .harness-tmp
-cp -r .harness-tmp/.claude ./
+[ -f .claude/settings.json ] && cp .claude/settings.json .claude/settings.json.bak   # 기존 설정 백업 (cp -r 이 덮어씀)
+cp -r .harness-tmp/.claude ./      # agents + skills + hooks + settings.json (hook 4개 등록 포함)
 cp -r .harness-tmp/scripts ./
 cp -r .harness-tmp/docs ./
 cp .harness-tmp/CLAUDE.md.example ./CLAUDE.md   # 본인 프로젝트에 맞게 수정
@@ -121,30 +123,9 @@ cp .harness-tmp/HARNESS.md ./
 rm -rf .harness-tmp
 
 chmod +x .claude/hooks/*.sh
-
-cat > .claude/settings.json <<'JSON'
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/block-destructive.sh" }]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-secrets.sh" }]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-edit-lint.sh" }]
-      }
-    ]
-  }
-}
-JSON
 ```
+
+> `.claude/settings.json` 에 hook 4개가 이미 등록되어 있음 — 별도 설정 불필요. 공식 권장대로 `settings.json` 은 팀 공유용으로 체크인하고, 개인 설정은 `settings.local.json` (gitignore) 에. 기존 `settings.json` 이 있던 프로젝트라면 백업본 (`settings.json.bak`) 에 새 파일의 `hooks` 블록을 수동으로 합쳐서 복원.
 
 확인:
 
@@ -172,9 +153,10 @@ curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/mai
 동작:
 
 - 변경될 파일 목록 보여줌 (e.g., `~ .claude/agents/coder.md  (112 lines changed)`)
-- **사용자 파일은 보존**: `CLAUDE.md`, `.claude/settings*.json`, `Plans.md`, `REQUIREMENTS.md`, `.claude/notes/`, `worktrees/`, `agent-memory/`
-- **managed 파일은 단순 덮어쓰기**: 5 generic agents (coder/tester/planner/explorer/documenter), 6 verb skills, 2 hooks, `run_phase.py`, doc 템플릿, `HARNESS.md`, `examples/`
+- **사용자 파일은 보존**: `CLAUDE.md`, `.claude/settings*.json` (`settings.json` 은 없을 때만 신규 설치 — 본인 파일에 hook event 가 빠져 있으면 경고만 출력), `Plans.md`, `REQUIREMENTS.md`, `.claude/notes/`, `worktrees/`, `agent-memory/`
+- **managed 파일은 단순 덮어쓰기**: 5 generic agents (coder/tester/planner/explorer/documenter), 6 verb skills, 4 hooks (block-destructive / protect-secrets / post-edit-lint / announce-agent), `run_phase.py`, doc 템플릿, `HARNESS.md`, `examples/` (동일 이름만 덮어씀 — upstream 에서 사라진 로컬 파일은 삭제하지 않고 경고만)
 - **`reviewer.md` 는 3-way auto-merge**: 스택 커스텀 영역 (Django N+1, FastAPI async 등) 과 공용 영역 (Tag 의미, 4-lens 골격) 이 한 파일에 섞여있어서 `git merge-file` 로 합침
+  - 로컬에 `reviewer.md` 가 없으면: upstream 을 신규 설치
   - 첫 실행: cache 없으므로 보존 + cache 시드 (`.claude/.harness-cache/upstream-prev/reviewer.md`)
   - 다음 실행부터: 사용자/cache/새 upstream 3-way 머지 — 다른 영역 변경은 자동 합쳐짐, 같은 영역 동시 변경 시만 `<<<<<<<` marker 박힘 (수동 해결)
 - 갱신 전 상태는 `.claude/.harness-backup-<timestamp>/` 에 자동 백업 → 문제 시 롤백 가능
@@ -209,12 +191,12 @@ flowchart TD
     Gate1 -->|Approval| Phase[Phase 시작]
     Gate1 -->|수정 요청| Plan
 
-    Phase --> Coder[coder · TDD red-green-refactor]
-    Coder --> Tester[tester · 검증 + 엣지 확장]
+    Phase --> Coder[coder · TDD red→green 커밋 체크포인트]
+    Coder --> Tester[tester · TDD 이력 검증 + 엣지 확장]
     Tester --> R[reviewer Opus 검토 시작]
 
     R --> C1{1. Plan 의 성공 조건<br/>모두 충족?}
-    C1 -->|No| BLOCK[BLOCK]
+    C1 -->|No| BLOCK[BLOCK / REQUEST CHANGES]
     C1 -->|Yes| C2{2. 보안 / 정확성<br/>이슈 있나?}
     C2 -->|Yes| BLOCK
     C2 -->|No| C3{3. 테스트 모두 통과?}
@@ -239,7 +221,7 @@ flowchart TD
     class APPROVE approve
 ```
 
-> **Reviewer 의 3단계 판단**: 1번 (Plan 성공 조건) → 2번 (보안/정확성) → 3번 (테스트) 순서로 검사. 셋 다 통과해야 APPROVE, 하나라도 실패하면 BLOCK 후 자동 fix 루프 진입.
+> **Reviewer 의 3단계 판단**: 1번 (Plan 성공 조건) → 2번 (보안/정확성) → 3번 (테스트) 순서로 검사. 셋 다 통과해야 APPROVE — APPROVE 시 `Plans.md` 에 `Review: APPROVE — <date>` 라인이 기록되고 `/release` 가 이걸 확인한다. 하나라도 실패하면 BLOCK (경미하면 REQUEST CHANGES), 어느 쪽이든 자동 fix 루프 진입.
 
 ### 사용 방법
 
@@ -253,8 +235,8 @@ $ cd ~/your-project && claude
 |---|---|
 | **1.** Plan | `planner` 가 phase 분해 + acceptance criteria 작성 → `Plans.md` 저장 |
 | **⛔ Gate** | 사용자가 `Plans.md` 검토 + Approval ✓ |
-| **2.** Loop | Phase 별 TDD 사이클 (`coder` red→green→refactor) → `tester` 검증/확장 → `reviewer` 4-lens. BLOCK 이면 자동 fix 루프 (최대 3회) |
-| **3.** Release | `documenter` 가 README/CHANGELOG 갱신 → commit → push → `gh pr create` |
+| **2.** Loop | Phase 별 TDD 사이클 (`coder` red 커밋 → green 커밋, work 브랜치) → `tester` git 이력 검증/엣지 확장 → `reviewer` 4-lens. BLOCK / REQUEST CHANGES 면 자동 fix 루프 (최대 3회), APPROVE 면 `Plans.md` 에 `Review: APPROVE` 기록 |
+| **3.** Release | `Plans.md` 의 `Review: APPROVE` 확인 → `documenter` 가 README/CHANGELOG 갱신 → docs commit → push → `gh pr create` |
 | **⛔ Gate** | 사용자가 GitHub 에서 PR 머지 |
 
 > 사용자가 일상적으로 입력하는 verb 는 `/orchestrator` 하나로 충분하다. 나머지 5개는 특수 상황용.
@@ -267,7 +249,7 @@ $ cd ~/your-project && claude
 
 수정이 필요하면 `Plans.md` 를 직접 편집하기보단 자연어로 요청하는 게 좋다 — _"Phase 2 가 너무 크다, 둘로 쪼개줘"_, _"acceptance 가 모호하다, 구체적인 status code 로 바꿔"_, _"만료 nonce 처리 phase 가 빠졌다, 추가해"_ 식. `planner` 가 다시 짜고 사용자는 다시 검토. 직접 편집은 planner 가 본인이 안 쓴 변경을 모르게 만들어 이후 단계와 어긋난다.
 
-**BLOCK verdict.** `reviewer` 가 BLOCK 을 내고 자동 fix 루프 (최대 3회) 가 풀지 못하면 흐름이 멈춘다.
+**BLOCK verdict.** `reviewer` 가 BLOCK (또는 REQUEST CHANGES) 을 내고 자동 fix 루프 (최대 3회) 가 풀지 못하면 흐름이 멈춘다.
 
 3회 안에 풀리지 않는 BLOCK 은 보통 다음 셋 중 하나의 신호다:
 
@@ -384,11 +366,13 @@ $ cd ~/your-project && claude
 │   │   ├── review/                #   /review
 │   │   ├── release/               #   /release (locked)
 │   │   └── setup/                 #   /setup
+│   ├── settings.json              # hook 4개 등록 (팀 공유용, 체크인)
 │   └── hooks/
 │       ├── block-destructive.sh   # Pre · 위험 셸 명령 차단
 │       ├── protect-secrets.sh     # Pre · 시크릿 파일 쓰기 거부
 │       ├── post-edit-lint.sh      # Post · .py 자동 ruff format (low-nit 자동화)
-│       └── announce-agent.sh      # SubagentStart/Stop · agent 실행 알림
+│       ├── announce-agent.sh      # SubagentStart/Stop · agent 실행 알림
+│       └── tests/run-tests.sh     # hook 4개 회귀 테스트 suite
 │
 ├── scripts/harness/
 │   └── run_phase.py               # /orchestrator 가 호출, 긴 phase 출력 분리
@@ -421,46 +405,53 @@ $ cd ~/your-project && claude
 
 ### Verdict tags
 
-| Tag | 의미 |
-|---|---|
-| `[BLOCK]` | 보안 / correctness / spec 미달. 머지 차단. |
-| `[CHANGES]` | 머지 전 수정 권장. |
-| `[NIT]` | 선택적 개선. |
-| `[EXISTING]` | 기존 코드 이슈. 이번 PR 차단 안 함, 별도 티켓 권장. |
+태그는 **scope** (신규 vs 기존) + **severity** (차단 정도) 두 축의 조합 — `tester` 와 메인 세션 BLUF 보고도 같은 어휘.
+
+| Tag | 축 | 의미 |
+|---|---|---|
+| `[NEW]` | scope | 본 Phase diff 가 만든 이슈. 기본값이라 단독 `[BLOCK]` 도 `[NEW]` 의미. 조합 예: `[NEW][BLOCK]` |
+| `[EXISTING]` | scope | 기존 코드 이슈. 이번 PR 차단 안 함, 별도 티켓 권장. |
+| `[BLOCK]` | severity | 보안 / correctness / spec 미달. 머지 차단. |
+| `[CHANGES]` | severity | 머지 전 수정 권장. |
+| `[NIT]` | severity | 선택적 개선. low-nit policy — formatter 가 잡을 건 코멘트 X. |
 
 ---
 
 ## Safety + Polish Hooks — What They Do
 
-PreToolUse 는 차단 (exit `2` + JSON deny), PostToolUse 는 후처리 (exit `0`, stdout 안내). stdin JSON 으로 tool input 수신.
+PreToolUse 는 차단 (exit `2` + stderr 사유), PostToolUse 는 후처리 (exit `0`, stdout 안내). stdin JSON 은 `jq` 로 파싱 (`python3` fallback — 둘 다 없으면 경고 출력 후 통과).
 
 > **권한 모드 우회 불가**: hook 의 `deny` 는 사용자가 `--dangerously-skip-permissions` 또는 `bypassPermissions` 모드로 띄워도 작동. 즉 사용자가 권한 검사 끄고 띄워도 hook 차단은 그대로. 팀 정책 / 보안 가드용으로 신뢰 가능.
+
+> **회귀 테스트**: `bash .claude/hooks/tests/run-tests.sh` — hook 4개에 합성 JSON 을 흘려 deny (exit 2) / allow (exit 0) 를 단언하는 self-contained suite. 현재 75 케이스 (오탐 가드 포함) 전부 통과.
 
 ### `block-destructive.sh` · matcher: `Bash`
 
 ```text
-deny:  rm -rf {/, ~, $HOME, /usr/*, /etc/*, /Library/*, ...}
-deny:  git push {--force, --force-with-lease, -f}
+deny:  rm -rf {/, ~, $HOME, /usr/*, /etc/*, /Library/*, ...}   (compound 명령의 모든 segment 검사)
+deny:  git push {--force, --force-with-lease, -f, +refspec}    (git -C <path> push 포함)
 deny:  git reset --hard origin/<branch>
-deny:  dd of=/dev/{sd,nvme,hd,disk}*
+deny:  dd of=/dev/{sd,nvme,hd,disk,rdisk}*
 
-allow: rm -rf {node_modules, /tmp/foo, .venv, build}
+allow: rm -rf {node_modules, /tmp/foo, .venv, build}, rm -rf build > /dev/null
 allow: git push -u origin <branch>
 allow: git reset --hard HEAD~1
 ```
 
-> 18 / 18 케이스 통과, 오탐 0.
+> suite 중 40 케이스 (deny 22 + 오탐 가드 16 + 프로토콜 2).
 
 ### `protect-secrets.sh` · matcher: `Edit|Write`
 
 ```text
-deny:  .env*, *.pem, *.key, *.p12, *credentials*.{json,yaml}, *token*.{json,yaml}, .mcp.json
-allow: README.md, main.py, credentials.md, *.txt   (문서 파일은 OK)
+deny:  .env*, *.pem, *.key, *.p12, *.pfx, *.p8, *.keystore, id_rsa*, id_ed25519*,
+       .npmrc, .pypirc, .htpasswd, *{credentials,secret,token}*.{json,yaml,yml}, .mcp.json
+allow: README.md, *.txt, .env.example (*.example/*.sample/*.template 은 문서/템플릿),
+       token_service.py, design-tokens.css   (credential 형태가 아닌 소스 파일은 통과)
 ```
 
-> 11 / 11 케이스 통과.
+> suite 중 28 케이스 (deny 18 + 오탐 가드 10).
 
-### `post-edit-lint.sh` · matcher: `Edit|Write|MultiEdit` (PostToolUse)
+### `post-edit-lint.sh` · matcher: `Edit|Write` (PostToolUse)
 
 ```text
 target:  *.py 변경 직후
@@ -491,23 +482,7 @@ exit:    항상 0 — 코더 차단 X (lint 실패는 reviewer 영역)
 
 #### 활성화 방법
 
-1. `update.sh` 가 이미 `announce-agent.sh` 를 설치함 (최신 버전 한정).
-2. `.claude/settings.json` 의 `hooks` 에 다음 두 entry 추가 (사용자 직접):
-
-```json
-"SubagentStart": [
-  {
-    "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/announce-agent.sh" }]
-  }
-],
-"SubagentStop": [
-  {
-    "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/announce-agent.sh" }]
-  }
-]
-```
-
-3. Claude Code 재시작 → 다음 `/orchestrator` 부터 agent 시작/종료가 터미널에 한 줄씩 출력됨.
+기본 제공되는 `.claude/settings.json` 에 `SubagentStart` / `SubagentStop` entry 가 이미 등록되어 있음 — 신규 설치면 추가 설정 불필요. 본인 `settings.json` 을 따로 유지 중이라면 `update.sh` 가 빠진 hook event 를 경고로 알려주고 upstream `settings.json` 을 백업 폴더에 참고용으로 저장해줌. 등록 후 Claude Code 재시작 → 다음 `/orchestrator` 부터 agent 시작/종료가 터미널에 한 줄씩 출력됨.
 
 #### 검증
 

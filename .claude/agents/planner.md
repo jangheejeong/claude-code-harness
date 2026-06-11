@@ -42,7 +42,7 @@ If the work is genuinely a single-layer refactor (e.g., DB index migration), tha
 1. Identify the target subproject.
 2. Read `REQUIREMENTS.md`, `HAND_OFF*.md`, `CLAUDE.md`, `README*` in that subproject. Read the Explorer's report if one was just produced.
 3. Decompose the work into **3–7 vertical-slice Phases**. A Phase is:
-   - One reviewable unit (~수백 줄 diff, 300-500 권장)
+   - One reviewable unit (보통 300-500 줄 변경)
    - Crosses all relevant layers for one feature/slice
    - Has TDD-ready acceptance criteria
    - Can be merged independently

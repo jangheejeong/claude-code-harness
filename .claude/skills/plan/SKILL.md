@@ -5,7 +5,7 @@ description: Turn a fuzzy request into a phased Plans.md with vertical slicing a
 
 # /plan — Requirements to Phased Plan
 
-This skill is the entry point of the harness. Code never starts here; only after the user approves the produced `Plans.md`.
+This skill is the entry point for planning (the full-loop entry point is `/orchestrator`). Code never starts here; only after the user approves the produced `Plans.md`.
 
 ## Steps
 
@@ -21,7 +21,7 @@ This skill is the entry point of the harness. Code never starts here; only after
    - **TDD-ready acceptance**: every acceptance bullet must be directly convertible into a failing test (specific status codes, response shapes, observable side effects)
 
    The planner's output must end with `PLAN READY — save to <path>/Plans.md`.
-5. **Save the plan**. Use Write to persist to `<subproject>/Plans.md` (overwrite is OK; git tracks it). If file exists, append a new section dated today; do not delete history.
+5. **Save the plan**. Update `<subproject>/Plans.md` in place: the new plan becomes the document body. If the file already held a plan, append a dated entry under a `## History` section at the bottom (create it if missing) recording what was superseded — never delete prior content.
 6. **Approval gate**. Print the path and ask the user to review and check off the Approval section. Do NOT proceed to `/work` until they confirm.
 
 ## Inputs from the user (ask if missing)
@@ -33,7 +33,7 @@ This skill is the entry point of the harness. Code never starts here; only after
 
 ## Outputs
 
-- `<subproject>/Plans.md` (or appended section)
+- `<subproject>/Plans.md` (with a dated `## History` entry on re-plan)
 - one-paragraph chat summary with the path
 
 ## On user revision request

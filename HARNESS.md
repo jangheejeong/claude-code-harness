@@ -18,7 +18,7 @@ Claude Code 는 강력하지만 기본 상태로는 절제가 부족합니다. �
 "기능 추가해줘" 하면 Claude 가 바로 코드를 치는 게 아니라, **먼저 `Plans.md` 라는 설계 문서**를 만듭니다. 단계별로 "Phase 1 은 뭘 하고, 다 됐는지 확인하는 기준은 뭐고" 가 적혀있음. 사람이 그거 보고 ✓ 한 다음에야 진짜 코딩 시작. AI 가 알아서 코딩하다가 산으로 가는 사고 방지.
 
 ### 2. Phase 경계 — "한 입씩 먹어"
-한 Phase = 한 번에 리뷰할 수 있는 작은 단위 (대략 400줄 변경 이하). 큰 기능 한 번에 다 짜지 말고 잘게 쪼갬. 1000줄짜리 PR 은 사람도 제대로 못 봐서 버그가 새어나감.
+한 Phase = 한 번에 리뷰할 수 있는 작은 단위 (보통 300-500 줄 변경). 큰 기능 한 번에 다 짜지 말고 잘게 쪼갬. 1000줄짜리 PR 은 사람도 제대로 못 봐서 버그가 새어나감.
 
 ### 3. 4-lens 리뷰 — "리뷰는 4개 안경 끼고"
 머지 전에 reviewer 가 4가지 관점에서 봅니다 — **spec / security / correctness / performance**. 여기에 본인 스택 특유의 함정도 추가로 검사. 예: Django 의 N+1 쿼리, FastAPI `async def` 안의 sync DB 호출.
@@ -39,8 +39,8 @@ Plan 승인, BLOCK 판정 시 결정, PR 머지 — 이 3개는 사람이 직접
 # 요구사항: Claude Code v2.1+
 claude --version
 
-# 베이스 폴더에서 시작 (이게 컨트롤 타워)
-cd ~/Projects/heum
+# 하네스가 설치된 프로젝트 / 워크스페이스 루트에서 시작
+cd ~/your-project
 claude
 
 # 잘 깔렸는지 확인
@@ -59,30 +59,33 @@ claude
 ├── HARNESS.md                         이 문서
 │
 ├── .claude/
-│   ├── settings.local.json            기존 권한 + 신규 hook 통합
-│   ├── settings.local.json.bak.*      자동 백업
+│   ├── settings.json                  hook 4개 등록 (팀 공유용, 체크인)
+│   ├── settings.local.json            개인 설정 (gitignore — 직접 생성)
 │   ├── worktrees/                     git worktree 격리 작업용
 │   ├── notes/                         subagent 출력 로그 저장소
 │   │
 │   ├── agents/                        ── Subagent 6개 ──
-│   │   ├── explorer.md                 sonnet · read-only · 코드베이스 인덱싱
+│   │   ├── explorer.md                 sonnet · 탐색 전용 (Write 는 notes/ 한정) · 코드베이스 인덱싱
 │   │   ├── planner.md                  opus   · read-only · Plans.md 분해
-│   │   ├── coder.md                    sonnet · edit OK  · 한 Phase 구현
-│   │   ├── tester.md                   sonnet · tests/만 · 테스트 작성/실행
+│   │   ├── coder.md                    sonnet · edit OK  · 한 Phase TDD 구현 + red/green 커밋
+│   │   ├── tester.md                   sonnet · tests/만 · TDD 이력 검증 + 엣지 확장
 │   │   ├── reviewer.md                 opus   · read-only · 4-lens 게이트
 │   │   └── documenter.md               sonnet · doc edit · 문서 동기화
 │   │
 │   ├── skills/                        ── Skill 6개 (verb) ──
+│   │   ├── orchestrator/SKILL.md       /orchestrator — 풀 루프 (기본 진입점)
 │   │   ├── plan/SKILL.md               /plan       — 요구사항 → Plans.md
 │   │   ├── work/SKILL.md               /work N     — Phase N 구현
 │   │   ├── review/SKILL.md             /review     — 4관점 게이트
 │   │   ├── release/SKILL.md            /release    — 🔒 PR 생성 (자동호출 차단)
-│   │   ├── setup/SKILL.md              /setup      — 신규 프로젝트 부트스트랩
-│   │   └── orchestrator/SKILL.md       /orchestrator — 풀 루프 조율
+│   │   └── setup/SKILL.md              /setup      — 신규 프로젝트 부트스트랩
 │   │
-│   └── hooks/                         ── 안전 가드 2개 ──
-│       ├── block-destructive.sh        rm -rf 시스템경로, push --force, reset --hard origin
-│       └── protect-secrets.sh          .env, .pem, credentials, .mcp.json 쓰기 차단
+│   └── hooks/                         ── 안전 + 편의 가드 4개 ──
+│       ├── block-destructive.sh        Pre  · rm -rf 시스템경로, push --force, reset --hard origin
+│       ├── protect-secrets.sh          Pre  · .env, .pem, credentials, .mcp.json 쓰기 차단
+│       ├── post-edit-lint.sh           Post · .py 자동 ruff format (low-nit 자동화)
+│       ├── announce-agent.sh           SubagentStart/Stop · agent 실행 알림 + 로그
+│       └── tests/run-tests.sh          hook 4개 회귀 테스트 suite
 │
 ├── scripts/harness/
 │   └── run_phase.py                    phase 작업을 별도 셸로 분리 (메인 컨텍스트 절약)
@@ -100,14 +103,12 @@ claude
 ### Layer 1 — `CLAUDE.md` (Always-on 컨텍스트)
 
 세션 시작 시 자동 로드. Claude 가 항상 인지하는 사실:
-- 작업 규칙 6개 (Plan-first, 비밀키 금지, force push 금지 등)
-- 24개 서브프로젝트 지도 (어떤 폴더에 뭐가 있는지)
-- 핵심 인-플라이트 문서 위치
+- 작업 규칙 (Plan-first, 비밀키 금지, force push 금지 등)
+- 프로젝트 지도 (어떤 폴더에 뭐가 있는지 — 멀티-repo 워크스페이스라면 특히)
 - 6 subagent 일람 + 모델
-- MCP 설정 (Jira)
 - 안전장치 요약
 
-**왜 필요한가**: if your workspace contains multiple independent git repos. Claude 가 어떤 서브프로젝트 컨텍스트인지 매번 헷갈림. 이 지도가 있어야 verb 가 "어느 폴더야?" 물을 수 있음.
+**왜 필요한가**: 워크스페이스에 독립 git repo 가 여러 개면 Claude 가 어떤 서브프로젝트 컨텍스트인지 매번 헷갈림. 이 지도가 있어야 verb 가 "어느 폴더야?" 물을 수 있음.
 
 ### Layer 2 — Subagent 6개
 
@@ -115,11 +116,11 @@ claude
 
 | Subagent | 모델 | 권한 | 역할 |
 |---|---|---|---|
-| **explorer** | sonnet | Read, Grep, Glob, Bash (read-only) | 코드 인덱싱. 작업 시작 전 한 페이지 매핑 |
+| **explorer** | sonnet | Read, Write, Grep, Glob, Bash (프로젝트 파일 수정 금지 — Write 는 `.claude/notes/` 한정) | 코드 인덱싱. 작업 시작 전 한 페이지 매핑 |
 | **planner** | **opus** | Read, Grep, Glob | Phase 분해. Plans.md 초안 |
-| **coder** | sonnet | Read, Edit, Write, Grep, Glob, Bash | 한 Phase 만 minimal-diff 구현 |
-| **tester** | sonnet | Read, Edit, Write, Grep, Glob, Bash | tests/ 만 edit. 프로덕션 버그 발견 시 coder 로 escalate |
-| **reviewer** | **opus** | Read, Grep, Glob, Bash | 4관점 검토. **Python/Django/FastAPI/Airflow 도메인 지식** 포함 |
+| **coder** | sonnet | Read, Edit, Write, Grep, Glob, Bash | 한 Phase 만 strict TDD 구현 — red/green 마다 work 브랜치에 커밋 |
+| **tester** | sonnet | Read, Edit, Write, Grep, Glob, Bash | tests/ 만 edit. git 이력으로 TDD 준수 검증 + 엣지 케이스 확장. 프로덕션 버그 발견 시 coder 로 escalate |
+| **reviewer** | **opus** | Read, Grep, Glob, Bash | 4관점 검토. 스택 특화 룰은 placeholder — 본인 스택으로 채움 (부록 D) |
 | **documenter** | sonnet | Read, Edit, Write, Grep, Glob, Bash | README/CHANGELOG/ADR 동기화 |
 
 **모델 분배 철학**: 결정이 비싼 단계 = opus (planner, reviewer). 실행 = sonnet. 토큰 vs 품질 절충.
@@ -130,38 +131,42 @@ claude
 
 | Skill | 트리거 | 호출하는 Subagent | 자동 호출 |
 |---|---|---|---|
-| `/plan` | "기능 추가하자" | explorer + planner | ✓ |
-| `/work N` | Plans.md 승인 후 | coder + tester (루프) | ✓ |
-| `/review` | work 완료 후 | reviewer | ✓ |
+| `/orchestrator` | **기본 진입점** — 3 phase 이상 작업 | `/plan` → `/work` → `/review` 체이닝 + release 절차는 inline 수행 | ✓ |
+| `/plan` | Plans.md 만 다시 짜고 싶을 때 | explorer + planner | ✓ |
+| `/work N` | Plans.md 승인 후 Phase 하나만 | coder + tester (루프) | ✓ |
+| `/review` | work 완료 후 리뷰만 | reviewer | ✓ |
 | `/release` | 사용자 직접 입력 only | documenter | ✗ 잠금 |
 | `/setup` | 신규 프로젝트 온보딩 | (없음) | ✓ |
-| `/orchestrator` | 풀 루프 자동화 | 4 verb 체이닝 | ✓ |
 
-**`/release` 만 잠근 이유**: commit / push / PR 같은 사이드 이펙트. Claude 자동 발동 위험. `disable-model-invocation: true` 로 잠가서 사용자가 직접 타이핑해야만 작동.
+**`/release` 만 잠근 이유**: commit / push / PR 같은 사이드 이펙트. Claude 자동 발동 위험. `disable-model-invocation: true` 로 잠가서 사용자가 직접 타이핑해야만 작동 (`/orchestrator` 는 skill 을 호출하는 대신 같은 절차를 inline 으로 수행).
 
-### Layer 4 — Hook 2개
+### Layer 4 — Hook 4개
 
-Claude 가 어떤 도구(Bash, Edit, Write)를 호출하기 **직전에** 셸 스크립트가 끼어들어 검사. 모델 판단이 아니라 코드로 강제.
+Claude 의 도구 호출 직전/직후에 셸 스크립트가 끼어들어 검사. 모델 판단이 아니라 코드로 강제. 차단은 stderr 사유 + exit 2, 통과는 조용히 exit 0. 4개 모두 `.claude/settings.json` 에 등록되어 있고, `.claude/hooks/tests/run-tests.sh` 가 합성 JSON 으로 회귀 검증 (현재 75 케이스).
 
-#### `block-destructive.sh` (Bash 가드)
+#### `block-destructive.sh` (PreToolUse · Bash 가드)
 
 | 차단 | 통과 |
 |---|---|
-| `rm -rf /`, `~`, `$HOME`, `/usr/*`, `/etc/*` 등 | `rm -rf node_modules`, `/tmp/foo` |
-| `git push --force`, `--force-with-lease`, `-f` | `git push -u origin feat/x` |
+| `rm -rf /`, `~`, `$HOME`, `/usr/*`, `/etc/*` 등 — compound 명령의 모든 segment 검사 | `rm -rf node_modules`, `/tmp/foo`, `rm -rf build > /dev/null` |
+| `git push --force`, `--force-with-lease`, `-f`, `+refspec` (`git -C <path> push` 포함) | `git push -u origin feat/x` |
 | `git reset --hard origin/<branch>` | `git reset --hard HEAD~1` |
-| `dd of=/dev/sd*` | 일반 dd |
+| `dd of=/dev/{sd,nvme,hd,disk,rdisk}*` | 일반 dd |
 
-18 케이스 테스트 통과, false positive 0.
-
-#### `protect-secrets.sh` (Edit/Write 가드)
+#### `protect-secrets.sh` (PreToolUse · Edit/Write 가드)
 
 | 차단 | 통과 |
 |---|---|
-| `.env*`, `*.pem`, `*.key`, `credentials.json`, `.mcp.json` | 모든 일반 코드/문서 |
-| `tokens.yaml`, `secret.yml` | `credentials.md` (문서) |
+| `.env*`, `*.pem`, `*.key`, `*.p12`, `*.p8`, `*.keystore`, `id_rsa*`, `id_ed25519*` | 모든 일반 코드/문서 |
+| `.npmrc`, `.pypirc`, `.htpasswd`, credential 형태 이름 (`*token*.json`, `secret.yml` 등), `.mcp.json` | `token_service.py`, `design-tokens.css` (소스), `.env.example`, `credentials.md` (문서/템플릿) |
 
-11 케이스 테스트 통과.
+#### `post-edit-lint.sh` (PostToolUse · Edit/Write)
+
+`.py` 변경 직후 `ruff format` (없으면 `black`) 자동 실행. 항상 exit 0 — 차단하지 않음. reviewer 의 low-nit policy 자동화: 포맷/공백 NIT 를 formatter 가 흡수.
+
+#### `announce-agent.sh` (SubagentStart / SubagentStop)
+
+어느 agent 가 실행/종료 중인지 터미널 (`/dev/tty`) 에 한 줄 출력 + `.claude/notes/agent-activity.log` 에 기록. 사후에 어떤 agent 가 진짜 spawn 됐는지 검증 가능.
 
 ### Layer 5 — 부속 자산
 
@@ -183,7 +188,15 @@ Claude 가 어떤 도구(Bash, Edit, Write)를 호출하기 **직전에** 셸 �
 → 어느 폴더인지 물음 → `REQUIREMENTS.md` + 빈 `Plans.md` 생성 → stack 자동 추론.
 **할 일**: 떨어진 `REQUIREMENTS.md` 열어서 run/test 명령 검토.
 
-### 4.2. 기능 시작 — 표준 5 STEP
+### 4.2. 기능 시작 — 기본은 `/orchestrator`
+
+```
+> /orchestrator <자연어 작업 설명>
+```
+
+`/orchestrator` 가 **기본 진입점** — plan → work (TDD) → review → release 를 끝까지 조율하고, 사람은 게이트 (Plan 승인 / review verdict / PR 머지) 만 통과시킨다. 3 phase 이상 본격 작업에서 본전. 그 이하 자잘한 수정은 하네스 우회 (§4.4).
+
+단계를 하나씩 직접 밟고 싶을 때 (디버깅, 재리뷰 등) 는 아래 수동 5 STEP:
 
 ```
 1. > <your-subproject> 에 채널 webhook HMAC 검증. /plan 으로 가자
@@ -191,15 +204,18 @@ Claude 가 어떤 도구(Bash, Edit, Write)를 호출하기 **직전에** 셸 �
    ⛔ STOP — Plans.md 검토 + Approval ✓
 
 2. > Plans.md 승인했어. /work 1
-   → coder Phase 1 구현 → tester 검증
+   → work 브랜치 생성 (main 위에서는 작업 금지) → coder 가 TDD 사이클마다
+     red 커밋 → green 커밋 → tester 가 git 이력으로 TDD 검증 + 엣지 확장
    ⛔ STOP — diff 요약 확인
 
 3. > /review
-   → reviewer(opus) 4관점 + 스택 특화 검토
-   ⛔ STOP — verdict 확인 (APPROVE / CHANGES / BLOCK)
+   → reviewer(opus) 가 merge-base 기준 누적 diff 를 4관점 + 스택 특화 검토
+   ⛔ STOP — verdict 확인 (APPROVE / REQUEST CHANGES / BLOCK)
+     APPROVE 면 Plans.md 에 `Review: APPROVE — <date>` 기록됨
 
 4. > /release    ← 직접 타이핑 (자동호출 잠겨있음)
-   → documenter → CHANGELOG → 커밋 → push → gh pr create
+   → Plans.md 의 `Review: APPROVE` 확인 → documenter → CHANGELOG
+     → docs 커밋 → push → gh pr create
    ⛔ STOP — PR URL 확인
 
 5. [GitHub 에서 PR 머지]    ← 사람이 직접
@@ -208,17 +224,19 @@ Claude 가 어떤 도구(Bash, Edit, Write)를 호출하기 **직전에** 셸 �
    → 다음 Phase 반복
 ```
 
-### 4.3. 5 STOP 게이트 — 사용자 개입 강제 지점
+### 4.3. STOP 게이트 — 사용자 개입 강제 지점
+
+수동 5 STEP 기준:
 
 | # | 시점 | 사용자 결정 |
 |---|---|---|
 | 1 | `/plan` 직후 | Plans.md 검토 + Approval ✓ |
 | 2 | `/work N` 직후 (선택) | diff 한 번 보기 |
-| 3 | `/review` BLOCK / CHANGES 시 | 자동 루프(최대 3회) 못 풀면 직접 수정 |
+| 3 | `/review` BLOCK / REQUEST CHANGES 시 | 자동 루프(최대 3회) 못 풀면 자연어로 방향 재지시 |
 | 4 | `/release` 호출 자체 | 자동 발동 안 됨, 직접 타이핑 |
 | 5 | PR 머지 | GitHub 에서 직접 |
 
-**1, 4, 5는 절대 생략 불가.** 2, 3은 신뢰 쌓이면 가벼워질 수 있음.
+**1, 4, 5는 절대 생략 불가.** 2, 3은 신뢰 쌓이면 가벼워질 수 있음. `/orchestrator` 는 이걸 하드 게이트 3개 (Plan 승인 / fix 루프 소진 / PR 머지) + verdict 직후의 선택적 per-phase stop 으로 압축한다.
 
 ### 4.4. 짧은 작업은 하네스 우회
 
@@ -227,8 +245,8 @@ Claude 가 어떤 도구(Bash, Edit, Write)를 호출하기 **직전에** 셸 �
 | 한 파일 한두 줄 수정 | 그냥 채팅 |
 | 빠른 디버깅 / 탐색 / 스파이크 | 그냥 채팅 |
 | README 오타 | 그냥 채팅 |
-| 3 phase 이상 들어가는 작업 | 하네스 풀 사용 |
-| 타 프로젝트와 인터페이스 변경 | 하네스 풀 사용 + 더 잘게 쪼갠 Plan |
+| 3 phase 이상 들어가는 작업 | `/orchestrator` |
+| 타 프로젝트와 인터페이스 변경 | repo 단위로 `/orchestrator` + 더 잘게 쪼갠 Plan |
 
 ---
 
@@ -245,12 +263,18 @@ Claude 가 어떤 도구(Bash, Edit, Write)를 호출하기 **직전에** 셸 �
 
 **스택 특화 룰은 본문에 비워둠.** `examples/reviewer-python.md` 참고해서 본인 스택 버전 작성 → `.claude/agents/reviewer.md` 자리에 덮어쓰기.
 
-**출력 형식**:
+**출력 형식** — 필수 4섹션 + 선택 3섹션 순서 고정: `결론` (verdict + 한 줄 사유) → `Spec correctness` → `판정 표` → `Findings` → (`Praise` → `Questions` → `결정 필요`). verdict 는 APPROVE / REQUEST CHANGES / BLOCK. finding 예시:
 
 ```markdown
-#### [BLOCK] file.ext:88 — <one-line summary>
+### 판정 표
+| # | 항목 | 위치 | 태그 |
+|---|---|---|---|
+| 1 | <한 줄 요약> | `file:line` | `[NEW][BLOCK]` |
+
+### Findings (severity 순)
+
+#### [NEW][BLOCK] file.ext:88 — <one-line summary>
 **심각도**: 🔴
-**기존/신규**: 신규
 
 **현재 코드**:
    ```<lang>
@@ -265,11 +289,14 @@ Claude 가 어떤 도구(Bash, Edit, Write)를 호출하기 **직전에** 셸 �
    ```
 ```
 
-**Tag 4개**:
-- `[BLOCK]` — 머지 차단
-- `[CHANGES]` — 머지 전 수정 권장
-- `[NIT]` — 선택적
-- `[EXISTING]` — 기존 코드 이슈, 이 PR 차단 안 함
+**Tag — scope + severity 두 축** (`tester` 와 메인 세션 BLUF 보고도 같은 어휘):
+- `[NEW]` (scope) — 본 Phase diff 가 만든 이슈. 기본값이라 단독 `[BLOCK]` 도 `[NEW]` 의미. 조합 예: `[NEW][BLOCK]`
+- `[EXISTING]` (scope) — 기존 코드 이슈, 이 PR 차단 안 함. 별도 티켓 권장
+- `[BLOCK]` (severity) — 머지 차단
+- `[CHANGES]` (severity) — 머지 전 수정 권장
+- `[NIT]` (severity) — 선택적. low-nit policy — formatter 가 잡을 건 코멘트 X
+
+비-판정 어휘: **Praise** (강화하고 싶은 패턴), **Question** (차단 아닌 명확화 요청) 는 별도 섹션으로.
 
 자세한 스택별 룰 채우기 가이드는 [부록 D — Customize for Your Stack](#부록-d--customize-for-your-stack) 참고.
 
@@ -311,9 +338,9 @@ Claude Code 가 컨텍스트 ~95% 차면 자동 압축. 메인 세션 / subagent
 | `/work` 1 Phase | 1.5-2x |
 | `/review` (opus) | 2x |
 | `/release` (documenter + 명령) | 1x |
-| `/orchestrator` 한 Phase 풀로 | 5-6x |
+| `/orchestrator` 풀 루프 | phase 수 × (work + review) 누적 — fix 루프 횟수에 따라 달라짐, 본인 환경에서 측정 |
 
-**Phase 를 잘게 쪼개야 비용이 안 폭주합니다.** Plans.md 의 한 Phase diff 가 400 LoC 넘어가면 더 쪼개세요.
+**Phase 를 잘게 쪼개야 비용이 안 폭주합니다.** Plans.md 의 한 Phase diff 가 300-500 줄 범위를 넘어가면 더 쪼개세요.
 
 ---
 
@@ -325,11 +352,12 @@ Claude Code 가 컨텍스트 ~95% 차면 자동 압축. 메인 세션 / subagent
 | Project agents 가 `/agents` 에 안 보임 | `cd <your-workspace>` 안에서 `claude` 띄웠는지 확인 |
 | Coder 가 production 코드 마음대로 고침 | Plans.md 의 Phase 정의가 모호. Acceptance bullet 더 구체화 |
 | Reviewer 가 칭찬만 함 | reviewer.md frontmatter `model: opus` 인지 확인. 강화된 reviewer 적용 위해 세션 재시작 |
-| Hook 이 안 막음 | `chmod +x .claude/hooks/*.sh`, `settings.local.json` 의 `hooks.PreToolUse` 확인 |
+| Hook 이 안 막음 | `chmod +x .claude/hooks/*.sh`, `.claude/settings.json` 의 `hooks` 등록 확인. 검증: `bash .claude/hooks/tests/run-tests.sh` |
 | `git push --force` 가 차단됨 | 의도된 동작. fresh 브랜치로 push 또는 사용자가 직접 명령 실행 |
 | `.env` 쓰기 차단됨 | 의도된 동작. 직접 편집 |
-| `/orchestrator` 가 너무 비쌈 | 그냥 `/plan → /work → /review` 수동으로. orchestrator 는 잘게 쪼개진 작업 전용 |
-| 자연어로 "리뷰" 했더니 다른 reviewer 가 골라짐 | inside your workspace에선 project `reviewer` 우선, 다른 프로젝트선 user `code-reviewer` 우선. `@agent-reviewer` 로 명시 호출 가능 |
+| `/orchestrator` 비용이 부담됨 | Phase 를 더 잘게 쪼개거나 (300-500 줄), 단계별로 `/plan → /work → /review` 수동 진행 |
+| 자연어로 "리뷰" 했더니 다른 reviewer agent 가 골라짐 | 같은 이름의 agent 정의가 여러 레벨 (project/user) 에 있으면 모호해짐. `@agent-reviewer` 로 명시 호출 |
+| `/review` 등이 같은 이름의 번들 skill 과 충돌 | `settings.json` 의 `skillOverrides` 로 충돌하는 번들 skill 을 끌 수 있음 |
 
 ---
 
@@ -351,10 +379,10 @@ rm -rf ~/Projects/<workspace>/.claude/hooks
 rm -rf ~/Projects/<workspace>/scripts/harness
 rm -rf ~/Projects/<workspace>/docs/harness
 rm ~/Projects/<workspace>/CLAUDE.md ~/Projects/<workspace>/HARNESS.md
-# settings.local.json 의 PreToolUse 항목은 수동으로 제거 또는 .bak 으로 복원
+# .claude/settings.json 의 hooks 블록은 수동으로 제거
 ```
 
-기존 권한(`permissions.allow`)과 clair frontend hook 은 그대로 보존됨.
+`settings.json` 에 본인이 추가한 다른 설정 (`permissions.allow`, 자체 hook 등) 이 있다면 hooks 블록만 골라서 제거.
 
 ---
 
@@ -378,16 +406,16 @@ model: sonnet | opus | haiku
 ---
 name: <verb>
 description: 자동 호출 트리거
-allowed-tools: Read Edit Write   # 공백 구분 (skill, 콤마 X)
-disable-model-invocation: true   # 사이드이펙트 있으면
+allowed-tools: Read, Edit, Write   # 콤마/공백 모두 허용
+disable-model-invocation: true     # 사이드이펙트 있으면
 ---
 ```
 
 ### 새 hook 추가
-`.claude/hooks/<name>.sh` 작성 (실행권한 + jq 로 stdin JSON 파싱) 후 `settings.local.json` 의 `hooks.PreToolUse` 에 등록.
+`.claude/hooks/<name>.sh` 작성 (실행권한 + jq 로 stdin JSON 파싱, 차단은 stderr 사유 + exit 2) 후 `.claude/settings.json` 의 `hooks` 에 해당 event (`PreToolUse` / `PostToolUse` / `SubagentStart` 등) 별로 등록. `.claude/hooks/tests/run-tests.sh` 에 deny/allow 케이스 추가 권장.
 
 ### Plans.md 의 phase 분리 정도 조정
-한 phase = 한 reviewable unit (≤400 LoC diff 권장). 더 작게 쪼갤수록 토큰 비용은 늘지만 회귀 위험 감소.
+한 phase = 한 reviewable unit (보통 300-500 줄 diff 권장). 더 작게 쪼갤수록 토큰 비용은 늘지만 회귀 위험 감소.
 
 ---
 
@@ -397,7 +425,7 @@ disable-model-invocation: true   # 사이드이펙트 있으면
 - Subagent 끼리 의견 어긋남 발생 가능. 그래서 모든 단계에 STOP 게이트.
 - **Plan 이 부실하면 모든 게 부실.** Planner(opus) 에 시간 더 쓰는 게 항상 이득.
 - 멀티-서브프로젝트 동시 변경은 하네스가 잘 못 다룸. 한 번에 한 저장소.
-- 토스 R&D PM-only 케이스는 가능한 워크플로우의 **상한**, 평균이 아님. 평균은 70% Coder 가 채우고 30% 사람이 패치.
+- "사람 개입 0" 사례들은 가능한 워크플로우의 **상한**, 평균이 아님. 평균은 70% Coder 가 채우고 30% 사람이 패치.
 
 ---
 
@@ -413,6 +441,10 @@ disable-model-invocation: true   # 사이드이펙트 있으면
 
 ```
 첫 프로젝트:    /setup
+기본:           /orchestrator <작업 설명>   ← 평소엔 이거 하나
+                ⛔ Plans.md 승인 → (자동) → ⛔ verdict → ⛔ PR 머지
+
+단계별 수동:
 시작:           "X 추가해줘. /plan"
                 ⛔ Plans.md 승인
 구현:           /work 1
@@ -439,7 +471,7 @@ disable-model-invocation: true   # 사이드이펙트 있으면
 | `/release` 가 자동 발동 안 한다고 다시 시도 | 의도된 잠금. 직접 타이핑이 정답 |
 | `git push --force` 시도 | hook 차단 |
 | `.env` 쓰기 시도 | hook 차단 |
-| heum 밖에서 `claude` 띄움 | project agent 안 보임 |
+| 워크스페이스 루트 밖에서 `claude` 띄움 | project agent 안 보임 |
 | reviewer.md 직접 수정 후 같은 세션 | 재시작 필요 (project agent 변경 반영) |
 
 ---

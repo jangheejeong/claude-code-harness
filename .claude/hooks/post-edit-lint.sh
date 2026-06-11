@@ -1,5 +1,5 @@
 #!/bin/bash
-# PostToolUse hook for Edit|Write|MultiEdit: auto-format Python files.
+# PostToolUse hook for Edit|Write: auto-format Python files.
 #
 # Purpose: realize the reviewer.md "low-nit policy" — let formatters (ruff/black)
 # absorb style/format NITs automatically so reviewers focus on real issues.
@@ -17,7 +17,25 @@
 #     for an automatic post-edit hook. Reviewer handles that.
 
 set -u
-FILE=$(jq -r '.tool_input.file_path // .tool_input.path // ""' 2>/dev/null || true)
+
+INPUT=$(cat)
+
+# --- JSON extraction: jq -> python3 -> warn + exit 0 ---
+if command -v jq >/dev/null 2>&1; then
+  FILE=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // ""' 2>/dev/null) || FILE=""
+elif command -v python3 >/dev/null 2>&1; then
+  FILE=$(printf '%s' "$INPUT" | python3 -c '
+import json, sys
+try:
+    ti = json.load(sys.stdin).get("tool_input", {})
+    print(ti.get("file_path") or ti.get("path") or "")
+except Exception:
+    pass
+' 2>/dev/null) || FILE=""
+else
+  echo "[post-edit-lint] WARNING: jq and python3 both missing — auto-format skipped" >&2
+  exit 0
+fi
 [ -z "$FILE" ] && exit 0
 [ ! -f "$FILE" ] && exit 0
 
@@ -26,8 +44,15 @@ case "$FILE" in
   *) exit 0 ;;
 esac
 
+hash_file() {  # shasum (macOS) -> sha1sum (Linux) -> cksum (POSIX)
+  if command -v shasum >/dev/null 2>&1; then shasum "$1" 2>/dev/null | awk '{print $1}'
+  elif command -v sha1sum >/dev/null 2>&1; then sha1sum "$1" 2>/dev/null | awk '{print $1}'
+  else cksum "$1" 2>/dev/null | awk '{print $1}'
+  fi
+}
+
 # Snapshot file content before formatting
-HASH_BEFORE=$(shasum "$FILE" 2>/dev/null | awk '{print $1}')
+HASH_BEFORE=$(hash_file "$FILE")
 
 TOOL=""
 if command -v ruff >/dev/null 2>&1; then
@@ -39,7 +64,7 @@ fi
 # No tool available → silent skip
 [ -z "$TOOL" ] && exit 0
 
-HASH_AFTER=$(shasum "$FILE" 2>/dev/null | awk '{print $1}')
+HASH_AFTER=$(hash_file "$FILE")
 if [ "$HASH_BEFORE" != "$HASH_AFTER" ]; then
   echo "↳ auto-formatted by $TOOL: $FILE"
 fi

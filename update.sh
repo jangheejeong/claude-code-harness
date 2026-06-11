@@ -3,15 +3,18 @@
 #
 # Safe to re-run. Preserves user-customized files:
 #   - CLAUDE.md
-#   - .claude/settings*.json
-#   - .claude/agents/reviewer.md        (stack-specific customization expected)
+#   - .claude/settings.json             (installed only if missing; never overwritten)
+#   - .claude/settings.local.json
+#   - .claude/agents/reviewer.md        (3-way auto-merge; installed fresh if missing)
 #   - .claude/notes/, worktrees/, agent-memory*/
 #   - <subproject>/REQUIREMENTS.md, Plans.md
+#   - examples/* that upstream no longer ships (kept, with a warning)
 #
 # Overwrites (managed harness assets):
 #   - .claude/agents/{coder,tester,planner,explorer,documenter}.md
 #   - .claude/skills/*/SKILL.md
-#   - .claude/hooks/*.sh
+#   - .claude/hooks/*.sh                (all 4: block-destructive, protect-secrets,
+#                                        announce-agent, post-edit-lint)
 #   - scripts/harness/run_phase.py
 #   - docs/harness/*.md
 #   - HARNESS.md
@@ -77,10 +80,15 @@ for s in plan work review release setup orchestrator; do
   fi
 done
 
-# Hooks
+# Hooks (all 4)
 for h in block-destructive protect-secrets announce-agent post-edit-lint; do
   report_diff "$TMP/harness/.claude/hooks/$h.sh" ".claude/hooks/$h.sh" ".claude/hooks/$h.sh"
 done
+
+# Settings — installed only when the project has none (hooks fire only when registered here)
+if [ -f "$TMP/harness/.claude/settings.json" ] && [ ! -f .claude/settings.json ]; then
+  echo "  + .claude/settings.json  (new file — registers the 4 hooks)"
+fi
 
 # Phase runner
 [ -f "$TMP/harness/scripts/harness/run_phase.py" ] && \
@@ -100,19 +108,24 @@ done
 # .claude/.harness-cache/upstream-prev/reviewer.md holds the upstream version that
 # was current at the time of the *previous* update.sh run (= the merge ancestor).
 # Strategy:
+#   - Local file missing    → install upstream fresh + seed cache
 #   - First run (no cache)  → fall back to "preserve, do not overwrite" + seed cache
 #   - Subsequent runs       → git merge-file <user> <cache> <new>
 #                              clean   → file updated, no manual work
 #                              conflict → marker-laden file + explicit warning
+#                              error   → user file untouched + upstream saved aside
 RV_CACHE_DIR=".claude/.harness-cache/upstream-prev"
 RV_CACHE="$RV_CACHE_DIR/reviewer.md"
 RV_USER=".claude/agents/reviewer.md"
 RV_NEW="$TMP/harness/.claude/agents/reviewer.md"
-RV_PLAN="skip"           # skip | seed | merge | nochange
+RV_PLAN="skip"           # skip | install | seed | merge | nochange
 RV_MSG=""
 
-if [ -f "$RV_USER" ] && [ -f "$RV_NEW" ]; then
-  if diff -q "$RV_NEW" "$RV_USER" >/dev/null 2>&1; then
+if [ -f "$RV_NEW" ]; then
+  if [ ! -f "$RV_USER" ]; then
+    RV_PLAN="install"
+    echo "  + .claude/agents/reviewer.md  (new file)"
+  elif diff -q "$RV_NEW" "$RV_USER" >/dev/null 2>&1; then
     RV_PLAN="nochange"
   elif [ ! -f "$RV_CACHE" ]; then
     RV_PLAN="seed"
@@ -130,7 +143,8 @@ fi
 echo
 echo "→ user files NOT touched (or auto-merged):"
 echo "  · CLAUDE.md"
-echo "  · .claude/settings*.json"
+echo "  · .claude/settings.json  (installed only if missing)"
+echo "  · .claude/settings.local.json"
 echo "  · .claude/agents/reviewer.md  ↻ 3-way auto-merge if cache exists"
 echo "  · .claude/notes/, worktrees/, agent-memory*/"
 echo "  · <subproject>/REQUIREMENTS.md, Plans.md"
@@ -176,11 +190,29 @@ for s in plan work review release setup orchestrator; do
   fi
 done
 
-# Hooks
+# Hooks (all 4)
 for h in block-destructive protect-secrets announce-agent post-edit-lint; do
   cp "$TMP/harness/.claude/hooks/$h.sh" ".claude/hooks/$h.sh"
   chmod +x ".claude/hooks/$h.sh"
 done
+
+# Settings — install only if missing; NEVER overwrite a user settings.json.
+# Hooks are inert until registered in settings.json, so if the user file lacks
+# hook events (esp. SubagentStart/SubagentStop, added later), print a notice.
+SETTINGS_NEW="$TMP/harness/.claude/settings.json"
+SETTINGS_USER=".claude/settings.json"
+SETTINGS_MISSING_EVENTS=""
+if [ -f "$SETTINGS_NEW" ]; then
+  if [ ! -f "$SETTINGS_USER" ]; then
+    cp "$SETTINGS_NEW" "$SETTINGS_USER"
+    echo "  + .claude/settings.json installed (registers all 4 hooks)"
+  else
+    for ev in PreToolUse PostToolUse SubagentStart SubagentStop; do
+      grep -q "\"$ev\"" "$SETTINGS_USER" || SETTINGS_MISSING_EVENTS="$SETTINGS_MISSING_EVENTS $ev"
+    done
+    [ -n "$SETTINGS_MISSING_EVENTS" ] && cp "$SETTINGS_NEW" "$BACKUP/settings.json.upstream-latest"
+  fi
+fi
 
 # Phase runner
 [ -f "$TMP/harness/scripts/harness/run_phase.py" ] && {
@@ -207,6 +239,13 @@ case "$RV_PLAN" in
     mkdir -p "$RV_CACHE_DIR"
     cp "$RV_NEW" "$RV_CACHE"
     ;;
+  install)
+    # local reviewer.md missing — install upstream fresh + seed cache
+    cp "$RV_NEW" "$RV_USER"
+    mkdir -p "$RV_CACHE_DIR"
+    cp "$RV_NEW" "$RV_CACHE"
+    RV_RESULT="install"
+    ;;
   seed)
     # first run — preserve user file, seed cache for next time
     mkdir -p "$RV_CACHE_DIR"
@@ -216,26 +255,41 @@ case "$RV_PLAN" in
   merge)
     # 3-way merge: user file with cache as ancestor, new upstream as their version
     MERGED=$(mktemp)
-    # git merge-file: --quiet suppresses conflict count; outputs to stdout with -p
-    if git merge-file -p --quiet "$RV_USER" "$RV_CACHE" "$RV_NEW" > "$MERGED" 2>/dev/null; then
+    # git merge-file: exit 0 = clean, 1..127 = conflict count, >127 = hard error
+    RV_RC=0
+    git merge-file -p --quiet "$RV_USER" "$RV_CACHE" "$RV_NEW" > "$MERGED" 2>/dev/null || RV_RC=$?
+    if [ "$RV_RC" -eq 0 ]; then
       cp "$MERGED" "$RV_USER"
       RV_RESULT="clean"
-    else
+    elif [ "$RV_RC" -le 127 ]; then
       # conflict — file has <<<<<<< markers; still write it so user can resolve
       cp "$MERGED" "$RV_USER"
       RV_RESULT="conflict"
+    else
+      # hard error (not a conflict) — never write a partial/empty result over the
+      # user's file; keep it untouched, save upstream aside, and keep the old cache
+      cp "$RV_NEW" "$RV_USER.upstream-latest"
+      RV_RESULT="error"
     fi
     rm -f "$MERGED"
-    # Advance the cache pointer to the new upstream regardless of conflict outcome
-    mkdir -p "$RV_CACHE_DIR"
-    cp "$RV_NEW" "$RV_CACHE"
+    if [ "$RV_RESULT" != "error" ]; then
+      # Advance the cache pointer to the new upstream regardless of conflict outcome
+      mkdir -p "$RV_CACHE_DIR"
+      cp "$RV_NEW" "$RV_CACHE"
+    fi
     ;;
 esac
 
-# Save examples/ as reference (always)
+# Save examples/ as reference (additive copy — never deletes local files)
+STALE_EXAMPLES=""
 if [ -d "$TMP/harness/examples" ]; then
   mkdir -p examples
   cp -r "$TMP/harness/examples/"* examples/ 2>/dev/null || true
+  # Warn about local examples upstream no longer ships (kept, not deleted)
+  for f in examples/*; do
+    [ -f "$f" ] || continue
+    [ -f "$TMP/harness/$f" ] || STALE_EXAMPLES="$STALE_EXAMPLES $f"
+  done
 fi
 
 echo
@@ -254,7 +308,23 @@ case "$RV_RESULT" in
     echo "   reviewer.md: first-time cache seeded (next update will auto-merge)"
     echo "       Upstream reference: $BACKUP/reviewer.md.upstream-latest"
     ;;
+  install)
+    echo "   reviewer.md: installed fresh from upstream (was missing locally)"
+    ;;
+  error)
+    echo "   ⚠️  reviewer.md: git merge-file FAILED (hard error, not a conflict)"
+    echo "       Your file was left untouched: $RV_USER"
+    echo "       Upstream saved aside: $RV_USER.upstream-latest — merge manually"
+    ;;
 esac
+if [ -n "$SETTINGS_MISSING_EVENTS" ]; then
+  echo "   ⚠️  .claude/settings.json kept (yours), but it lacks hook entries for:$SETTINGS_MISSING_EVENTS"
+  echo "       The 4 hooks are installed but fire only when registered in settings.json."
+  echo "       Upstream reference: $BACKUP/settings.json.upstream-latest"
+fi
+if [ -n "$STALE_EXAMPLES" ]; then
+  echo "   ⚠️  examples no longer shipped upstream (kept locally):$STALE_EXAMPLES"
+fi
 echo "   Restart Claude Code to load updated agent/skill definitions:"
 echo "     > /exit"
 echo "     $ claude"

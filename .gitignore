@@ -13,13 +13,17 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+.ruff_cache/
 
 # Local Claude Code state (don't commit)
+# NOTE: the shared .claude/settings.json IS shipped/committed — only local overrides are ignored
 .claude/notes/
 .claude/worktrees/
 .claude/agent-memory*/
 .claude/state/
-.claude/settings.local.json     # personal settings, use settings.json for shared
+.claude/settings.local.json
+.claude/.harness-cache/
+.claude/.harness-backup-*/
 *.bak.*
 
 # Logs

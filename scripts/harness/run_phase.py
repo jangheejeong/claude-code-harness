@@ -12,7 +12,10 @@ Usage:
         --phase 2 \
         --agent coder \
         [--plans-file <subproject>/Plans.md] \
-        [--prompt "extra instructions"]
+        [--prompt "extra instructions"] \
+        [--timeout 3600] \
+        [--permission-mode acceptEdits] \
+        [--allowed-tools "Bash Edit Read"]
 
 Requires: `claude` CLI v2.1+ on PATH.
 
@@ -20,7 +23,7 @@ Exit codes:
   0  agent finished, see log
   1  bad arguments
   2  claude CLI missing
-  3  agent run failed (non-zero exit)
+  3  agent run failed (non-zero exit or timeout)
 """
 
 from __future__ import annotations
@@ -49,6 +52,15 @@ def parse_args() -> argparse.Namespace:
                    help="Default: <subproject>/Plans.md")
     p.add_argument("--prompt", default="",
                    help="Additional instructions appended to the agent prompt")
+    p.add_argument("--timeout", type=int, default=3600,
+                   help="Kill the agent run after N seconds (default: 3600)")
+    p.add_argument("--permission-mode", default="acceptEdits",
+                   help="Passed through to `claude --permission-mode` "
+                        "(default: acceptEdits — --print cannot answer prompts; "
+                        "the PreToolUse safety hooks remain the guardrail)")
+    p.add_argument("--allowed-tools", default=None,
+                   help="Passed through to `claude --allowedTools`, "
+                        "e.g. 'Bash Edit Read'")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -61,12 +73,19 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    subproj = REPO_ROOT / args.subproject
+    # Resolve everything to absolute paths up front: the prompt is consumed by a
+    # subprocess running with cwd=<subproject>, and relative args would otherwise
+    # break (or crash relative_to) depending on the caller's cwd.
+    subproj = Path(args.subproject)
+    if not subproj.is_absolute():
+        subproj = REPO_ROOT / subproj
+    subproj = subproj.resolve()
     if not subproj.is_dir():
         print(f"ERROR: subproject not found: {subproj}", file=sys.stderr)
         return 1
 
-    plans = Path(args.plans_file) if args.plans_file else subproj / "Plans.md"
+    plans = (Path(args.plans_file).resolve() if args.plans_file
+             else subproj / "Plans.md")
     if not plans.is_file():
         print(f"ERROR: Plans.md not found at {plans}. Run /plan first.",
               file=sys.stderr)
@@ -76,10 +95,12 @@ def main() -> int:
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     log_path = NOTES_DIR / f"phase-{args.phase}-{args.agent}-{stamp}.log"
 
+    # Absolute paths only — the prompt must stay valid from the subprocess cwd.
+    agent_def = REPO_ROOT / ".claude" / "agents" / f"{args.agent}.md"
     prompt = (
         f"You are operating as the {args.agent} subagent for {args.subproject} "
-        f"Phase {args.phase}. The plan is at {plans.relative_to(REPO_ROOT)}. "
-        f"Follow your agent definition at .claude/agents/{args.agent}.md "
+        f"Phase {args.phase}. The plan is at {plans}. "
+        f"Follow your agent definition at {agent_def} "
         f"strictly. Stop at the Phase boundary. {args.prompt}"
     )
 
@@ -88,8 +109,13 @@ def main() -> int:
         "--agent", args.agent,
         "--print",                    # non-interactive
         "--output-format", "text",
-        prompt,
+        # --print cannot answer permission prompts; acceptEdits (default) lets the
+        # agent write files while the PreToolUse hooks still guard destructive ops.
+        "--permission-mode", args.permission_mode,
     ]
+    if args.allowed_tools:
+        cmd += ["--allowedTools", args.allowed_tools]
+    cmd.append(prompt)
 
     print(f"[run_phase] {args.agent} on Phase {args.phase} of "
           f"{args.subproject}; log -> {log_path.relative_to(REPO_ROOT)}",
@@ -100,13 +126,19 @@ def main() -> int:
         return 0
 
     with log_path.open("w") as logf:
-        proc = subprocess.run(
-            cmd,
-            cwd=subproj,
-            stdout=logf,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=subproj,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=args.timeout,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"[run_phase] status=FAIL(timeout after {args.timeout}s) "
+                  f"log={log_path.relative_to(REPO_ROOT)}", flush=True)
+            return 3
 
     status = "OK" if proc.returncode == 0 else f"FAIL({proc.returncode})"
     print(f"[run_phase] status={status} log={log_path.relative_to(REPO_ROOT)}",

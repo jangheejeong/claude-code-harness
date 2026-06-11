@@ -10,49 +10,13 @@
    - No code change without an approved `Plans.md` (or `REQUIREMENTS.md`).
    - Run `/plan` first if there isn't one.
 2. **Big changes go in a git worktree** (`.claude/worktrees/<feature>`).
-3. **Never write secrets**. Reading is OK; writing to `.env`, `*.pem`, `*credentials*` is blocked by hook anyway.
+3. **Never write secrets**. Reading is OK; writing to `.env*`, `*.pem`, key files, and credential-shaped files (`*credentials*.json/yaml` etc.) is blocked by hook anyway.
 4. **No `rm -rf` on broad paths, no `git push --force`, no `git reset --hard origin/*`** — these are blocked by hook. If you're blocked, reconsider the intent.
 5. Output language: <choose>.
 
-## 응답 포맷 — 결론 먼저, 근거 나중
+## Response format
 
-작업 보고 / 발견 보고 / 결정 요청은 결론을 **맨 위에**, 근거는 그 아래에. 자유서술 금지.
-(군·기술문서 표준인 BLUF — Bottom Line Up Front — 방식을 따른다)
-
-**적용 트리거** — 다음 중 하나면 템플릿 의무:
-- 코드를 수정한 후의 보고
-- 버그·이슈를 발견했을 때
-- 사용자에게 옵션 제시 / 결정 요청
-- 응답이 3문단 이상 길어질 때
-
-(단순 질문 답변, 1-2줄 답변은 템플릿 불필요)
-
-### 템플릿
-
-```markdown
-**결론**
-한 줄. 판정 또는 결론.
-
-**근거**
-- `file:line` — 인용 1-2줄. 추측 금지, 코드/문서 인용만.
-
-**범위 / 심각도** (해당 시) — `reviewer` subagent 와 동일 어휘
-
-- 범위: `[NEW]` (기본값, 본 작업이 만든 이슈) / `[EXISTING]` (이전부터 있던 이슈, PR 차단 안 함)
-- 심각도 (신규에만): `[BLOCK]` 머지 차단 / `[CHANGES]` 수정 권장 / `[NIT]` 선택적 개선
-- 조합 예: `[NEW][BLOCK]` 또는 단독 `[BLOCK]` (= NEW 기본값)
-
-**결정 필요** (사용자 결정이 필요할 때만)
-- [ ] **선택지 A**: <옵션> — 장점 / 단점
-- [ ] **선택지 B**: <옵션> — 장점 / 단점
-- **추천**: 선택지 A (이유)
-```
-
-### 규칙
-
-- **태그는 `reviewer` subagent 와 동일 어휘** + `[NEW]` 하나만 추가. 메인 보고 ↔ 리뷰 결과 어휘 일치.
-- **결정 필요 섹션이 있으면 추천 선택지 1개 명시 필수.** 사용자에게 던지기만 X.
-- 근거의 `file:line` 은 인용. "내 생각엔..." 류 추측은 별도 섹션 (`**참고**`) 으로 분리.
+<Define your team's response format here — e.g. a BLUF (conclusion-first) template: conclusion → evidence (`file:line`) → scope/severity tags → decision needed. Keep finding tags aligned with the `reviewer` subagent's vocabulary: `[NEW]`/`[EXISTING]` scope × `[BLOCK]`/`[CHANGES]`/`[NIT]` severity.>
 
 ## Project map (edit for your workspace)
 
@@ -66,12 +30,13 @@
 ## Harness usage
 
 ```text
+/orchestrator → default entry point: full plan → work → review → PR loop
+                with human gates (worth it for 3+ phase work)
 /plan         → Plans.md from requirements (planner subagent, opus)
-/work N       → implement Phase N (coder + tester subagents)
+/work N       → implement Phase N (coder + tester subagents, TDD commits)
 /review       → 4-lens gate (reviewer subagent, opus)
 /release      → 🔒 PR + docs (must type manually)
 /setup        → bootstrap a new subproject
-/orchestrator → full loop with checkpoints (experimental, ~5x cost)
 ```
 
 ## Subagents
@@ -89,4 +54,7 @@
 
 - `PreToolUse` Bash guard (blocks destructive commands) — `.claude/hooks/block-destructive.sh`
 - `PreToolUse` Edit/Write guard (blocks secret writes) — `.claude/hooks/protect-secrets.sh`
+- `PostToolUse` Edit/Write auto-format (Python, ruff/black) — `.claude/hooks/post-edit-lint.sh`
+- `SubagentStart/Stop` agent activity announce + log — `.claude/hooks/announce-agent.sh`
+- All four are wired in `.claude/settings.json`; regression suite: `bash .claude/hooks/tests/run-tests.sh`
 - Per-subproject `.claude/` overrides take precedence (don't load this CLAUDE.md inside them)

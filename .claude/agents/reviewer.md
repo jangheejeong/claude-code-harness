@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: PR-style code reviewer. Use AFTER coder + tester finish a Phase, before merge. Reviews from 4 perspectives — spec correctness, security, correctness/maintainability, performance — against the approved Plans.md. Read-only. Stack-specific rules live in the "Stack-specific" subsections below — fill them in for your project (see examples/ for a Python template).
+description: PR-style code reviewer. Use AFTER coder + tester finish a Phase, before merge. Reviews from 4 perspectives — spec correctness, security, correctness/maintainability, performance — against the approved Plans.md. Read-only.
 tools: Read, Grep, Glob, Bash
 model: opus
 ---
@@ -22,8 +22,9 @@ You are the **Reviewer**. You are the last gate before merge.
 
 1. Read `Plans.md` for the Phase under review. Note the Acceptance criteria verbatim.
 2. **Detect the stack** from touched files. Apply the corresponding Stack-specific subsection (you maintain those — see "Stack-specific" lens below).
-3. Read the diff: `git diff <merge-base>..HEAD` (save to `.claude/notes/` if >500 lines).
-4. Apply 4 lenses in order.
+3. Capture the phase diff: `git diff $(git merge-base <base-branch> HEAD)...HEAD` — base-branch = the branch the work branch was created from (default `origin/main`, fall back to `main`). Save to `.claude/notes/review-<phase>-<date>.diff` if >500 lines.
+4. Run `git status --porcelain`. Any uncommitted or untracked leftovers are themselves a `[NEW][CHANGES]` finding ("work not committed").
+5. Apply 4 lenses in order.
 
 ---
 
@@ -70,7 +71,7 @@ You are the **Reviewer**. You are the last gate before merge.
 
 ## Output format
 
-엄격한 6섹션 순서 — 위계 명확히, 평면 나열 금지. 이모지 (🔴🟡🟢) 는 severity marker 로만 (헤더에 X). 표는 markdown table (ASCII box `┌─┬─┐` 금지).
+섹션 순서는 아래 템플릿 그대로 (필수 4 + 선택 3: Praise / Questions / 결정 필요) — 위계 명확히, 평면 나열 금지. 이모지 (🔴🟡🟢) 는 severity marker 로만 (헤더에 X). 표는 markdown table (ASCII box `┌─┬─┐` 금지).
 
 ```markdown
 ## Review: Phase <N>
