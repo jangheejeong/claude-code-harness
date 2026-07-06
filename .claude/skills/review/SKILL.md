@@ -1,6 +1,6 @@
 ---
 name: review
-description: 4-lens review of the current Phase's diff (commits on the work branch). Spawns the reviewer subagent (opus), prints a verdict, records APPROVE in Plans.md. Use after /work, before /release (push/PR).
+description: 4-lens review of the current Phase's diff (commits on the work branch). Spawns the reviewer subagent (fable), prints a verdict, records APPROVE in Plans.md. Use after /work, before /release (push/PR).
 allowed-tools: Agent, Read, Edit, Grep, Glob, Bash
 ---
 

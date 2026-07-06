@@ -10,7 +10,7 @@ End-to-end harness. The user types `/orchestrator <natural-language task>` once 
 ## Sequence (with stops)
 
 ```
-/plan                                         <- planner (Opus) writes Plans.md
+/plan                                         <- planner (Fable) writes Plans.md
                                               <- vertical slices, TDD-ready acceptance
                                               ⛔ STOP — user reviews + Approval ✓
 
@@ -18,7 +18,7 @@ for phase in Plans.md:
     /work <phase>                             <- branch guard (never on main/master)
                                               <- coder TDD per bullet: red commit → green commit
                                               <- tester verifies TDD via git history + adds edge cases
-    /review                                   <- reviewer (Opus) 4-lens on the phase diff
+    /review                                   <- reviewer (Fable) 4-lens on the phase diff
                                               <- BLOCK or REQUEST CHANGES → auto-fix loop max 3
                                               ⛔ STOP if loop exhausts
                                               <- APPROVE → `Review: APPROVE` line in Plans.md

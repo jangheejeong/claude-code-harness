@@ -65,12 +65,12 @@ claude
 │   ├── notes/                         subagent 출력 로그 저장소
 │   │
 │   ├── agents/                        ── Subagent 6개 ──
-│   │   ├── explorer.md                 sonnet · 탐색 전용 (Write 는 notes/ 한정) · 코드베이스 인덱싱
-│   │   ├── planner.md                  opus   · read-only · Plans.md 분해
-│   │   ├── coder.md                    sonnet · edit OK  · 한 Phase TDD 구현 + red/green 커밋
-│   │   ├── tester.md                   sonnet · tests/만 · TDD 이력 검증 + 엣지 확장
-│   │   ├── reviewer.md                 opus   · read-only · 4-lens 게이트
-│   │   └── documenter.md               sonnet · doc edit · 문서 동기화
+│   │   ├── explorer.md                 opus   · 탐색 전용 (Write 는 notes/ 한정) · 코드베이스 인덱싱
+│   │   ├── planner.md                  fable  · read-only · Plans.md 분해
+│   │   ├── coder.md                    opus   · edit OK  · 한 Phase TDD 구현 + red/green 커밋
+│   │   ├── tester.md                   opus   · tests/만 · TDD 이력 검증 + 엣지 확장
+│   │   ├── reviewer.md                 fable  · read-only · 4-lens 게이트
+│   │   └── documenter.md               opus   · doc edit · 문서 동기화
 │   │
 │   ├── skills/                        ── Skill 6개 (verb) ──
 │   │   ├── orchestrator/SKILL.md       /orchestrator — 풀 루프 (기본 진입점)
@@ -116,14 +116,14 @@ claude
 
 | Subagent | 모델 | 권한 | 역할 |
 |---|---|---|---|
-| **explorer** | sonnet | Read, Write, Grep, Glob, Bash (프로젝트 파일 수정 금지 — Write 는 `.claude/notes/` 한정) | 코드 인덱싱. 작업 시작 전 한 페이지 매핑 |
-| **planner** | **opus** | Read, Grep, Glob | Phase 분해. Plans.md 초안 |
-| **coder** | sonnet | Read, Edit, Write, Grep, Glob, Bash | 한 Phase 만 strict TDD 구현 — red/green 마다 work 브랜치에 커밋 |
-| **tester** | sonnet | Read, Edit, Write, Grep, Glob, Bash | tests/ 만 edit. git 이력으로 TDD 준수 검증 + 엣지 케이스 확장. 프로덕션 버그 발견 시 coder 로 escalate |
-| **reviewer** | **opus** | Read, Grep, Glob, Bash | 4관점 검토. 스택 특화 룰은 placeholder — 본인 스택으로 채움 (부록 D) |
-| **documenter** | sonnet | Read, Edit, Write, Grep, Glob, Bash | README/CHANGELOG/ADR 동기화 |
+| **explorer** | opus | Read, Write, Grep, Glob, Bash (프로젝트 파일 수정 금지 — Write 는 `.claude/notes/` 한정) | 코드 인덱싱. 작업 시작 전 한 페이지 매핑 |
+| **planner** | **fable** | Read, Grep, Glob | Phase 분해. Plans.md 초안 |
+| **coder** | opus | Read, Edit, Write, Grep, Glob, Bash | 한 Phase 만 strict TDD 구현 — red/green 마다 work 브랜치에 커밋 |
+| **tester** | opus | Read, Edit, Write, Grep, Glob, Bash | tests/ 만 edit. git 이력으로 TDD 준수 검증 + 엣지 케이스 확장. 프로덕션 버그 발견 시 coder 로 escalate |
+| **reviewer** | **fable** | Read, Grep, Glob, Bash | 4관점 검토. 스택 특화 룰은 placeholder — 본인 스택으로 채움 (부록 D) |
+| **documenter** | opus | Read, Edit, Write, Grep, Glob, Bash | README/CHANGELOG/ADR 동기화 |
 
-**모델 분배 철학**: 결정이 비싼 단계 = opus (planner, reviewer). 실행 = sonnet. 토큰 vs 품질 절충.
+**모델 분배 철학 (advisor + worker)**: 조언·결정이 비싼 단계 = **fable** (planner, reviewer — 상위 티어 모델). 실제 실행 = **opus** (explorer, coder, tester, documenter). 더 똑똑한 advisor 가 계획·리뷰 품질을 올리면 worker 의 재작업이 줄어 전체 토큰이 오히려 감소한다.
 
 ### Layer 3 — Skill 6개 (verb)
 
@@ -209,7 +209,7 @@ Claude 의 도구 호출 직전/직후에 셸 스크립트가 끼어들어 검�
    ⛔ STOP — diff 요약 확인
 
 3. > /review
-   → reviewer(opus) 가 merge-base 기준 누적 diff 를 4관점 + 스택 특화 검토
+   → reviewer(fable) 가 merge-base 기준 누적 diff 를 4관점 + 스택 특화 검토
    ⛔ STOP — verdict 확인 (APPROVE / REQUEST CHANGES / BLOCK)
      APPROVE 면 Plans.md 에 `Review: APPROVE — <date>` 기록됨
 
@@ -336,7 +336,7 @@ Claude Code 가 컨텍스트 ~95% 차면 자동 압축. 메인 세션 / subagent
 | 단순 채팅 | 1x |
 | `/plan` (planner+explorer 한 번씩) | 2-3x |
 | `/work` 1 Phase | 1.5-2x |
-| `/review` (opus) | 2x |
+| `/review` (fable) | 2x |
 | `/release` (documenter + 명령) | 1x |
 | `/orchestrator` 풀 루프 | phase 수 × (work + review) 누적 — fix 루프 횟수에 따라 달라짐, 본인 환경에서 측정 |
 
@@ -351,7 +351,7 @@ Claude Code 가 컨텍스트 ~95% 차면 자동 압축. 메인 세션 / subagent
 | `/plan` 쳐도 그냥 응답 | `.claude/skills/plan/SKILL.md` 누락 또는 frontmatter 깨짐. claude 재시작 |
 | Project agents 가 `/agents` 에 안 보임 | `cd <your-workspace>` 안에서 `claude` 띄웠는지 확인 |
 | Coder 가 production 코드 마음대로 고침 | Plans.md 의 Phase 정의가 모호. Acceptance bullet 더 구체화 |
-| Reviewer 가 칭찬만 함 | reviewer.md frontmatter `model: opus` 인지 확인. 강화된 reviewer 적용 위해 세션 재시작 |
+| Reviewer 가 칭찬만 함 | reviewer.md frontmatter `model: fable` 인지 확인. 강화된 reviewer 적용 위해 세션 재시작 |
 | Hook 이 안 막음 | `chmod +x .claude/hooks/*.sh`, `.claude/settings.json` 의 `hooks` 등록 확인. 검증: `bash .claude/hooks/tests/run-tests.sh` |
 | `git push --force` 가 차단됨 | 의도된 동작. fresh 브랜치로 push 또는 사용자가 직접 명령 실행 |
 | `.env` 쓰기 차단됨 | 의도된 동작. 직접 편집 |
@@ -395,7 +395,7 @@ rm ~/Projects/<workspace>/CLAUDE.md ~/Projects/<workspace>/HARNESS.md
 name: <name>
 description: 언제 호출되는지. PROACTIVELY 키워드 권장
 tools: Read, Grep, Glob, Bash    # 콤마 구분 (subagent)
-model: sonnet | opus | haiku
+model: fable | opus | sonnet | haiku
 ---
 ```
 세션 재시작 후 `/agents` 에 노출.
@@ -423,7 +423,7 @@ disable-model-invocation: true     # 사이드이펙트 있으면
 
 - **"개발자 0명" 은 거짓말.** Plan 검토 + Review 게이트 통과 결정은 사람.
 - Subagent 끼리 의견 어긋남 발생 가능. 그래서 모든 단계에 STOP 게이트.
-- **Plan 이 부실하면 모든 게 부실.** Planner(opus) 에 시간 더 쓰는 게 항상 이득.
+- **Plan 이 부실하면 모든 게 부실.** Planner(fable) 에 시간 더 쓰는 게 항상 이득.
 - 멀티-서브프로젝트 동시 변경은 하네스가 잘 못 다룸. 한 번에 한 저장소.
 - "사람 개입 0" 사례들은 가능한 워크플로우의 **상한**, 평균이 아님. 평균은 70% Coder 가 채우고 30% 사람이 패치.
 

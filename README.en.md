@@ -41,7 +41,7 @@ One `/orchestrator` call automates plan → code → review → PR
 <br>
 
 **Subagents**
-Each runs in its own isolated context window → verbose tool output stays in the sub-session and only a summary returns to the main session. Only the decision-heavy stages (`planner`, `reviewer`) run on Opus; the rest run on Sonnet to split model cost.
+Each runs in its own isolated context window → verbose tool output stays in the sub-session and only a summary returns to the main session. The advisory, decision-heavy stages (`planner`, `reviewer`) run on Fable — the top-tier model; the execution stages (`explorer`, `coder`, `tester`, `documenter`) run on Opus (an advisor + worker split).
 
 **Verb skills**
 `/orchestrator` (main) + `/plan`, `/work`, `/review`, `/release`, `/setup` (optional). Natural-language invocation works via description matching. Only `/release` is locked with `disable-model-invocation: true` — it has side effects like commit/push/PR, so the user types it directly.
@@ -64,7 +64,7 @@ A `claude --agent <name> -p` wrapper. Spawns long phase work as a separate proce
 Claude Code is powerful, but its default behavior lacks restraint. Throw a natural-language task at it and it starts coding immediately, and instructions alone can forget to stop dangerous commands like `rm -rf`. This harness layers 6 enforcement points on top. (For the 3 human gates — Plan approval / BLOCK decisions / PR merge — see [The 3 points where you step in](#the-3-points-where-you-step-in) below.)
 
 ### 1. Plan first
-Before any code change there must be a `Plans.md`. `planner` (Opus) breaks the work into phases and writes acceptance criteria for each. A weak plan makes everything stacked on top of it weak, so Opus tokens are invested here.
+Before any code change there must be a `Plans.md`. `planner` (Fable) breaks the work into phases and writes acceptance criteria for each. A weak plan makes everything stacked on top of it weak, so the most capable model is invested here.
 
 Each phase is decomposed as a **vertical slice** — one phase crosses DB + service + API + UI so that **one feature works end-to-end**.
 
@@ -93,7 +93,7 @@ Tests lead the implementation. Break this order and the code becomes self-fulfil
 One phase = one reviewable unit — cut within a few hundred lines of diff (300-500 lines is comfortable in practice). The number of phases depends on the work, usually around 3-7, each designed to be independently mergeable. Large diffs make both the `reviewer` agent and humans miss more — as the context window grows, the model misses edge cases and regressions more often, and human review turns perfunctory. The smaller the slice, the higher both accuracies.
 
 ### 4. 4-lens review + stack rules
-Before merge, `reviewer` (Opus) applies 4 lenses — spec / security / correctness / performance. On top of that, add your stack's pitfalls: Django ORM N+1, sync DB calls inside FastAPI `async def` (blocking the event loop), etc.
+Before merge, `reviewer` (Fable) applies 4 lenses — spec / security / correctness / performance. On top of that, add your stack's pitfalls: Django ORM N+1, sync DB calls inside FastAPI `async def` (blocking the event loop), etc.
 
 ### 5. Enforcement via hooks
 Instructions can slip the model's mind. PreToolUse hooks deny at the shell level. Exit code 2 + reason on stderr → the block reason is shown to Claude. Hook blocking works even in `--dangerously-skip-permissions` mode.
@@ -186,14 +186,14 @@ One `/orchestrator` call invokes the skills in chronological order, and each ski
 
 ```mermaid
 flowchart TD
-    Start[User: /orchestrator natural-language task] --> Plan[planner Opus writes Plans.md]
+    Start[User: /orchestrator natural-language task] --> Plan[planner Fable writes Plans.md]
     Plan --> Gate1{User review}
     Gate1 -->|Approval| Phase[Phase starts]
     Gate1 -->|Revision requested| Plan
 
     Phase --> Coder[coder · TDD red→green commit checkpoints]
     Coder --> Tester[tester · TDD history check + edge expansion]
-    Tester --> R[reviewer Opus starts review]
+    Tester --> R[reviewer Fable starts review]
 
     R --> C1{1. All success criteria<br/>in the Plan met?}
     C1 -->|No| BLOCK[BLOCK / REQUEST CHANGES]
@@ -353,12 +353,12 @@ Temporary bypass.
 │
 ├── .claude/
 │   ├── agents/                    # 6 subagents
-│   │   ├── explorer.md            #   read-only · code exploration
-│   │   ├── planner.md             #   Opus · phase decomposition
-│   │   ├── coder.md               #   single-phase TDD implementation (red-green-refactor)
-│   │   ├── tester.md              #   TDD verification + edge case expansion
-│   │   ├── reviewer.md            #   Opus · 4 lenses + stack rules
-│   │   └── documenter.md          #   doc sync
+│   │   ├── explorer.md            #   Opus · read-only · code exploration
+│   │   ├── planner.md             #   Fable · phase decomposition
+│   │   ├── coder.md               #   Opus · single-phase TDD implementation (red-green-refactor)
+│   │   ├── tester.md              #   Opus · TDD verification + edge case expansion
+│   │   ├── reviewer.md            #   Fable · 4 lenses + stack rules
+│   │   └── documenter.md          #   Opus · doc sync
 │   ├── skills/                    # 6 verb skills
 │   │   ├── orchestrator/          #   /orchestrator (main)
 │   │   ├── plan/                  #   /plan
@@ -394,7 +394,7 @@ See [HARNESS.md](HARNESS.md) for detailed usage / troubleshooting / cost guidanc
 
 ## Reviewer — Stack-Agnostic by Default
 
-`reviewer` (Opus) applies 4 lenses right before the PR. **Universal lenses are always included**; **stack-specific rules are left as empty placeholders** — filling them in for your stack is the next section.
+`reviewer` (Fable) applies 4 lenses right before the PR. **Universal lenses are always included**; **stack-specific rules are left as empty placeholders** — filling them in for your stack is the next section.
 
 | Lens | Universal checks |
 |---|---|
@@ -501,7 +501,7 @@ This is the ground truth — you can **verify after the fact** that the agents t
 
 ## Honest Limitations
 
-- **The ceiling of the result is set by the quality of the Plan.** A vague plan makes the code and the review vague too. Allocating Opus to `planner` is the best value-for-money decision in the whole flow.
+- **The ceiling of the result is set by the quality of the Plan.** A vague plan makes the code and the review vague too. Allocating the top-tier model (Fable) to `planner` is the best value-for-money decision in the whole flow.
 - **One `/orchestrator` run includes as many subagent calls as there are phases (`planner` + `coder` + `tester` + `reviewer` × number of phases), so it consumes more tokens than a single chat.** The exact multiplier varies widely with codebase size, phase decomposition depth, and BLOCK auto-fix loop iterations — measure it in your own environment.
 - **It follows the single-session subagent pattern.** Claude Code's [Agent Teams](https://code.claude.com/docs/en/agent-teams) — teammates messaging each other directly and working off a shared task list — is deliberately not adopted. For ordinary phase-by-phase work, a single session + isolated contexts is simpler and easier to debug. For scenarios where 10+ workers discuss autonomously and work concurrently, Agent Teams is also 3-5x more token-efficient.
 

@@ -41,7 +41,7 @@
 <br>
 
 **Subagents**
-각자 격리된 context window 에서 동작 → verbose 한 tool 출력은 하위 세션에 머물고 메인엔 요약만 반환. 의사결정 비싼 단계 (`planner`, `reviewer`) 만 Opus, 나머지는 Sonnet 으로 모델 비용 분리.
+각자 격리된 context window 에서 동작 → verbose 한 tool 출력은 하위 세션에 머물고 메인엔 요약만 반환. 조언·결정 비싼 단계 (`planner`, `reviewer`) 는 상위 티어 모델 Fable, 실행 단계 (`explorer`, `coder`, `tester`, `documenter`) 는 Opus 로 분리 (advisor + worker 전략).
 
 **Verb skills**
 `/orchestrator` (메인) + `/plan`, `/work`, `/review`, `/release`, `/setup` (옵션). description 매칭으로 자연어 invocation 가능. `/release` 만 `disable-model-invocation: true` 로 잠가둠 — 커밋/푸시/PR 같은 side effect 가 있어서 사용자 직접 타이핑.
@@ -64,7 +64,7 @@
 Claude Code 는 강력하지만 기본 동작에 절제가 없다. 자연어 작업을 던지면 즉시 코드부터 치고, `rm -rf` 같은 위험 명령도 instruction 만으론 깜빡할 수 있다. 이 하네스는 그 위에 6개 강제력을 얹는다. (사람이 개입하는 게이트 3개 — Plan 승인 / BLOCK 결정 / PR 머지 — 는 아래 [사용자가 개입하는 3 지점](#사용자가-개입하는-3-지점) 참고.)
 
 ### 1. Plan 먼저
-코드 수정 전에 `Plans.md` 가 있어야 한다. `planner` (Opus) 가 작업을 phase 단위로 분해하고 각 phase 의 acceptance criteria 를 적는다. Plan 이 부실하면 그 위에 쌓이는 모든 게 부실해지므로 Opus 토큰을 여기 투자한다.
+코드 수정 전에 `Plans.md` 가 있어야 한다. `planner` (Fable) 가 작업을 phase 단위로 분해하고 각 phase 의 acceptance criteria 를 적는다. Plan 이 부실하면 그 위에 쌓이는 모든 게 부실해지므로 가장 똑똑한 모델(Fable) 을 여기 투자한다.
 
 각 phase 는 **vertical slice** 로 분해한다 — 한 phase 가 DB + service + API + UI 를 가로질러 **한 기능이 end-to-end 로 작동**하게.
 
@@ -93,7 +93,7 @@ horizontal 은 도중에 발견되는 문제 (DB 스키마가 UI 요구와 안 �
 한 phase = 한 reviewable 단위 — 보통 수백 줄 diff (경험상 300-500 줄 정도가 무리 없음) 안에서 끊는다. 작업 크기에 따라 phase 수는 달라지지만 보통 3-7개 정도, 각 phase 가 독립 머지 가능하도록 설계한다. 큰 diff 는 `reviewer` agent 도 사람도 놓치는 게 늘어난다 — context window 가 길어질수록 모델이 엣지 케이스나 회귀를 놓치는 빈도가 올라가고, 사람의 리뷰도 형식적이 된다. 작게 쪼갤수록 양쪽의 정확도가 모두 올라간다.
 
 ### 4. 4-lens review + 스택 룰
-머지 전 `reviewer` (Opus) 가 4 관점 — spec / security / correctness / performance — 적용. 거기에 본인 스택의 함정을 추가: Django ORM N+1, FastAPI `async def` 안의 sync DB 호출 (event loop 블록) 등.
+머지 전 `reviewer` (Fable) 가 4 관점 — spec / security / correctness / performance — 적용. 거기에 본인 스택의 함정을 추가: Django ORM N+1, FastAPI `async def` 안의 sync DB 호출 (event loop 블록) 등.
 
 ### 5. Hook 으로 강제
 instruction 은 모델이 깜빡할 수 있다. PreToolUse hook 이 셸 레벨에서 deny 한다. exit code 2 + stderr 사유 → Claude 에게 차단 사유가 표시됨. `--dangerously-skip-permissions` 모드에서도 hook 차단은 작동.
@@ -186,14 +186,14 @@ curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/mai
 
 ```mermaid
 flowchart TD
-    Start[사용자: /orchestrator 자연어 작업] --> Plan[planner Opus 가 Plans.md 작성]
+    Start[사용자: /orchestrator 자연어 작업] --> Plan[planner Fable 가 Plans.md 작성]
     Plan --> Gate1{사용자 검토}
     Gate1 -->|Approval| Phase[Phase 시작]
     Gate1 -->|수정 요청| Plan
 
     Phase --> Coder[coder · TDD red→green 커밋 체크포인트]
     Coder --> Tester[tester · TDD 이력 검증 + 엣지 확장]
-    Tester --> R[reviewer Opus 검토 시작]
+    Tester --> R[reviewer Fable 검토 시작]
 
     R --> C1{1. Plan 의 성공 조건<br/>모두 충족?}
     C1 -->|No| BLOCK[BLOCK / REQUEST CHANGES]
@@ -353,12 +353,12 @@ $ cd ~/your-project && claude
 │
 ├── .claude/
 │   ├── agents/                    # 6 subagent
-│   │   ├── explorer.md            #   read-only · 코드 탐색
-│   │   ├── planner.md             #   Opus · phase 분해
-│   │   ├── coder.md               #   1 phase TDD 구현 (red-green-refactor)
-│   │   ├── tester.md              #   TDD 검증 + 엣지 케이스 확장
-│   │   ├── reviewer.md            #   Opus · 4 lens + 스택 룰
-│   │   └── documenter.md          #   문서 동기화
+│   │   ├── explorer.md            #   Opus · read-only · 코드 탐색
+│   │   ├── planner.md             #   Fable · phase 분해
+│   │   ├── coder.md               #   Opus · 1 phase TDD 구현 (red-green-refactor)
+│   │   ├── tester.md              #   Opus · TDD 검증 + 엣지 케이스 확장
+│   │   ├── reviewer.md            #   Fable · 4 lens + 스택 룰
+│   │   └── documenter.md          #   Opus · 문서 동기화
 │   ├── skills/                    # 6 verb skill
 │   │   ├── orchestrator/          #   /orchestrator (메인)
 │   │   ├── plan/                  #   /plan
@@ -394,7 +394,7 @@ $ cd ~/your-project && claude
 
 ## Reviewer — Stack-Agnostic by Default
 
-`reviewer` (Opus) 가 PR 직전 4 lens 적용. **Universal lens 는 항상 포함**, **stack-specific 룰은 placeholder 로 비워둠** — 본인 스택에 맞게 채우는 게 다음 섹션.
+`reviewer` (Fable) 가 PR 직전 4 lens 적용. **Universal lens 는 항상 포함**, **stack-specific 룰은 placeholder 로 비워둠** — 본인 스택에 맞게 채우는 게 다음 섹션.
 
 | Lens | Universal checks |
 |---|---|
@@ -501,7 +501,7 @@ cat .claude/notes/agent-activity.log
 
 ## Honest Limitations
 
-- **결과의 상한은 Plan 의 품질이 정한다.** Plan 이 모호하면 코드도 리뷰도 모호해진다. `planner` 에 Opus 를 할당하는 게 작업 전체에서 가장 가성비 좋은 결정이다.
+- **결과의 상한은 Plan 의 품질이 정한다.** Plan 이 모호하면 코드도 리뷰도 모호해진다. `planner` 에 최상위 모델(Fable) 을 할당하는 게 작업 전체에서 가장 가성비 좋은 결정이다.
 - **`/orchestrator` 한 번은 phase 수만큼의 subagent 호출 (`planner` + `coder` + `tester` + `reviewer` × phase 수) 을 포함하므로 단일 채팅보다 토큰 소비가 많다.** 정확한 배수는 코드베이스 크기, phase 분해 깊이, BLOCK 자동 fix 루프 횟수에 따라 크게 달라지므로 본인 환경에서 직접 측정하는 게 맞다.
 - **단일 세션 subagent 패턴을 따른다.** Claude Code 의 [Agent Teams](https://code.claude.com/docs/en/agent-teams) — teammates 끼리 직접 메시지를 주고받고 공유 task list 를 다루는 패턴 — 는 의도적으로 채택하지 않았다. 일반적인 phase 단위 작업에는 단일 세션 + 격리 컨텍스트가 더 단순하고 디버깅하기 쉽다. 10명 이상의 worker 가 자율 토론하며 동시에 작업하는 시나리오라면 Agent Teams 쪽이 토큰 효율도 3-5배 좋다.
 
