@@ -810,6 +810,22 @@ survives_case "empty payload -> exit 0, no state written" '{}'
 survives_case "reviewer with a transcript path that does not exist -> exit 0" \
   "$(subagent_stop_json reviewer /nonexistent/transcript.jsonl)"
 
+# `transcript_path` is the MAIN session's transcript, not the subagent's, and
+# its last assistant text is whatever the main session said — a verdict quoted
+# back to the user reads exactly like one the reviewer made. There is no
+# guessing available here: no subagent transcript, no record.
+PROJ=$(new_proj)
+assistant_jsonl "$PROJ/main-session.jsonl" '메인 세션이 인용한 판정입니다: <verdict>BLOCK</verdict>'
+ERR=$(printf '{"hook_event_name":"SubagentStop","agent_type":"reviewer","transcript_path":"%s"}' \
+  "$PROJ/main-session.jsonl" | CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOKS_DIR/$R" 2>&1 >/dev/null)
+RC=$?
+if [ "$RC" -eq 0 ] && [ ! -f "$PROJ/$STATE_REL" ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
+  report 0 "$R" "no agent_transcript_path -> the main transcript is not read, warning, exit 0"
+else
+  report 1 "$R" "no agent_transcript_path -> the main transcript is not read, warning, exit 0 (rc=$RC err='$ERR')"
+fi
+rm -rf "$PROJ"
+
 # A transcript whose lines are not JSON is a truncated write, not a verdict.
 PROJ=$(new_proj)
 printf 'half a line without a close\n' > "$PROJ/transcript.jsonl"
