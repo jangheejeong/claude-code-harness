@@ -149,7 +149,15 @@ def run_status(returncode: int, agent: str, log_path: Path) -> tuple[str, int]:
     if agent != "reviewer":
         return "OK", 0
 
-    verdict = parse_verdict(log_path.read_text(errors="replace"))
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError as exc:
+        # A verdict we could not read is not an approval: report the run as
+        # failed rather than letting an unreadable log pass as status=OK.
+        print(f"ERROR: cannot read agent log {log_path}: {exc}", file=sys.stderr)
+        return "FAIL(unreadable log)", 3
+
+    verdict = parse_verdict(text)
     if verdict in ("CHANGES", "BLOCK"):
         return verdict, VERDICT_EXIT[verdict]
     return "OK", 0
