@@ -1637,7 +1637,54 @@ enforce_case 2 "python3 fallback: absent attempt -> exit 2 at 0/3" \
   '{"last_verdict":"BLOCK"}' "$(stop_json)" 'attempt 0/3' - "$EDGE_NOJQ"
 enforce_case 0 "python3 fallback: an unknown verdict word -> exit 0" \
   '{"last_verdict":"LGTM","attempt":1}' "$(stop_json)" - - "$EDGE_NOJQ"
+
+# The python3 branch prints one field per line, so a newline inside a value
+# shifts every later field down a line: last_verdict="BLOCK\n1" would be read as
+# a BLOCK on attempt 1 and hold the turn, while jq reads the newline-carrying
+# string, finds no verdict it knows and lets the turn end. The two readers have
+# to answer the same, and the answer has to be the one that does not trap a
+# session on a value the state file never held.
+SHIFTED_STATE='{"last_verdict":"BLOCK\n1","attempt":9}'
+enforce_case 0 "a newline in last_verdict -> exit 0 (jq)" \
+  "$SHIFTED_STATE" "$(stop_json)" - -
+enforce_case 0 "a newline in last_verdict -> exit 0 (python3 fallback, same answer)" \
+  "$SHIFTED_STATE" "$(stop_json)" - - "$EDGE_NOJQ"
 rm -rf "$EDGE_NOJQ"
+
+# The same shift in record-verdict.sh is worse: a newline in agent_type pushes
+# the transcript path up a line, so the hook reads a file the payload never
+# named as the reviewer's transcript and records a verdict out of it.
+RECORD_NOJQ=$(mktemp -d /tmp/hooktest-nojq-rec-XXXXXX)
+ln -s "$REAL_PY" "$RECORD_NOJQ/python3"
+for BIN in cat mktemp rm mkdir; do ln -s "$(command -v "$BIN")" "$RECORD_NOJQ/$BIN"; done
+
+record_run_with_path() {  # <proj> <payload> <PATH> -> exit code
+  local proj="$1" payload="$2" path="$3" rc=0
+  printf '%s' "$payload" \
+    | env PATH="$path" CLAUDE_PROJECT_DIR="$proj" /bin/bash "$HOOKS_DIR/$R" >/dev/null 2>&1 || rc=$?
+  printf '%s' "$rc"
+}
+
+PROJ=$(new_proj)
+assistant_jsonl "$PROJ/never-named.jsonl" '<verdict>BLOCK</verdict>'
+assistant_jsonl "$PROJ/named.jsonl" '<verdict>APPROVE</verdict>'
+# \n stays a JSON escape: the payload is one JSON object on one physical line.
+SHIFTED_PAYLOAD=$(printf '{"hook_event_name":"SubagentStop","agent_type":"reviewer\\n%s","agent_transcript_path":"%s"}' \
+  "$PROJ/never-named.jsonl" "$PROJ/named.jsonl")
+JQ_RC=$(record_run "$PROJ" "$SHIFTED_PAYLOAD")
+JQ_STATE=absent
+[ -f "$PROJ/$STATE_REL" ] && JQ_STATE=$(cat "$PROJ/$STATE_REL")
+rm -f "$PROJ/$STATE_REL"
+PY_RC=$(record_run_with_path "$PROJ" "$SHIFTED_PAYLOAD" "$RECORD_NOJQ")
+PY_STATE=absent
+[ -f "$PROJ/$STATE_REL" ] && PY_STATE=$(cat "$PROJ/$STATE_REL")
+rm -rf "$PROJ" "$RECORD_NOJQ"
+if [ "$JQ_RC" -eq 0 ] && [ "$PY_RC" -eq 0 ] \
+   && [ "$JQ_STATE" = absent ] && [ "$PY_STATE" = absent ]; then
+  report 0 "$R" "a newline in agent_type reads no other file, whichever reader runs"
+else
+  report 1 "$R" "a newline in agent_type reads no other file, whichever reader runs (jq=$JQ_RC/$JQ_STATE py=$PY_RC/$PY_STATE)"
+fi
 
 # ---------- the two hooks : an APPROVE mid-budget really does reset it ----------
 # The end-to-end case above walks the budget to exhaustion. This one interrupts
