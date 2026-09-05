@@ -358,6 +358,58 @@ else
   chmod 600 "$NOPERM_LOG"; rm -f "$NOPERM_LOG"
 fi
 
+# ---------- run_phase.py --parse-verdict : the tag must be on the last line ----------
+# A quoted tag must not pass for a judgement, so only the last non-empty line
+# counts. That trade has its own silent failure — if the CLI ever appends
+# anything after the tag, every verdict turns UNKNOWN and loop enforcement goes
+# off without a sound — so these cases assert stderr, not just the exit code.
+verdict_file_case() {  # <expected-exit> <expected-stdout> <warn|quiet> <desc> <log-path>
+  local expected="$1" want="$2" mode="$3" desc="$4" path="$5"
+  local err out msg rc=0 ok=0
+  err=$(mktemp /tmp/hooktest-err-XXXXXX)
+  out=$(python3 "$RUN_PHASE" --parse-verdict "$path" 2>"$err") || rc=$?
+  msg=$(cat "$err"); rm -f "$err"
+  [ "$rc" -eq "$expected" ] && [ "$out" = "$want" ] || ok=1
+  printf '%s' "$msg" | grep -q 'Traceback' && ok=1
+  case "$mode" in
+    warn)  printf '%s' "$msg" | grep -qi 'WARNING' || ok=1 ;;
+    quiet) [ -z "$msg" ] || ok=1 ;;
+  esac
+  if [ "$ok" -eq 0 ]; then
+    report 0 "run_phase.py" "$desc"
+  else
+    report 1 "run_phase.py" "$desc (want exit $expected/'$want'/$mode, got $rc/'$out'/err='$msg')"
+  fi
+}
+
+verdict_placement_case() {  # <expected-exit> <expected-stdout> <warn|quiet> <desc> <log-body>
+  local log
+  log=$(mktemp /tmp/hooktest-verdict-XXXXXX)
+  printf '%s\n' "$5" > "$log"
+  verdict_file_case "$1" "$2" "$3" "$4" "$log"
+  rm -f "$log"
+}
+
+# A tag that is already where reviewer.md tells the reviewer to put it keeps
+# parsing exactly as before, and says nothing on stderr.
+verdict_placement_case 0 "APPROVE" quiet "tag on the last line -> APPROVE, exit 0, no warning" \
+  '### 결론
+APPROVE — 이슈 없음
+
+<verdict>APPROVE</verdict>'
+
+verdict_placement_case 4 "CHANGES" quiet "tag on the last line -> CHANGES, exit 4, no warning" \
+  '### 결론
+REQUEST CHANGES — 인수 기준 1건 미달
+
+<verdict>REQUEST CHANGES</verdict>'
+
+verdict_placement_case 5 "BLOCK" quiet "tag on the last line -> BLOCK, exit 5, no warning" \
+  '### 결론
+BLOCK — 하드코딩된 토큰
+
+<verdict>BLOCK</verdict>'
+
 # ---------- run_phase.py : usage errors exit 1, not 2 ----------
 # argparse exits 2 on any usage error, which collides with "2 = claude CLI
 # missing". A Phase 2 hook branching on `case $?` would read a typo as a
