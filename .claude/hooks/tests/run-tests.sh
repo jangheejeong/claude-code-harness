@@ -1103,6 +1103,325 @@ else
 fi
 rm -rf "$PROJ"
 
+# ---------- record-verdict.sh : what counts as the reviewer's answer ----------
+# The transcript is JSON Lines, and an assistant record carries `message.content`
+# as a list of typed blocks. Only `text` blocks are the reviewer speaking;
+# `thinking` is it talking to itself. Reading thinking would let a rehearsed
+# verdict — "if this were BLOCK I'd write ..." — overwrite the real one, in
+# either direction, which is why both directions are pinned.
+
+record_jsonl_case() {  # <desc> <seed|-> <want-verdict> <want-attempt> <jsonl-body|-->
+  local desc="$1" seed="$2" want_v="$3" want_a="$4" body="$5"
+  local proj rc got_v got_a ok=0
+  proj=$(new_proj)
+  [ "$seed" = "-" ] || printf '%s\n' "$seed" > "$proj/$STATE_REL"
+  # `--` writes a genuinely empty file; printf would leave a newline behind.
+  if [ "$body" = "--" ]; then : > "$proj/transcript.jsonl"
+  else printf '%s\n' "$body" > "$proj/transcript.jsonl"
+  fi
+  rc=$(record_run "$proj" "$(subagent_stop_json reviewer "$proj/transcript.jsonl")")
+  got_v=$(state_field "$proj/$STATE_REL" last_verdict)
+  got_a=$(state_field "$proj/$STATE_REL" attempt)
+  rm -rf "$proj"
+  [ "$rc" -eq 0 ] && [ "$got_v" = "$want_v" ] && [ "$got_a" = "$want_a" ] || ok=1
+  if [ "$ok" -eq 0 ]; then
+    report 0 "$R" "$desc"
+  else
+    report 1 "$R" "$desc (rc=$rc, got $got_v/$got_a, want $want_v/$want_a)"
+  fi
+}
+
+# The mirror of the existing thinking-block case: deliberating about BLOCK and
+# then approving must record the approval, or a reviewer that thinks out loud
+# could never clear the budget it just decided to clear.
+record_jsonl_case "thinking weighs BLOCK, final text APPROVEs -> APPROVE, attempt resets" \
+  '{"last_verdict":"BLOCK","attempt":2}' APPROVE 0 \
+  '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"if this were BLOCK I would write <verdict>BLOCK</verdict>"},{"type":"text","text":"### 결론\nAPPROVE — 이슈 없음\n\n<verdict>APPROVE</verdict>"}]}}'
+
+# Phase 1 decided a tag counts only on the last non-empty line, and this hook is
+# required to reuse run_phase.py rather than re-derive that rule in bash. The
+# round trip is what proves the delegation: a final answer that quotes a tag
+# mid-message and then stops judging must land as UNKNOWN in the state file, not
+# as the quoted APPROVE. Getting this wrong resets the retry budget for free.
+record_jsonl_case "final text quotes a tag but never judges -> UNKNOWN, attempt untouched" \
+  '{"last_verdict":"BLOCK","attempt":2}' UNKNOWN 2 \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"개선안: 마지막 줄에 <verdict>APPROVE</verdict> 를 붙일 것\n\n리뷰 계속"}]}}'
+
+# --parse-verdict answers APPROVE and UNKNOWN with the same exit 0, so the hook
+# has to read stdout to tell them apart. These two cases differ in nothing but
+# the verdict word, and only one of them may hand the budget back.
+record_jsonl_case "APPROVE (exit 0) hands the budget back" \
+  '{"last_verdict":"BLOCK","attempt":2}' APPROVE 0 \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"<verdict>APPROVE</verdict>"}]}}'
+record_jsonl_case "UNKNOWN (also exit 0) does not hand the budget back" \
+  '{"last_verdict":"BLOCK","attempt":2}' UNKNOWN 2 \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"리뷰 계속"}]}}'
+
+# A transcript with nothing to say is not an approval. Each of these is a real
+# shape: a run killed before it answered, a run that only used tools, and a run
+# whose last record was pure deliberation.
+record_jsonl_case "empty transcript file -> UNKNOWN, attempt untouched" \
+  '{"last_verdict":"BLOCK","attempt":2}' UNKNOWN 2 --
+record_jsonl_case "transcript with no assistant records -> UNKNOWN" \
+  '{"last_verdict":"BLOCK","attempt":2}' UNKNOWN 2 \
+  '{"type":"user","message":{"role":"user","content":"review the phase"}}'
+# The tag here sits on the thinking block's own last line, which is the only
+# shape that tells the two rules apart: with the block filter removed the
+# placement rule would find it and record BLOCK. A thinking-first transcript
+# cannot detect that at all — the text block's last line wins either way — so
+# the two cases below are the ones that actually hold the filter in place.
+record_jsonl_case "last record holds only thinking, no text -> UNKNOWN" \
+  '{"last_verdict":"BLOCK","attempt":2}' UNKNOWN 2 \
+  '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"이렇게 끝낼까:\n<verdict>BLOCK</verdict>"}]}}'
+
+# Same trick, but with the answer present and the deliberation filed after it.
+# Block order is not a contract, so the verdict has to come from the block type,
+# never from whichever block happens to be last.
+record_jsonl_case "thinking filed after the answer -> the text block still decides" \
+  - APPROVE 0 \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"### 결론\nAPPROVE — 이슈 없음\n\n<verdict>APPROVE</verdict>"},{"type":"thinking","thinking":"다시 보니 이쪽이었나:\n<verdict>BLOCK</verdict>"}]}}'
+
+# Older transcripts carry `content` as a bare string instead of a block list.
+record_jsonl_case "content as a plain string -> still parsed" \
+  - BLOCK 1 '{"type":"assistant","message":{"content":"<verdict>BLOCK</verdict>"}}'
+
+# The answer is the LAST assistant record that said something, so a tool call
+# after the verdict must not erase it, and an earlier verdict must not win.
+record_jsonl_case "two assistant records -> the last one wins" \
+  - BLOCK 1 \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"<verdict>APPROVE</verdict>"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"<verdict>BLOCK</verdict>"}]}}'
+record_jsonl_case "a tool_use-only record does not shadow the answer" \
+  - BLOCK 1 \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{}}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"<verdict>BLOCK</verdict>"}]}}'
+
+record_jsonl_case "unicode / emoji / RTL in the reviewer's answer" \
+  - BLOCK 1 \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"BLOCK — 하드코딩된 토큰 🚨 مرحبا\n\n<verdict>BLOCK</verdict>"}]}}'
+
+# A counter this hook cannot read is not a reason to refuse to record. Restarting
+# at 1 loses at most one attempt; refusing would lose the budget entirely.
+record_jsonl_case "seed attempt is not a number -> restart the count at 1" \
+  '{"last_verdict":"BLOCK","attempt":"two"}' BLOCK 1 \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"<verdict>BLOCK</verdict>"}]}}'
+record_jsonl_case "seed state is a JSON array -> restart the count at 1" \
+  '[]' BLOCK 1 \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"<verdict>BLOCK</verdict>"}]}}'
+
+# The placement rule has exactly one owner. If it were re-derived in bash the
+# two copies would drift, and the round-trip cases above would keep passing
+# right up until the day they disagreed.
+if grep -qF -- '--parse-verdict' "$HOOKS_DIR/$R"; then
+  report 0 "$R" "the verdict is parsed by run_phase.py, not re-derived in bash"
+else
+  report 1 "$R" "the verdict is parsed by run_phase.py, not re-derived in bash"
+fi
+
+# ---------- record-verdict.sh : temp file hygiene ----------
+# The hook stages the reviewer's answer in a temp file to feed --parse-verdict.
+# A hook fires on every subagent stop, so one leaked file per review is a slow
+# leak in the user's TMPDIR — and the leak would be worst on the error paths,
+# which are the ones nobody runs by hand.
+HYGIENE_TMP=$(mktemp -d /tmp/hooktest-tmpdir-XXXXXX)
+PROJ=$(new_proj)
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+printf '<verdict>BLOCK</verdict>\n' > "$PROJ/noperm.jsonl"
+[ "$(id -u)" -eq 0 ] || chmod 000 "$PROJ/noperm.jsonl"
+for TPATH in "$PROJ/transcript.jsonl" /nonexistent/x.jsonl "$PROJ" "" "$PROJ/noperm.jsonl"; do
+  printf '{"agent_type":"reviewer","agent_transcript_path":"%s"}' "$TPATH" \
+    | TMPDIR="$HYGIENE_TMP" CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOKS_DIR/$R" >/dev/null 2>&1
+done
+LEFTOVERS=$(ls -A "$HYGIENE_TMP")
+[ "$(id -u)" -eq 0 ] || chmod 600 "$PROJ/noperm.jsonl"
+rm -rf "$HYGIENE_TMP" "$PROJ"
+if [ -z "$LEFTOVERS" ]; then
+  report 0 "$R" "no temp files left behind, on the good path or any error path"
+else
+  report 1 "$R" "no temp files left behind, on the good path or any error path ($LEFTOVERS)"
+fi
+
+# ---------- both hooks : CLAUDE_PROJECT_DIR is not guaranteed ----------
+# Hooks are invoked with the variable set, but a wrapper script, a manual run or
+# a test harness can drop it. Neither hook may crash, and neither may reach for
+# a path outside the directory it was started in.
+PROJ=$(mktemp -d /tmp/hooktest-proj-XXXXXX)
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+RC=0
+( cd "$PROJ" && printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
+  | env -u CLAUDE_PROJECT_DIR bash "$HOOKS_DIR/$R" >/dev/null 2>&1 ) || RC=$?
+if [ "$RC" -eq 0 ] && [ "$(state_field "$PROJ/$STATE_REL" last_verdict)" = "BLOCK" ]; then
+  report 0 "$R" "no CLAUDE_PROJECT_DIR -> falls back to the cwd, exit 0"
+else
+  report 1 "$R" "no CLAUDE_PROJECT_DIR -> falls back to the cwd, exit 0 (rc=$RC)"
+fi
+
+# The same fallback on the judging side: the state it just wrote is the state it
+# now reads, and a cwd with no state file is an ordinary turn, not a loop.
+RC=0
+( cd "$PROJ" && printf '%s' "$(stop_json)" \
+  | env -u CLAUDE_PROJECT_DIR bash "$HOOKS_DIR/$E" >/dev/null 2>&1 ) || RC=$?
+RC_ELSEWHERE=0
+EMPTY_CWD=$(mktemp -d /tmp/hooktest-cwd-XXXXXX)
+( cd "$EMPTY_CWD" && printf '%s' "$(stop_json)" \
+  | env -u CLAUDE_PROJECT_DIR bash "$HOOKS_DIR/$E" >/dev/null 2>&1 ) || RC_ELSEWHERE=$?
+rm -rf "$EMPTY_CWD" "$PROJ"
+if [ "$RC" -eq 2 ] && [ "$RC_ELSEWHERE" -eq 0 ]; then
+  report 0 "$E" "no CLAUDE_PROJECT_DIR -> reads the cwd's state, and only the cwd's"
+else
+  report 1 "$E" "no CLAUDE_PROJECT_DIR -> reads the cwd's state, and only the cwd's (rc=$RC elsewhere=$RC_ELSEWHERE)"
+fi
+
+# ---------- enforce-loop.sh : every unusable state releases the turn ----------
+# A Stop hook that holds a turn on a value it cannot interpret cannot be talked
+# out of it — there is no turn left in which to fix the file. So each of these
+# has to end with the turn released, and loudly enough that the user learns the
+# budget stopped being counted.
+enforce_case 0 "negative attempt -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":-1}' "$(stop_json)" 'WARNING' -
+enforce_case 0 "fractional attempt -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":1.5}' "$(stop_json)" 'WARNING' -
+enforce_case 0 "attempt written as a boolean -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":true}' "$(stop_json)" 'WARNING' -
+
+# An absent or null attempt is a different event from an unreadable one: nothing
+# says the counter is broken, only that no attempt has been recorded yet. It
+# reads as 0, so the turn continues on 0/3 and the next reviewer run writes a
+# real number. stop_hook_active caps this at one extra turn either way.
+enforce_case 2 "absent attempt counts as none spent -> exit 2 at 0/3" \
+  '{"last_verdict":"BLOCK"}' "$(stop_json)" 'attempt 0/3' -
+enforce_case 2 "null attempt counts as none spent -> exit 2 at 0/3" \
+  '{"last_verdict":"BLOCK","attempt":null}' "$(stop_json)" 'attempt 0/3' -
+
+# A verdict this hook does not recognise is not a failed review, so it ends the
+# turn — and silently, because "the reviewer never judged" is the documented
+# Phase 1 fallback, not an anomaly worth a warning on every legacy run.
+enforce_quiet_case() {  # <expected-exit> <desc> <state>
+  local expected="$1" desc="$2" state="$3"
+  local proj out msg err rc=0 ok=0
+  proj=$(new_proj)
+  printf '%s\n' "$state" > "$proj/$STATE_REL"
+  err=$(mktemp /tmp/hooktest-err-XXXXXX)
+  out=$(printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$proj" bash "$HOOKS_DIR/$E" 2>"$err") || rc=$?
+  msg=$(cat "$err"); rm -f "$err"; rm -rf "$proj"
+  [ "$rc" -eq "$expected" ] && [ -z "$msg" ] && [ -z "$out" ] || ok=1
+  if [ "$ok" -eq 0 ]; then
+    report 0 "$E" "$desc"
+  else
+    report 1 "$E" "$desc (rc=$rc out='$out' err='$msg')"
+  fi
+}
+
+enforce_quiet_case 0 "absent last_verdict -> exit 0, quietly" '{"attempt":1}'
+enforce_quiet_case 0 "null last_verdict -> exit 0, quietly" '{"last_verdict":null,"attempt":1}'
+enforce_quiet_case 0 "an unknown verdict word -> exit 0, quietly" \
+  '{"last_verdict":"LGTM","attempt":1}'
+enforce_quiet_case 0 "BLOCKED is not BLOCK -> exit 0, quietly" \
+  '{"last_verdict":"BLOCKED","attempt":1}'
+
+# A zero-byte state file is what an interrupted write leaves. It is not an
+# object, so it goes down the same path as a truncated one.
+PROJ=$(new_proj)
+: > "$PROJ/$STATE_REL"
+ERR=$(printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOKS_DIR/$E" 2>&1 >/dev/null)
+RC=$?
+rm -rf "$PROJ"
+if [ "$RC" -eq 0 ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
+  report 0 "$E" "zero-byte loop-state.json -> exit 0 + warning"
+else
+  report 1 "$E" "zero-byte loop-state.json -> exit 0 + warning (rc=$RC err='$ERR')"
+fi
+
+# A directory where the state file belongs never reaches a reader: the `-f`
+# guard that keeps ordinary chat out of this hook catches it first, and quietly,
+# because that guard fires on every non-loop turn there is.
+PROJ=$(new_proj)
+mkdir -p "$PROJ/$STATE_REL"
+RC=0
+OUT=$(printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOKS_DIR/$E" 2>&1) || RC=$?
+rm -rf "$PROJ"
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then
+  report 0 "$E" "loop-state.json is a directory -> exit 0, quietly"
+else
+  report 1 "$E" "loop-state.json is a directory -> exit 0, quietly (rc=$RC out='$OUT')"
+fi
+
+# chmod 000 does not stop root, so the case would assert nothing there.
+if [ "$(id -u)" -eq 0 ]; then
+  report 0 "$E" "unreadable loop-state.json -> exit 0 + warning (skipped: running as root)"
+else
+  PROJ=$(new_proj)
+  printf '{"last_verdict":"BLOCK","attempt":1}\n' > "$PROJ/$STATE_REL"
+  chmod 000 "$PROJ/$STATE_REL"
+  ERR=$(printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOKS_DIR/$E" 2>&1 >/dev/null)
+  RC=$?
+  chmod 600 "$PROJ/$STATE_REL"; rm -rf "$PROJ"
+  if [ "$RC" -eq 0 ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
+    report 0 "$E" "unreadable loop-state.json -> exit 0 + warning"
+  else
+    report 1 "$E" "unreadable loop-state.json -> exit 0 + warning (rc=$RC err='$ERR')"
+  fi
+fi
+
+# Which reader a host happens to have must not change any of these answers. The
+# numeric guard is the one worth re-running on both: jq and python3 render the
+# same JSON number differently, and the guard reads the rendering, not the JSON.
+EDGE_NOJQ=$(mktemp -d /tmp/hooktest-nojq-XXXXXX)
+ln -s "$REAL_PY" "$EDGE_NOJQ/python3"
+ln -s "$(command -v cat)" "$EDGE_NOJQ/cat"
+enforce_case 0 "python3 fallback: negative attempt -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":-1}' "$(stop_json)" 'WARNING' - "$EDGE_NOJQ"
+enforce_case 0 "python3 fallback: fractional attempt -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":1.5}' "$(stop_json)" 'WARNING' - "$EDGE_NOJQ"
+enforce_case 0 "python3 fallback: boolean attempt -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":true}' "$(stop_json)" 'WARNING' - "$EDGE_NOJQ"
+enforce_case 2 "python3 fallback: absent attempt -> exit 2 at 0/3" \
+  '{"last_verdict":"BLOCK"}' "$(stop_json)" 'attempt 0/3' - "$EDGE_NOJQ"
+enforce_case 0 "python3 fallback: an unknown verdict word -> exit 0" \
+  '{"last_verdict":"LGTM","attempt":1}' "$(stop_json)" - - "$EDGE_NOJQ"
+rm -rf "$EDGE_NOJQ"
+
+# ---------- the two hooks : an APPROVE mid-budget really does reset it ----------
+# The end-to-end case above walks the budget to exhaustion. This one interrupts
+# it: if the reset were only written to the file but not honoured on the next
+# BLOCK, the loop would still die early — the counter has to start at 1 again,
+# and the turn has to be blocked rather than handed to a human.
+PROJ=$(new_proj)
+assistant_jsonl "$PROJ/block.jsonl" '<verdict>BLOCK</verdict>'
+assistant_jsonl "$PROJ/approve.jsonl" '<verdict>APPROVE</verdict>'
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/block.jsonl")" >/dev/null
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/block.jsonl")" >/dev/null
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/approve.jsonl")" >/dev/null
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/block.jsonl")" >/dev/null
+RC=0
+OUT=$(printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOKS_DIR/$E" 2>&1) || RC=$?
+GOT_A=$(state_field "$PROJ/$STATE_REL" attempt)
+rm -rf "$PROJ"
+if [ "$RC" -eq 2 ] && [ "$GOT_A" = "1" ] && printf '%s' "$OUT" | grep -qF 'attempt 1/3'; then
+  report 0 "loop" "BLOCK, BLOCK, APPROVE, BLOCK -> the budget restarts at 1/3"
+else
+  report 1 "loop" "BLOCK, BLOCK, APPROVE, BLOCK -> the budget restarts at 1/3 (rc=$RC attempt=$GOT_A out='$OUT')"
+fi
+
+# A reviewer that quoted a tag and never judged spends nothing and stops nothing:
+# the round trip has to leave the budget exactly where it found it and let the
+# turn end, which is the pre-hook behaviour Phase 1 deliberately kept open.
+PROJ=$(new_proj)
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"개선안: <verdict>BLOCK</verdict> 를 붙일 것\n\n리뷰 계속"}]}}\n' \
+  > "$PROJ/transcript.jsonl"
+printf '{"last_verdict":"APPROVE","attempt":0}\n' > "$PROJ/$STATE_REL"
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" >/dev/null
+RC=0
+printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOKS_DIR/$E" >/dev/null 2>&1 || RC=$?
+GOT_V=$(state_field "$PROJ/$STATE_REL" last_verdict)
+GOT_A=$(state_field "$PROJ/$STATE_REL" attempt)
+rm -rf "$PROJ"
+if [ "$RC" -eq 0 ] && [ "$GOT_V" = "UNKNOWN" ] && [ "$GOT_A" = "0" ]; then
+  report 0 "loop" "a quoted tag with no judgement -> UNKNOWN, budget untouched, turn ends"
+else
+  report 1 "loop" "a quoted tag with no judgement -> UNKNOWN, budget untouched, turn ends (rc=$RC got $GOT_V/$GOT_A)"
+fi
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
