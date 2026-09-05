@@ -756,6 +756,20 @@ else
 fi
 rm -rf "$PROJ"
 
+# An approval ends the loop, so the budget has to be handed back intact — a
+# counter that only ever climbs would starve the next phase of retries.
+record_state_case "reviewer APPROVE -> last_verdict=APPROVE, attempt resets to 0" \
+  reviewer '<verdict>APPROVE</verdict>' '{"last_verdict":"BLOCK","attempt":2}' APPROVE 0
+
+# UNKNOWN is "the reviewer did not judge", not "the reviewer approved". It must
+# neither spend an attempt nor hand the budget back (see Plans.md, Phase 1
+# carry-over): a missing tag would otherwise reset the counter for free.
+record_state_case "reviewer UNKNOWN -> recorded, attempt left as it was" \
+  reviewer '리뷰 계속' '{"last_verdict":"BLOCK","attempt":2}' UNKNOWN 2
+
+record_state_case "reviewer REQUEST CHANGES -> recorded as CHANGES, attempt increments" \
+  reviewer '<verdict>REQUEST CHANGES</verdict>' '{"last_verdict":"BLOCK","attempt":1}' CHANGES 2
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
