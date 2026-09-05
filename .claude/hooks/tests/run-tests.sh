@@ -1241,6 +1241,43 @@ else
   report 1 "$R" "no temp files left behind, on the good path or any error path ($LEFTOVERS)"
 fi
 
+# ---------- record-verdict.sh : a parser that did not run is not a verdict ----------
+# Everything the hook writes comes from run_phase.py. If the parser cannot run
+# at all — a wrong path to it, a crash inside it — the hook knows nothing about
+# the review, and "nothing" must stay off the disk: writing an empty verdict
+# would spend one of the three attempts *and* leave enforce-loop.sh a value it
+# reads as "no loop", releasing the turn. Wrong in both directions at once.
+
+orphan_hook() {  # [stub-run_phase.py body] -> dir holding a copy of the hook
+  # A copy of the hook whose sibling scripts/harness/run_phase.py is missing
+  # (or replaced by a stub): what a crashing or unreachable parser looks like
+  # from inside the hook, without touching the real one.
+  local root
+  root=$(mktemp -d /tmp/hooktest-orphan-XXXXXX)
+  mkdir -p "$root/.claude/hooks"
+  cp "$HOOKS_DIR/$R" "$root/.claude/hooks/$R"
+  if [ "$#" -gt 0 ]; then
+    mkdir -p "$root/scripts/harness"
+    printf '%s\n' "$1" > "$root/scripts/harness/run_phase.py"
+  fi
+  printf '%s' "$root"
+}
+
+PROJ=$(new_proj)
+ORPHAN=$(orphan_hook)
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+ERR=$(printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$ORPHAN/.claude/hooks/$R" 2>&1 >/dev/null)
+RC=$?
+STATE_AFTER=absent
+[ -e "$PROJ/$STATE_REL" ] && STATE_AFTER="present: $(cat "$PROJ/$STATE_REL" 2>/dev/null)"
+rm -rf "$ORPHAN" "$PROJ"
+if [ "$RC" -eq 0 ] && [ "$STATE_AFTER" = absent ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
+  report 0 "$R" "the verdict parser cannot run -> no loop-state.json, warning, exit 0"
+else
+  report 1 "$R" "the verdict parser cannot run -> no loop-state.json, warning, exit 0 (rc=$RC state=$STATE_AFTER err='$ERR')"
+fi
+
 # ---------- both hooks : CLAUDE_PROJECT_DIR is not guaranteed ----------
 # Hooks are invoked with the variable set, but a wrapper script, a manual run or
 # a test harness can drop it. Neither hook may crash, and neither may reach for
