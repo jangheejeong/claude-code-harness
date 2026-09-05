@@ -1001,6 +1001,70 @@ rm -rf "$NOJQ_BIN"
 enforce_case 0 "no jq and no python3 -> exit 0 + warning" \
   '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'WARNING' - /var/empty
 
+# ---------- settings.json wiring ----------
+# A hook that is written but not registered enforces nothing, and the failure
+# is invisible: the session just carries on as it did before.
+SETTINGS="$REPO_ROOT/.claude/settings.json"
+
+event_hooks() {  # <event> -> one command per line
+  python3 -c '
+import json, sys
+
+with open(sys.argv[1]) as f:
+    settings = json.load(f)
+for group in settings.get("hooks", {}).get(sys.argv[2], []):
+    for hook in group.get("hooks", []):
+        print(hook.get("command", ""))
+' "$SETTINGS" "$1" 2>/dev/null
+}
+
+registered_case() {  # <desc> <event> <hook-file>
+  if event_hooks "$2" | grep -qF "$3"; then
+    report 0 "settings.json" "$1"
+  else
+    report 1 "settings.json" "$1"
+  fi
+}
+
+registered_case "SubagentStop still runs announce-agent.sh" SubagentStop "$A"
+registered_case "SubagentStop also runs record-verdict.sh" SubagentStop "$R"
+registered_case "SubagentStart still runs announce-agent.sh" SubagentStart "$A"
+registered_case "Stop runs enforce-loop.sh" Stop "$E"
+
+# Same-event hooks run in parallel in a non-deterministic order (D2), so the
+# two SubagentStop entries have to be independent — which is only worth
+# checking because there are now two of them.
+if [ "$(event_hooks SubagentStop | grep -c .)" -eq 2 ]; then
+  report 0 "settings.json" "SubagentStop registers exactly the two known hooks"
+else
+  report 1 "settings.json" "SubagentStop registers exactly the two known hooks"
+fi
+
+# A typo in a command path is silent: Claude Code just runs nothing.
+MISSING_HOOKS=""
+for EV in PreToolUse PostToolUse SubagentStart SubagentStop Stop; do
+  while IFS= read -r CMD; do
+    [ -n "$CMD" ] || continue
+    CMD_FILE="${CMD##*/}"
+    CMD_FILE="${CMD_FILE%\"}"
+    [ -f "$HOOKS_DIR/$CMD_FILE" ] || MISSING_HOOKS="$MISSING_HOOKS $CMD"
+  done <<< "$(event_hooks "$EV")"
+done
+if [ -z "$MISSING_HOOKS" ]; then
+  report 0 "settings.json" "every registered command points at a hook file that exists"
+else
+  report 1 "settings.json" "every registered command points at a hook file that exists ($MISSING_HOOKS)"
+fi
+
+# D2: announce-agent.sh keeps its cosmetic-only contract. It shares an event
+# with record-verdict.sh and must not grow a stake in the loop state.
+if grep -qF 'Cosmetic only: always exit 0, never block' "$HOOKS_DIR/$A" \
+   && ! grep -qF 'loop-state' "$HOOKS_DIR/$A"; then
+  report 0 "$A" "still cosmetic only, with no stake in the loop state"
+else
+  report 1 "$A" "still cosmetic only, with no stake in the loop state"
+fi
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
