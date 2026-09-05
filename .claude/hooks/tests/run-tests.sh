@@ -1882,6 +1882,55 @@ else
   report 1 "update.sh" "the hook count the user sees is counted from the list, never typed (typed:$TYPED_COUNTS)"
 fi
 
+# Criterion 3 — a project that already has settings.json keeps it, so the new
+# hooks arrive as files nobody runs. Copying them silently is the same as not
+# shipping them, except it looks like success, so update.sh has to name them.
+LEGACY_SETTINGS="$LIB_SAFE_DIR/legacy-settings.json"
+cat > "$LEGACY_SETTINGS" <<'JSON'
+{
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/block-destructive.sh"}]},
+      {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/protect-secrets.sh"}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit-lint.sh"}]}
+    ],
+    "SubagentStart": [
+      {"hooks": [{"type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/announce-agent.sh"}]}
+    ],
+    "SubagentStop": [
+      {"hooks": [{"type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/announce-agent.sh"}]}
+    ]
+  }
+}
+JSON
+
+UNREG=$(update_lib "unregistered_hooks '$LEGACY_SETTINGS'")
+if [ "$UNREG" = "record-verdict enforce-loop" ]; then
+  report 0 "update.sh" "a pre-loop settings.json leaves exactly the two new hooks unregistered"
+else
+  report 1 "update.sh" "a pre-loop settings.json leaves exactly the two new hooks unregistered (got '$UNREG')"
+fi
+
+NOTICE=$(update_lib "registration_notice '$REPO_ROOT/.claude/settings.json' '$LIB_SAFE_DIR/backup' record-verdict enforce-loop")
+if printf '%s' "$NOTICE" | grep -qF 'record-verdict.sh' \
+   && printf '%s' "$NOTICE" | grep -qF 'enforce-loop.sh' \
+   && printf '%s' "$NOTICE" | grep -qF 'NOT registered'; then
+  report 0 "update.sh" "the notice names each unregistered hook and says it is not registered"
+else
+  report 1 "update.sh" "the notice names each unregistered hook and says it is not registered (got '$NOTICE')"
+fi
+
+# The notice only helps if the run reaches it: the summary has to call it
+# whenever the kept settings.json is missing a managed hook.
+if grep -q 'registration_notice "\$SETTINGS_NEW"' "$UPDATE_SH" \
+   && grep -q 'UNREGISTERED_HOOKS=\$(unregistered_hooks' "$UPDATE_SH"; then
+  report 0 "update.sh" "the run computes the unregistered hooks and prints the notice"
+else
+  report 1 "update.sh" "the run computes the unregistered hooks and prints the notice"
+fi
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
