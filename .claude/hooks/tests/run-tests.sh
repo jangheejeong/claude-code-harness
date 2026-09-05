@@ -436,6 +436,45 @@ verdict_placement_case 0 "UNKNOWN" warn "tag only inside a fenced block -> UNKNO
 ```
 이상.'
 
+# Quoting the tag and then judging properly is the normal case, not an
+# anomaly. If it warned, every real review would carry a warning and the
+# channel would stop meaning anything.
+verdict_placement_case 5 "BLOCK" quiet "quoted tag above a real one -> last line wins, no warning" \
+  '#### [NEW][CHANGES] run_phase.py:12 — 태그 누락
+개선안: 마지막 줄에 <verdict>APPROVE</verdict> 를 붙일 것
+
+### 결론
+BLOCK
+
+<verdict>BLOCK</verdict>'
+
+# No tag at all is the pre-tag agent, which Phase 1 deliberately keeps working.
+# Warning here would flag every legacy run as broken.
+verdict_placement_case 0 "UNKNOWN" quiet "no tag anywhere -> UNKNOWN, exit 0, no warning" \
+  '### 결론
+APPROVE — 태그를 모르는 구버전 리뷰어 출력'
+
+EMPTY_PLACEMENT_LOG=$(mktemp /tmp/hooktest-verdict-XXXXXX)
+: > "$EMPTY_PLACEMENT_LOG"
+verdict_file_case 0 "UNKNOWN" quiet "empty file -> UNKNOWN, exit 0, no warning" \
+  "$EMPTY_PLACEMENT_LOG"
+rm -f "$EMPTY_PLACEMENT_LOG"
+
+verdict_placement_case 0 "UNKNOWN" quiet "whitespace-only file -> UNKNOWN, exit 0, no warning" \
+  "$(printf ' \n\t\n')"
+
+# The one log written by a real reviewer that this repo still has on disk. It
+# quotes the tag mid-review and judges on its last line, so it exercises the
+# rule end-to-end on output no test author shaped. .claude/notes/ is
+# gitignored, so a fresh clone simply skips it.
+REAL_REVIEW_LOG="$REPO_ROOT/.claude/notes/review-phase1-verdict.log"
+if [ -f "$REAL_REVIEW_LOG" ]; then
+  verdict_file_case 0 "APPROVE" quiet "real Phase 1 review log -> APPROVE, exit 0, no warning" \
+    "$REAL_REVIEW_LOG"
+else
+  report 0 "run_phase.py" "real Phase 1 review log -> APPROVE (skipped: log not on disk)"
+fi
+
 # ---------- run_phase.py : usage errors exit 1, not 2 ----------
 # argparse exits 2 on any usage error, which collides with "2 = claude CLI
 # missing". A Phase 2 hook branching on `case $?` would read a typo as a
