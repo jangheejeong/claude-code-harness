@@ -946,6 +946,28 @@ enforce_case 0 "BLOCK at attempt 4 -> exit 0, still past the budget" \
 enforce_case 0 "stop_hook_active=true -> exit 0, no second block on our own continuation" \
   '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json true)" - -
 
+# Anything this hook cannot read is a reason to let go of the turn, never to
+# hold it: a session held by a hook that no longer knows what it is enforcing
+# cannot be talked out of it. Loudly, though — a budget that quietly stopped
+# being counted is the failure this whole phase exists to prevent.
+enforce_case 0 "garbage Stop payload -> exit 0 + warning (never trap the session)" \
+  '{"last_verdict":"BLOCK","attempt":1}' 'not json at all' 'WARNING' -
+
+enforce_case 0 "empty Stop payload -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":1}' '' 'WARNING' -
+
+enforce_case 0 "truncated loop-state.json -> exit 0 + warning" \
+  '{"last_verdict":' "$(stop_json)" 'WARNING' -
+
+enforce_case 0 "loop-state.json holding a JSON array -> exit 0 + warning" \
+  '[]' "$(stop_json)" 'WARNING' -
+
+# Valid JSON, unusable counter. Without a check this reaches `[ "$a" -ge 3 ]`,
+# where bash's own "integer expression expected" makes the test false and the
+# turn gets blocked on a number nobody can count.
+enforce_case 0 "non-numeric attempt -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":"two"}' "$(stop_json)" 'WARNING' -
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
