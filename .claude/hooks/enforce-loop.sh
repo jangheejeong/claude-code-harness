@@ -97,6 +97,16 @@ case "$ATTEMPT" in
     ;;
 esac
 
+# All digits is not yet countable. `[ n -ge 3 ]` compares as a signed 64-bit
+# integer and a longer number makes the test itself die; a dead test is false,
+# so the exhaustion branch is skipped and the turn is held on a number nobody
+# can count — with bash's own error on stderr next to our warning. The real
+# counter never passes 3, so anything this long is a corrupt file, not a budget.
+if [ "${#ATTEMPT}" -gt 9 ]; then
+  warn "attempt in $STATE_FILE is out of range ('$ATTEMPT') — loop budget not enforced"
+  exit 0
+fi
+
 # This turn only exists because a Stop hook blocked the previous one. Blocking
 # it again would re-block our own continuation on every turn; Claude Code caps
 # that at 8 consecutive blocks, but the budget of 3 is supposed to bite first.
