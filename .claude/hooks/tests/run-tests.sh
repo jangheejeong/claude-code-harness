@@ -254,6 +254,16 @@ else
   report 1 "run_phase.py" "missing log file -> exit 1 with a readable error (rc=$RC out='$MISSING_OUT')"
 fi
 
+# Parsing is pure: a hook may call it on a machine that has no `claude` CLI.
+# PATH is emptied rather than mangled, so resolve the real interpreter first
+# (a pyenv shim is a shell script and would not survive an empty PATH).
+REAL_PY=$(python3 -c 'import sys; print(sys.executable)')
+VERDICT_LOG=$(mktemp /tmp/hooktest-verdict-XXXXXX)
+printf '<verdict>APPROVE</verdict>\n' > "$VERDICT_LOG"
+cmd_case 0 "APPROVE" "no claude CLI on PATH -> still parses (not exit 2)" \
+  env PATH=/var/empty "$REAL_PY" "$RUN_PHASE" --parse-verdict "$VERDICT_LOG"
+rm -f "$VERDICT_LOG"
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
