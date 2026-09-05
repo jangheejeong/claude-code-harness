@@ -165,6 +165,26 @@ rm -rf "$TMP_PROJ"
 # ---------- run_phase.py --parse-verdict ----------
 REPO_ROOT="$(cd "$HOOKS_DIR/../.." && pwd)"
 REVIEWER_MD="$REPO_ROOT/.claude/agents/reviewer.md"
+RUN_PHASE="$REPO_ROOT/scripts/harness/run_phase.py"
+
+cmd_case() {  # <expected-exit> <expected-stdout> <description> <cmd> [args...]
+  local expected="$1" want="$2" desc="$3"; shift 3
+  local out actual=0
+  out=$("$@" 2>/dev/null) || actual=$?
+  if [ "$actual" -eq "$expected" ] && [ "$out" = "$want" ]; then
+    report 0 "run_phase.py" "$desc"
+  else
+    report 1 "run_phase.py" "$desc (expected exit $expected/'$want', got $actual/'$out')"
+  fi
+}
+
+verdict_case() {  # <expected-exit> <expected-stdout> <description> <log-body>
+  local log
+  log=$(mktemp /tmp/hooktest-verdict-XXXXXX)
+  printf '%s\n' "$4" > "$log"
+  cmd_case "$1" "$2" "$3" python3 "$RUN_PHASE" --parse-verdict "$log"
+  rm -f "$log"
+}
 
 # The verdict tag must be the template's LAST line so a hook can read the
 # reviewer's conclusion by tailing the log instead of re-parsing the review.
@@ -183,6 +203,14 @@ if grep -qF '### 결론' "$REVIEWER_MD" && grep -qF '### 판정 표' "$REVIEWER_
 else
   report 1 "reviewer.md" "결론 / 판정 표 / Findings sections intact"
 fi
+
+verdict_case 0 "APPROVE" "APPROVE -> stdout APPROVE, exit 0" \
+  '## Review: Phase 1
+
+### 결론
+APPROVE — 이슈 없음
+
+<verdict>APPROVE</verdict>'
 
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
