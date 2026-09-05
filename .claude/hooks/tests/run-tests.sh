@@ -921,6 +921,18 @@ enforce_case 0 "APPROVE -> exit 0" '{"last_verdict":"APPROVE","attempt":0}' "$(s
 enforce_case 0 "UNKNOWN -> exit 0 (no judgement is not a failed review)" \
   '{"last_verdict":"UNKNOWN","attempt":2}' "$(stop_json)" - -
 
+# Budget spent. The turn is allowed to end — three more machine attempts will
+# not find what three already missed — but it must not read as a clean finish,
+# so the exhaustion says out loud that a human has to take it from here.
+enforce_case 0 "BLOCK at attempt 3 -> exit 0, the budget is spent" \
+  '{"last_verdict":"BLOCK","attempt":3}' "$(stop_json)" - '3/3'
+
+enforce_case 0 "BLOCK at attempt 3 -> stdout asks for a human, not a success" \
+  '{"last_verdict":"BLOCK","attempt":3}' "$(stop_json)" - '사람 개입'
+
+enforce_case 0 "BLOCK at attempt 3 -> stdout still names the unresolved verdict" \
+  '{"last_verdict":"BLOCK","attempt":3}' "$(stop_json)" - 'BLOCK'
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
