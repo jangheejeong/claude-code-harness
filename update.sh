@@ -26,6 +26,20 @@
 
 set -euo pipefail
 
+# Every hook update.sh propagates, named exactly once. This used to be two
+# separate literal lists — one for the diff report, one for the copy loop — and
+# a hook added to neither is installed nowhere while both lists still look
+# complete. That is how the loop-enforcement hooks below shipped in the harness
+# repo and reached no other project. One list, two readers.
+MANAGED_HOOKS="block-destructive protect-secrets announce-agent post-edit-lint record-verdict enforce-loop"
+HOOK_COUNT=$(set -- $MANAGED_HOOKS; echo $#)
+
+# Sourcing with HARNESS_UPDATE_LIB=1 stops here, so the test suite can call the
+# helpers above without cloning over the network or writing into a project.
+if [ "${HARNESS_UPDATE_LIB:-}" = "1" ]; then
+  return 0
+fi
+
 REPO="https://github.com/jangheejeong/claude-code-harness.git"
 BRANCH="main"
 ASSUME_YES=false
@@ -80,8 +94,8 @@ for s in plan work review release setup orchestrator; do
   fi
 done
 
-# Hooks (all 4)
-for h in block-destructive protect-secrets announce-agent post-edit-lint; do
+# Hooks
+for h in $MANAGED_HOOKS; do
   report_diff "$TMP/harness/.claude/hooks/$h.sh" ".claude/hooks/$h.sh" ".claude/hooks/$h.sh"
 done
 
@@ -190,8 +204,8 @@ for s in plan work review release setup orchestrator; do
   fi
 done
 
-# Hooks (all 4)
-for h in block-destructive protect-secrets announce-agent post-edit-lint; do
+# Hooks
+for h in $MANAGED_HOOKS; do
   cp "$TMP/harness/.claude/hooks/$h.sh" ".claude/hooks/$h.sh"
   chmod +x ".claude/hooks/$h.sh"
 done
