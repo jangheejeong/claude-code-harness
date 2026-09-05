@@ -13,8 +13,8 @@
 # Overwrites (managed harness assets):
 #   - .claude/agents/{coder,tester,planner,explorer,documenter}.md
 #   - .claude/skills/*/SKILL.md
-#   - .claude/hooks/*.sh                (all 4: block-destructive, protect-secrets,
-#                                        announce-agent, post-edit-lint)
+#   - .claude/hooks/*.sh                (every hook in MANAGED_HOOKS below —
+#                                        named there and nowhere else)
 #   - scripts/harness/run_phase.py
 #   - docs/harness/*.md
 #   - HARNESS.md
