@@ -1400,6 +1400,14 @@ invocation_case "invoked through a symlink -> records BLOCK, attempt 1" \
   "$SYMDIR" "$SYMDIR/hook.sh"
 rm -rf "$SYMDIR"
 
+# The two forms that already worked. They are the ones the fix could plausibly
+# break, so they are asserted rather than assumed: settings.json invokes the
+# hook by absolute path, and a relative path is what a hand run types.
+invocation_case "invoked by absolute path -> records BLOCK, attempt 1" \
+  "$REPO_ROOT" "$HOOKS_DIR/$R"
+invocation_case "invoked by relative path from the repo root -> records BLOCK, attempt 1" \
+  "$REPO_ROOT" ".claude/hooks/$R"
+
 # ---------- both hooks : CLAUDE_PROJECT_DIR is not guaranteed ----------
 # Hooks are invoked with the variable set, but a wrapper script, a manual run or
 # a test harness can drop it. Neither hook may crash, and neither may reach for
