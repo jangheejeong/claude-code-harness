@@ -13,11 +13,35 @@
 
 set -u
 
-# Shell-builtin only: this runs before the jq/python3 check, and on a host
-# without them a `dirname: command not found` would drown out the one warning
-# this hook exists to print. The hook and the parser ship in the same repo, so
-# the path is derived from $0 rather than from $CLAUDE_PROJECT_DIR.
-RUN_PHASE="${0%/*}/../../scripts/harness/run_phase.py"
+# The hook and the parser ship in the same repo, so the path to the parser is
+# derived from $0 rather than from $CLAUDE_PROJECT_DIR.
+#
+# Shell builtins do the work: this runs before the jq/python3 check, and on a
+# host without them a `dirname: command not found` would drown out the one
+# warning this hook exists to print. readlink is the single exception and it is
+# only reached for a path that `-L` already proved is a symlink, with its own
+# failure swallowed.
+self_dir() {
+  local self="$0" target hops=0
+  # $0 is whatever the caller typed. settings.json passes an absolute path, but
+  # a wrapper or a hand run may pass a bare name or a symlink, and `${0%/*}`
+  # returns $0 unchanged when there is no slash to strip — that silently built
+  # the path "record-verdict.sh/../../scripts/harness/run_phase.py", which no
+  # python3 can open.
+  while [ -L "$self" ] && [ "$hops" -lt 16 ]; do  # 16: a cycle is not our problem to solve
+    target=$(readlink "$self" 2>/dev/null) || break
+    case "$target" in
+      /*) self="$target" ;;
+      *) self="${self%/*}/$target" ;;  # a relative link resolves against the link's own dir
+    esac
+    hops=$((hops + 1))
+  done
+  case "$self" in
+    */*) printf '%s' "${self%/*}" ;;
+    *) printf '%s' "." ;;
+  esac
+}
+RUN_PHASE="$(self_dir)/../../scripts/harness/run_phase.py"
 STATE_FILE="${CLAUDE_PROJECT_DIR:-.}/.claude/notes/loop-state.json"
 
 warn() { echo "[record-verdict] WARNING: $*" >&2; }
