@@ -24,30 +24,45 @@ INPUT=$(cat 2>/dev/null) || INPUT=""
 # anything — a leak here would trap plain chat in a hook it never asked for.
 [ -f "$STATE_FILE" ] || exit 0
 
-# --- state read: jq -> python3 -> warn + exit 0 (as in announce-agent.sh) ---
+# --- payload + state read: jq -> python3 -> warn + exit 0 (as in announce-agent.sh) ---
+STOP_ACTIVE="false"
 VERDICT=""
 ATTEMPT=0
 if command -v jq >/dev/null 2>&1; then
+  STOP_ACTIVE=$(printf '%s' "$INPUT" | jq -r 'if .stop_hook_active then "true" else "false" end' 2>/dev/null) || STOP_ACTIVE="false"
   VERDICT=$(jq -r '.last_verdict // ""' "$STATE_FILE" 2>/dev/null) || VERDICT=""
   ATTEMPT=$(jq -r '.attempt // 0' "$STATE_FILE" 2>/dev/null) || ATTEMPT=0
 elif command -v python3 >/dev/null 2>&1; then
-  OUT=$(python3 -c '
+  OUT=$(printf '%s' "$INPUT" | python3 -c '
 import json, sys
+
+def as_dict(value):
+    return value if isinstance(value, dict) else {}
+
+try:
+    payload = as_dict(json.load(sys.stdin))
+except Exception:
+    payload = {}
 try:
     with open(sys.argv[1]) as f:
-        state = json.load(f)
+        state = as_dict(json.load(f))
 except Exception:
     state = {}
-if not isinstance(state, dict):
-    state = {}
+
+print("true" if payload.get("stop_hook_active") else "false")
 print(state.get("last_verdict") or "")
 print(state.get("attempt") or 0)
 ' "$STATE_FILE" 2>/dev/null) || OUT=""
-  { IFS= read -r VERDICT; IFS= read -r ATTEMPT; } <<< "$OUT"
+  { IFS= read -r STOP_ACTIVE; IFS= read -r VERDICT; IFS= read -r ATTEMPT; } <<< "$OUT"
 else
   warn "jq and python3 both missing — loop enforcement disabled"
   exit 0
 fi
+
+# This turn only exists because a Stop hook blocked the previous one. Blocking
+# it again would re-block our own continuation on every turn; Claude Code caps
+# that at 8 consecutive blocks, but the budget of 3 is supposed to bite first.
+[ "$STOP_ACTIVE" = "true" ] && exit 0
 
 # The reviewer's own wording ("REQUEST CHANGES") and run_phase.py's normalized
 # form ("CHANGES") both mean the same thing here. APPROVE and UNKNOWN do not:
