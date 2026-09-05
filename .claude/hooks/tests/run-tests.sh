@@ -219,6 +219,12 @@ REQUEST CHANGES — 인수 기준 1건 미달
 
 <verdict>REQUEST CHANGES</verdict>'
 
+verdict_case 5 "BLOCK" "BLOCK -> stdout BLOCK, exit 5" \
+  '### 결론
+BLOCK — 하드코딩된 토큰
+
+<verdict>BLOCK</verdict>'
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
