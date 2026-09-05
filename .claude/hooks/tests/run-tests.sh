@@ -377,6 +377,7 @@ usage_error_case() {  # <description> <arg>...
 }
 
 usage_error_case "--parse-verdict without a value -> exit 1" --parse-verdict
+usage_error_case "missing required arguments -> exit 1" --subproject x
 
 # ---------- run_phase.py : agent run reports the reviewer's verdict ----------
 # The `claude` CLI exits 0 whatever the reviewer concluded, so a stub CLI is
