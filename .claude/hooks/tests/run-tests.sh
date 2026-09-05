@@ -904,6 +904,23 @@ enforce_case 2 "BLOCK at attempt 1 -> stderr names the verdict being acted on" \
 enforce_case 2 "BLOCK at attempt 1 -> stderr says to re-dispatch the coder" \
   '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'coder' -
 
+# The reviewer's own wording, as it appears in the <verdict> tag. record-verdict
+# stores the normalized "CHANGES", but a state file written by hand or by an
+# older build carries the long form, and both mean "not done".
+enforce_case 2 "REQUEST CHANGES at attempt 2 -> exit 2, stderr counts 2/3" \
+  '{"last_verdict":"REQUEST CHANGES","attempt":2}' "$(stop_json)" 'attempt 2/3' -
+
+enforce_case 2 "CHANGES (normalized) at attempt 2 -> exit 2, stderr counts 2/3" \
+  '{"last_verdict":"CHANGES","attempt":2}' "$(stop_json)" 'attempt 2/3' -
+
+# The two verdicts that end the loop. APPROVE is the loop succeeding; UNKNOWN is
+# the reviewer never having judged, which Plans.md Phase 1 deliberately keeps
+# open so a missing tag falls back to the pre-hook behaviour instead of
+# stalling the session.
+enforce_case 0 "APPROVE -> exit 0" '{"last_verdict":"APPROVE","attempt":0}' "$(stop_json)" - -
+enforce_case 0 "UNKNOWN -> exit 0 (no judgement is not a failed review)" \
+  '{"last_verdict":"UNKNOWN","attempt":2}' "$(stop_json)" - -
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
