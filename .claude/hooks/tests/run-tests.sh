@@ -307,6 +307,14 @@ agent_run_case 3 "status=FAIL(7)" "agent failure -> status=FAIL(7), exit 3 (no r
 rm -rf "$TMP_SUBPROJ"
 rm -f "$REPO_ROOT"/.claude/notes/phase-999-*.log
 
+# The docstring is the only exit-code table a hook author reads before wiring
+# up a `case $? in` — drift here silently mis-routes verdicts.
+if grep -qE '^  4  ' "$RUN_PHASE" && grep -qE '^  5  ' "$RUN_PHASE"; then
+  report 0 "run_phase.py" "docstring documents exit codes 4 and 5"
+else
+  report 1 "run_phase.py" "docstring documents exit codes 4 and 5"
+fi
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
