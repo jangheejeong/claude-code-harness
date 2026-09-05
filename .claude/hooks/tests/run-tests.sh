@@ -868,13 +868,15 @@ stop_json() {  # [stop_hook_active]
   printf '{"session_id":"s1","hook_event_name":"Stop","stop_hook_active":%s}' "${1:-false}"
 }
 
-enforce_case() {  # <expected-exit> <desc> <state|-> <payload> <want-stderr|-> <want-stdout|->
+enforce_case() {  # <expected-exit> <desc> <state|-> <payload> <want-stderr|-> <want-stdout|-> [PATH]
   local expected="$1" desc="$2" state="$3" payload="$4" want_err="$5" want_out="$6"
+  local path="${7:-$PATH}"
   local proj out msg err rc=0 ok=0
   proj=$(new_proj)
   [ "$state" = "-" ] || printf '%s\n' "$state" > "$proj/$STATE_REL"
   err=$(mktemp /tmp/hooktest-err-XXXXXX)
-  out=$(printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$proj" bash "$HOOKS_DIR/$E" 2>"$err") || rc=$?
+  out=$(printf '%s' "$payload" \
+    | env PATH="$path" CLAUDE_PROJECT_DIR="$proj" /bin/bash "$HOOKS_DIR/$E" 2>"$err") || rc=$?
   msg=$(cat "$err"); rm -f "$err"; rm -rf "$proj"
   [ "$rc" -eq "$expected" ] || ok=1
   [ "$want_err" = "-" ] || printf '%s' "$msg" | grep -qF "$want_err" || ok=1
@@ -967,6 +969,37 @@ enforce_case 0 "loop-state.json holding a JSON array -> exit 0 + warning" \
 # turn gets blocked on a number nobody can count.
 enforce_case 0 "non-numeric attempt -> exit 0 + warning" \
   '{"last_verdict":"BLOCK","attempt":"two"}' "$(stop_json)" 'WARNING' -
+
+# Whether a host has jq decides which of the two readers runs, and nothing
+# else may follow from it. The PATH here holds exactly what the hook shells out
+# to — cat and python3 — so "no jq" is real absence, not a stub.
+NOJQ_BIN=$(mktemp -d /tmp/hooktest-nojq-XXXXXX)
+ln -s "$REAL_PY" "$NOJQ_BIN/python3"
+ln -s "$(command -v cat)" "$NOJQ_BIN/cat"
+
+enforce_case 0 "python3 fallback: APPROVE -> exit 0" \
+  '{"last_verdict":"APPROVE","attempt":0}' "$(stop_json)" - - "$NOJQ_BIN"
+enforce_case 2 "python3 fallback: BLOCK at attempt 1 -> exit 2, counts 1/3" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'attempt 1/3' - "$NOJQ_BIN"
+enforce_case 0 "python3 fallback: BLOCK at attempt 3 -> exit 0, asks for a human" \
+  '{"last_verdict":"BLOCK","attempt":3}' "$(stop_json)" - '사람 개입' "$NOJQ_BIN"
+enforce_case 0 "python3 fallback: stop_hook_active=true -> exit 0" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json true)" - - "$NOJQ_BIN"
+enforce_case 0 "python3 fallback: truncated loop-state.json -> exit 0 + warning" \
+  '{"last_verdict":' "$(stop_json)" 'WARNING' - "$NOJQ_BIN"
+enforce_case 0 "python3 fallback: loop-state.json holding a JSON array -> exit 0 + warning" \
+  '[]' "$(stop_json)" 'WARNING' - "$NOJQ_BIN"
+enforce_case 0 "python3 fallback: garbage Stop payload -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":1}' 'not json at all' 'WARNING' - "$NOJQ_BIN"
+enforce_case 0 "python3 fallback: non-numeric attempt -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":"two"}' "$(stop_json)" 'WARNING' - "$NOJQ_BIN"
+
+rm -rf "$NOJQ_BIN"
+
+# Neither reader present: the hook says so and lets the turn end, exactly like
+# the other guards in this repo. It never holds a session it cannot judge.
+enforce_case 0 "no jq and no python3 -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'WARNING' - /var/empty
 
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
