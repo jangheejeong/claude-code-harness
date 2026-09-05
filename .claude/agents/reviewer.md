@@ -121,6 +121,8 @@ APPROVE | REQUEST CHANGES | BLOCK — 한 줄 사유 (왜 이 verdict 인지)
 - [ ] **선택지 A**: <옵션 한 줄> — 장점 / 단점
 - [ ] **선택지 B**: <옵션 한 줄> — 장점 / 단점
 - **추천**: A — **<왜 A 인지 1-2문장. "이게 맞다" 한 줄로 끝내지 말 것>**
+
+<verdict>APPROVE|REQUEST CHANGES|BLOCK</verdict>
 ```
 
 ### 포맷 룰
@@ -128,6 +130,7 @@ APPROVE | REQUEST CHANGES | BLOCK — 한 줄 사유 (왜 이 verdict 인지)
 - **finding 본문은 `현재 / 문제 / 개선안` 3단 고정** — `비교/의미/참고` 같은 변형 금지
 - **Praise / Questions 는 별도 섹션** — Findings 본문에 섞지 말 것 (CC 의 인라인 prefix 와 다른 선택, LLM 누락 방지)
 - **추천 이유는 1-2문장** — "그게 정답" / "안전함" 같은 짧은 표현 X
+- **`<verdict>` 태그는 출력의 맨 마지막 줄** — 사람이 아니라 하네스가 읽는다 (`run_phase.py --parse-verdict`). 세 값 중 하나를 그대로, `### 결론` 과 동일하게. 빠뜨리면 하네스는 판정을 못 읽고 그냥 통과시킨다
 
 ## Tag 의미
 
