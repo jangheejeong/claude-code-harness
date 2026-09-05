@@ -264,6 +264,100 @@ cmd_case 0 "APPROVE" "no claude CLI on PATH -> still parses (not exit 2)" \
   env PATH=/var/empty "$REAL_PY" "$RUN_PHASE" --parse-verdict "$VERDICT_LOG"
 rm -f "$VERDICT_LOG"
 
+# ---------- run_phase.py --parse-verdict : edge cases ----------
+# The reviewer's own template line is a literal
+# `<verdict>APPROVE|REQUEST CHANGES|BLOCK</verdict>`. If that parsed, a
+# reviewer echoing its instructions back would fabricate a verdict out of thin
+# air — and reviewer.md is exactly the kind of file that ends up quoted in a log.
+cmd_case 0 "UNKNOWN" "reviewer.md itself parses as UNKNOWN (no self-match)" \
+  python3 "$RUN_PHASE" --parse-verdict "$REVIEWER_MD"
+
+verdict_case 0 "UNKNOWN" "bare template line is not a verdict" \
+  "$VERDICT_TEMPLATE_LINE"
+
+verdict_case 5 "BLOCK" "template line above a real verdict -> real one wins" \
+  "$VERDICT_TEMPLATE_LINE
+<verdict>BLOCK</verdict>"
+
+verdict_case 5 "BLOCK" "tag quoted in a fenced block -> last one still wins" \
+  '리뷰어는 이렇게 끝내야 한다:
+```
+<verdict>APPROVE</verdict>
+```
+
+<verdict>BLOCK</verdict>'
+
+# An empty log is what a killed or redirected run leaves behind. It must read
+# as "no verdict", never as a verdict.
+EMPTY_LOG=$(mktemp /tmp/hooktest-verdict-XXXXXX)
+: > "$EMPTY_LOG"
+cmd_case 0 "UNKNOWN" "empty file -> UNKNOWN, exit 0" \
+  python3 "$RUN_PHASE" --parse-verdict "$EMPTY_LOG"
+rm -f "$EMPTY_LOG"
+
+verdict_case 0 "UNKNOWN" "whitespace-only file -> UNKNOWN, exit 0" \
+  "$(printf ' \n\t\n')"
+
+# The tag is typed by a language model, not emitted by a serializer, so case
+# and padding drift. Anything that unambiguously names one of the three
+# verdicts counts.
+verdict_case 5 "BLOCK"   "lowercase value"                 '<verdict>block</verdict>'
+verdict_case 5 "BLOCK"   "uppercase tag name"              '<VERDICT>BLOCK</VERDICT>'
+verdict_case 5 "BLOCK"   "value padded with spaces"        '<verdict>  BLOCK  </verdict>'
+verdict_case 4 "CHANGES" "runs of spaces inside the value" '<verdict>REQUEST   CHANGES</verdict>'
+verdict_case 5 "BLOCK"   "value split across newlines"     '<verdict>
+BLOCK
+</verdict>'
+
+# A near-miss is not rounded to the nearest verdict. UNKNOWN reopens the
+# pre-tag behavior, which is the safe direction for a garbled tag — inventing
+# a BLOCK from "BLOCKED" would stall the loop on a typo.
+verdict_case 0 "UNKNOWN" "BLOCKED is not BLOCK"      '<verdict>BLOCKED</verdict>'
+verdict_case 0 "UNKNOWN" "an invented verdict word"  '<verdict>LGTM</verdict>'
+
+# Logs are raw `claude` stdout: a truncated write or a stray escape sequence
+# leaves bytes that are not valid UTF-8. Decoding must absorb them, not raise.
+BIN_LOG=$(mktemp /tmp/hooktest-verdict-XXXXXX)
+printf '\xff\xfe truncated \x00\x80\n<verdict>BLOCK</verdict>\n' > "$BIN_LOG"
+cmd_case 5 "BLOCK" "undecodable bytes in the log -> still parses" \
+  python3 "$RUN_PHASE" --parse-verdict "$BIN_LOG"
+rm -f "$BIN_LOG"
+
+verdict_case 5 "BLOCK" "unicode / emoji / RTL in the review body" \
+  '### 결론
+BLOCK — 하드코딩된 토큰 🚨 مرحبا
+
+<verdict>BLOCK</verdict>'
+
+# Same contract as the missing-file case: any unreadable path is a caller bug
+# that must exit 1 with a readable line, because Phase 2 hooks will branch on
+# `case $?` and a traceback (also exit 1) would be indistinguishable.
+read_error_case() {  # <description> <path>
+  local desc="$1" path="$2" out msg err rc=0
+  err=$(mktemp /tmp/hooktest-err-XXXXXX)
+  out=$(python3 "$RUN_PHASE" --parse-verdict "$path" 2>"$err") || rc=$?
+  msg=$(cat "$err"); rm -f "$err"
+  if [ "$rc" -eq 1 ] && [ -z "$out" ] && printf '%s' "$msg" | grep -q 'ERROR' \
+     && ! printf '%s' "$msg" | grep -q 'Traceback'; then
+    report 0 "run_phase.py" "$desc"
+  else
+    report 1 "run_phase.py" "$desc (rc=$rc out='$out')"
+  fi
+}
+
+read_error_case "directory instead of a file -> exit 1" "$HOOKS_DIR"
+
+# chmod 000 does not stop root, so the case would assert nothing there.
+if [ "$(id -u)" -eq 0 ]; then
+  report 0 "run_phase.py" "unreadable file -> exit 1 (skipped: running as root)"
+else
+  NOPERM_LOG=$(mktemp /tmp/hooktest-verdict-XXXXXX)
+  printf '<verdict>BLOCK</verdict>\n' > "$NOPERM_LOG"
+  chmod 000 "$NOPERM_LOG"
+  read_error_case "unreadable file -> exit 1, not a traceback" "$NOPERM_LOG"
+  chmod 600 "$NOPERM_LOG"; rm -f "$NOPERM_LOG"
+fi
+
 # ---------- run_phase.py : agent run reports the reviewer's verdict ----------
 # The `claude` CLI exits 0 whatever the reviewer concluded, so a stub CLI is
 # enough to pin the status line the harness derives from the run's log.
@@ -303,6 +397,17 @@ agent_run_case 0 "status=OK" "coder success -> status=OK, exit 0 (no regression)
   'phase done'
 agent_run_case 3 "status=FAIL(7)" "agent failure -> status=FAIL(7), exit 3 (no regression)" coder 7 \
   'crashed'
+agent_run_case 4 "status=CHANGES" "reviewer REQUEST CHANGES -> status=CHANGES, exit 4" reviewer 0 \
+  '<verdict>REQUEST CHANGES</verdict>'
+# A reviewer that only echoed its template has not judged anything; falling
+# back to OK is the documented Phase 1 risk mitigation, not a silent pass.
+agent_run_case 0 "status=OK" "reviewer echoing its own template -> status=OK" reviewer 0 \
+  "$VERDICT_TEMPLATE_LINE"
+# A run that crashed cannot be trusted to have finished reviewing, so the
+# failure outranks the verdict sitting in the partial log: FAIL(1)/exit 3, not
+# BLOCK/exit 5. Phase 2 must retry the run, not spend a loop budget on it.
+agent_run_case 3 "status=FAIL(1)" "crashed run outranks the verdict in its log" reviewer 1 \
+  '<verdict>BLOCK</verdict>'
 
 rm -rf "$TMP_SUBPROJ"
 rm -f "$REPO_ROOT"/.claude/notes/phase-999-*.log
