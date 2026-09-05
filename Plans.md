@@ -58,7 +58,7 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
   - [ ] `run_phase.py --parse-verdict <file>` — 파일에 `<verdict>APPROVE</verdict>` 포함 → stdout `APPROVE`, exit `0`
   - [ ] 같은 진입점, `<verdict>REQUEST CHANGES</verdict>` → stdout `CHANGES`, exit `4`
   - [ ] 같은 진입점, `<verdict>BLOCK</verdict>` → stdout `BLOCK`, exit `5`
-  - [ ] 태그가 **여러 번** 등장하는 파일(리뷰어가 findings 안에서 예시로 인용한 경우) → **마지막 것**을 채택
+  - [ ] ~~태그가 **여러 번** 등장하는 파일(리뷰어가 findings 안에서 예시로 인용한 경우) → **마지막 것**을 채택~~ → **2026-09-05 배치 규칙으로 대체됨**: 태그는 **파일의 마지막 비어있지 않은 줄**에 있을 때만 채택. 그 외 위치의 태그는 `UNKNOWN` + stderr 경고. 사유는 아래 이월 사항 참조
   - [ ] 태그가 없는 파일 → stdout `UNKNOWN`, exit `0` (하위 호환: 기존 에이전트는 태그를 안 냄)
   - [ ] 존재하지 않는 파일 경로 → exit `1`
   - [ ] `--parse-verdict` 는 `claude` CLI 를 호출하지 않는다 (CLI 미설치 환경에서도 exit `2` 가 나지 않음)
@@ -72,7 +72,7 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
 - ✅ **해결 (2026-09-05)** — **[NEW][NIT] `run_phase.py:137`** — 에이전트 실행 경로의 `read_text` 만 `OSError` 무방비. 같은 파일 `report_verdict:70-73` 은 잡는데 여기만 비대칭이라, 터지면 traceback + exit `1` 이 나가고 D5 의 "1 = bad args" 와 구분이 안 된다. **Phase 2 착수 전에 처리** — Phase 2 훅이 `case $?` 로 분기하므로 exit code 의미가 겹치면 안 된다.
 - ✅ **해결 (2026-09-05)** — **[EXISTING] `run_phase.py:123`** — argparse 에러가 exit `2` 로 나가 D5 의 "2 = CLI missing" 과 충돌한다. base 커밋 `7573899` 에서도 재현되므로 본 diff 가 만든 게 아니다. 다만 위와 같은 이유로 **Phase 2 훅이 exit code 로 분기하기 전에 정리하는 편이 안전**하다. `argparse.ArgumentParser.error()` 를 오버라이드해 `1` 로 내린다.
 - **[NEW][NIT] `HARNESS.md:173`** — `메인엔 status=OK 한 줄만` 문구가 이제 거짓. 리뷰어 경로는 `status=CHANGES` / `status=BLOCK` 도 낸다. **Phase 4 에서 처리** (Q2 의 단일 PR 결정 때문에 그 전에는 main 에 닿지 않음).
-- **결정 (2026-09-05): 조인다** — 태그를 인용만 하고 자기 판정 태그를 빠뜨린 로그는 `UNKNOWN` 이 아니라 **인용된 값으로 파싱된다.** Phase 1 에서는 `UNKNOWN` 도 exit 0 이라 무해했지만, Phase 2 는 `APPROVE` 가 `attempt` 를 0 으로 리셋하고 `UNKNOWN` 은 리셋 없이 통과하므로 **루프 카운터가 조용히 리셋될 수 있다.** → **Phase 2 착수 전에 "태그가 파일의 마지막 비어있지 않은 줄에 있을 때만 채택" 으로 조인다.**
+- ✅ **해결 (2026-09-05)** — **결정: 조인다** — 태그를 인용만 하고 자기 판정 태그를 빠뜨린 로그는 `UNKNOWN` 이 아니라 **인용된 값으로 파싱된다.** Phase 1 에서는 `UNKNOWN` 도 exit 0 이라 무해했지만, Phase 2 는 `APPROVE` 가 `attempt` 를 0 으로 리셋하고 `UNKNOWN` 은 리셋 없이 통과하므로 **루프 카운터가 조용히 리셋될 수 있다.** → **Phase 2 착수 전에 "태그가 파일의 마지막 비어있지 않은 줄에 있을 때만 채택" 으로 조인다.**
 
   **단, 조이면 실패 방향이 바뀐다.** 느슨하면 인용된 태그가 가짜 `APPROVE` 로 읽히고(카운터 리셋), 조이면 CLI 가 로그 끝에 뭔가를 덧붙이는 순간 **모든 판정이 `UNKNOWN` 이 되어 루프 강제가 통째로 꺼진다.** 둘 다 "조용히 관대해지는" 쪽으로 깨지므로, 조이는 대신 **침묵을 없앤다**: 파일에 `<verdict>` 태그가 있는데 마지막 줄이 아니면 `UNKNOWN` 을 반환하되 stderr 에 경고를 낸다. "태그 없음" 과 "태그가 제자리에 없음" 은 다른 사건이고, 후자는 사람이 알아야 한다.
 - **Question → 별도 결정 필요** — `CLAUDE.md` 의 "기존 코드 전체를 포맷팅하지 않는다" 와 레포 자신의 `.claude/hooks/post-edit-lint.sh` (Edit/Write 마다 `ruff format`) 가 실제로 충돌한다. 이번 diff 의 재포맷은 코더의 선택이 아니라 훅의 결과였다. 어느 쪽을 조정할지는 본 계획 범위 밖.
@@ -145,6 +145,7 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
 - **Out of scope**: `google` 브랜치 포팅
 - **Acceptance** (TDD-ready):
   - [ ] 세 스킬 파일의 "max 3" 문구가 `.claude/hooks/enforce-loop.sh` 가 강제한다는 사실을 명시한다 (모델이 자율적으로 세는 게 아님)
+  - [ ] `work/SKILL.md` 에 **에이전트 수명 규칙**을 추가한다: 다음 서브에이전트를 띄우기 전에 이전 서브에이전트를 명시적으로 종료한다. **idle 은 종료가 아니다.** (2026-09-05 실제 발생: 완료된 `coder` 를 닫지 않은 채 다음 `coder` 를 띄워 두 에이전트가 같은 두 파일의 쓰기 권한을 동시에 보유. 앞 에이전트가 스스로 충돌을 감지하고 멈춰서 손상은 없었으나, 그 감지는 어디에도 규칙으로 없다. `work/SKILL.md:51` 의 worktree 격리는 사용자가 `--parallel` 을 명시한 경우만 다루므로 이 사각지대를 못 덮는다)
   - [ ] `HARNESS.md` 훅 목록에 `record-verdict.sh` / `enforce-loop.sh` 와 담당 이벤트가 등재된다
   - [ ] `README.md` 의 "BLOCK verdict" 절(현 `:276`)이 소진 시 실제 동작(exit 0 + 사람 개입 요청)을 기술한다
   - [ ] `README.en.md` 가 `README.md` 와 내용 동등 (`docs/harness/DOC_SYNC_POLICY.md` 준수)
