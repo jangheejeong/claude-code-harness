@@ -137,16 +137,18 @@ needs_fixing() {  # <verdict>
 
 needs_fixing "$VERDICT" || exit 0
 
-# One verdict buys one re-dispatch. Nothing deletes loop-state.json and attempt
+# One verdict buys one reaction — either a re-dispatch or the hand-over below,
+# whichever this state calls for. Nothing deletes loop-state.json and attempt
 # only grows when a reviewer runs, so a loop the user walked away from would
-# otherwise sit on disk holding the end of every future turn in every future
-# session — telling the model to re-dispatch a coder for a phase nobody is
-# working on. A live loop never notices: record-verdict.sh writes a fresh,
-# unspent verdict on every cycle.
+# otherwise sit on disk reacting to itself forever: blocking the end of every
+# future turn in every future session over a phase nobody is working on, or, once
+# the budget is spent, printing a hand-over banner on every message the user
+# sends. A live loop never notices: record-verdict.sh writes a fresh, unspent
+# verdict on every cycle.
 [ "$ENFORCED" = "true" ] && exit 0
 
-# Marks the verdict spent. Runs immediately before the exit 2 below, so a turn
-# is only ever released for a block that actually happened.
+# Marks the verdict spent. Called on both reaction paths below and nowhere else,
+# so the mark only ever follows something the user actually saw.
 mark_enforced() {
   # python3 is the only in-place JSON editor this hook has. Where it is missing
   # the mark is simply not written and enforcement degrades to what it did
@@ -172,6 +174,7 @@ PY
 # find what three already missed. Exit 0 here is "stop", not "passed" — the
 # message on stdout is what keeps it from reading as a clean finish.
 if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+  mark_enforced  # this banner is the one reaction this verdict pays for
   echo "[enforce-loop] 자동 수정 루프 ${ATTEMPT}/${MAX_ATTEMPTS} 소진 — 마지막 리뷰 판정은 ${VERDICT} 입니다."
   echo "성공이 아닙니다. 사람 개입이 필요합니다: 리뷰 findings 를 직접 확인하고 범위를 다시 정하세요."
   exit 0
@@ -179,7 +182,7 @@ fi
 
 # Exit 2 on Stop = "do not stop, continue the conversation". stderr is what the
 # model reads, so it has to be an instruction, not just a complaint.
-mark_enforced  # this block is the one re-dispatch this verdict pays for
+mark_enforced  # this block is the one reaction this verdict pays for
 {
   echo "[enforce-loop] Reviewer verdict ${VERDICT} — the phase is not done (attempt ${ATTEMPT}/${MAX_ATTEMPTS})."
   echo "Re-dispatch the coder in fix mode with the reviewer's findings, then re-run the reviewer."
