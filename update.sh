@@ -101,7 +101,7 @@ done
 
 # Settings — installed only when the project has none (hooks fire only when registered here)
 if [ -f "$TMP/harness/.claude/settings.json" ] && [ ! -f .claude/settings.json ]; then
-  echo "  + .claude/settings.json  (new file — registers the 4 hooks)"
+  echo "  + .claude/settings.json  (new file — registers all $HOOK_COUNT hooks)"
 fi
 
 # Phase runner
@@ -219,7 +219,7 @@ SETTINGS_MISSING_EVENTS=""
 if [ -f "$SETTINGS_NEW" ]; then
   if [ ! -f "$SETTINGS_USER" ]; then
     cp "$SETTINGS_NEW" "$SETTINGS_USER"
-    echo "  + .claude/settings.json installed (registers all 4 hooks)"
+    echo "  + .claude/settings.json installed (registers all $HOOK_COUNT hooks)"
   else
     for ev in PreToolUse PostToolUse SubagentStart SubagentStop; do
       grep -q "\"$ev\"" "$SETTINGS_USER" || SETTINGS_MISSING_EVENTS="$SETTINGS_MISSING_EVENTS $ev"
@@ -333,7 +333,7 @@ case "$RV_RESULT" in
 esac
 if [ -n "$SETTINGS_MISSING_EVENTS" ]; then
   echo "   ⚠️  .claude/settings.json kept (yours), but it lacks hook entries for:$SETTINGS_MISSING_EVENTS"
-  echo "       The 4 hooks are installed but fire only when registered in settings.json."
+  echo "       All $HOOK_COUNT hooks are installed but fire only when registered in settings.json."
   echo "       Upstream reference: $BACKUP/settings.json.upstream-latest"
 fi
 if [ -n "$STALE_EXAMPLES" ]; then
