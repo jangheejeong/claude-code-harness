@@ -859,6 +859,39 @@ else
 fi
 rm -rf "$PROJ"
 
+# ---------- enforce-loop.sh ----------
+# Stop is where the loop is enforced (D1): its exit 2 means "do not stop,
+# continue the conversation", which hands control back to the main session so
+# it can re-dispatch the coder. record-verdict.sh only writes the state.
+
+stop_json() {  # [stop_hook_active]
+  printf '{"session_id":"s1","hook_event_name":"Stop","stop_hook_active":%s}' "${1:-false}"
+}
+
+enforce_case() {  # <expected-exit> <desc> <state|-> <payload> <want-stderr|-> <want-stdout|->
+  local expected="$1" desc="$2" state="$3" payload="$4" want_err="$5" want_out="$6"
+  local proj out msg err rc=0 ok=0
+  proj=$(new_proj)
+  [ "$state" = "-" ] || printf '%s\n' "$state" > "$proj/$STATE_REL"
+  err=$(mktemp /tmp/hooktest-err-XXXXXX)
+  out=$(printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$proj" bash "$HOOKS_DIR/$E" 2>"$err") || rc=$?
+  msg=$(cat "$err"); rm -f "$err"; rm -rf "$proj"
+  [ "$rc" -eq "$expected" ] || ok=1
+  [ "$want_err" = "-" ] || printf '%s' "$msg" | grep -qF "$want_err" || ok=1
+  [ "$want_out" = "-" ] || printf '%s' "$out" | grep -qF "$want_out" || ok=1
+  if [ "$ok" -eq 0 ]; then
+    report 0 "$E" "$desc"
+  else
+    report 1 "$E" "$desc (rc=$rc out='$out' err='$msg')"
+  fi
+}
+
+# Stop fires at the end of EVERY main turn, including plain conversation. If
+# this guard ever leaks, ordinary chat gets trapped in a hook it never asked
+# for — which is why it is the first thing the script checks.
+enforce_case 0 "no loop-state.json -> exit 0 (an ordinary turn is not a loop)" \
+  - "$(stop_json)" - -
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
