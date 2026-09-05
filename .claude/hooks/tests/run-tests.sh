@@ -442,6 +442,49 @@ agent_run_case 0 "status=OK" "reviewer echoing its own template -> status=OK" re
 agent_run_case 3 "status=FAIL(1)" "crashed run outranks the verdict in its log" reviewer 1 \
   '<verdict>BLOCK</verdict>'
 
+# The agent-run path re-reads the log it just wrote to find the verdict. If
+# that read fails the run must not be reported as a success — a verdict we
+# could not read is not an approval. The stub CLI above owns the log for the
+# whole run, so there is no seam to break it end-to-end; the guard is asserted
+# on run_status() directly instead. Importing is safe: the script guards its
+# entry point with `if __name__ == "__main__"`.
+unreadable_log_case() {  # <description> <log-path>
+  local desc="$1" path="$2" out msg err rc=0
+  err=$(mktemp /tmp/hooktest-err-XXXXXX)
+  out=$(python3 - "$REPO_ROOT/scripts/harness" "$path" 2>"$err" <<'PY'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+import run_phase
+
+status, code = run_phase.run_status(0, "reviewer", Path(sys.argv[2]))
+print(status, code)
+PY
+  ) || rc=$?
+  msg=$(cat "$err"); rm -f "$err"
+  if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'FAIL' \
+     && printf '%s' "$out" | grep -q ' 3$' \
+     && printf '%s' "$msg" | grep -q 'ERROR' \
+     && ! printf '%s' "$msg" | grep -q 'Traceback'; then
+    report 0 "run_phase.py" "$desc"
+  else
+    report 1 "run_phase.py" "$desc (rc=$rc out='$out' err='$msg')"
+  fi
+}
+
+unreadable_log_case "agent log gone -> status FAIL, exit 3" "/nonexistent/phase.log"
+
+if [ "$(id -u)" -eq 0 ]; then
+  report 0 "run_phase.py" "unreadable agent log -> FAIL, exit 3 (skipped: running as root)"
+else
+  NOPERM_RUN_LOG=$(mktemp /tmp/hooktest-runlog-XXXXXX)
+  printf '<verdict>APPROVE</verdict>\n' > "$NOPERM_RUN_LOG"
+  chmod 000 "$NOPERM_RUN_LOG"
+  unreadable_log_case "unreadable agent log -> FAIL, exit 3" "$NOPERM_RUN_LOG"
+  chmod 600 "$NOPERM_RUN_LOG"; rm -f "$NOPERM_RUN_LOG"
+fi
+
 # Exit 2 must keep meaning "claude CLI missing" — the Phase 2 hook routes on
 # it, and lowering the usage errors to 1 was only safe if 2 still says this.
 CLI_ERR=$(mktemp /tmp/hooktest-err-XXXXXX)
