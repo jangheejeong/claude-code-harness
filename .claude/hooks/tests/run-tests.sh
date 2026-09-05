@@ -235,6 +235,12 @@ BLOCK
 
 <verdict>BLOCK</verdict>'
 
+# Backward compatibility: an agent that never learned the tag must not be
+# treated as a failure — the harness falls back to its pre-tag behavior.
+verdict_case 0 "UNKNOWN" "no tag -> stdout UNKNOWN, exit 0" \
+  '### 결론
+APPROVE — 태그를 모르는 구버전 리뷰어 출력'
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
