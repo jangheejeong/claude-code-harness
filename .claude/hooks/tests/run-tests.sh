@@ -358,6 +358,26 @@ else
   chmod 600 "$NOPERM_LOG"; rm -f "$NOPERM_LOG"
 fi
 
+# ---------- run_phase.py : usage errors exit 1, not 2 ----------
+# argparse exits 2 on any usage error, which collides with "2 = claude CLI
+# missing". A Phase 2 hook branching on `case $?` would read a typo as a
+# missing CLI, so every usage error must come back as 1 = bad arguments.
+usage_error_case() {  # <description> <arg>...
+  local desc="$1"; shift
+  local out msg err rc=0
+  err=$(mktemp /tmp/hooktest-err-XXXXXX)
+  out=$(python3 "$RUN_PHASE" "$@" 2>"$err") || rc=$?
+  msg=$(cat "$err"); rm -f "$err"
+  if [ "$rc" -eq 1 ] && printf '%s' "$msg" | grep -q 'ERROR' \
+     && ! printf '%s' "$msg" | grep -q 'Traceback'; then
+    report 0 "run_phase.py" "$desc"
+  else
+    report 1 "run_phase.py" "$desc (rc=$rc err='$msg')"
+  fi
+}
+
+usage_error_case "--parse-verdict without a value -> exit 1" --parse-verdict
+
 # ---------- run_phase.py : agent run reports the reviewer's verdict ----------
 # The `claude` CLI exits 0 whatever the reviewer concluded, so a stub CLI is
 # enough to pin the status line the harness derives from the run's log.
