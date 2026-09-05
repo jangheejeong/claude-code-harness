@@ -45,6 +45,8 @@ B=block-destructive.sh
 P=protect-secrets.sh
 L=post-edit-lint.sh
 A=announce-agent.sh
+R=record-verdict.sh
+E=enforce-loop.sh
 
 # ---------- block-destructive.sh : deny ----------
 run_case "$B" 2 "rm -rf /"                          "$(bash_json 'rm -rf /')"
@@ -645,6 +647,71 @@ if grep -qE '^  4  ' "$RUN_PHASE" && grep -qE '^  5  ' "$RUN_PHASE"; then
 else
   report 1 "run_phase.py" "docstring documents exit codes 4 and 5"
 fi
+
+# ---------- record-verdict.sh ----------
+# SubagentStop records, it never judges (D1). Its exit 2 would mean "prevent the
+# subagent from stopping", i.e. keep the read-only reviewer running — which
+# cannot fix anything. Judging lives in enforce-loop.sh on Stop.
+
+STATE_REL=".claude/notes/loop-state.json"
+
+new_proj() {  # -> path of a fresh temp project dir with .claude/notes/
+  local d
+  d=$(mktemp -d /tmp/hooktest-proj-XXXXXX)
+  mkdir -p "$d/.claude/notes"
+  printf '%s' "$d"
+}
+
+assistant_jsonl() {  # <path> <final-answer-text>: minimal subagent transcript
+  # The real transcript is JSON Lines, and the reviewer's conclusion is the
+  # text block of its last assistant record.
+  {
+    printf '{"type":"user","message":{"role":"user","content":"review the phase"}}\n'
+    printf '{"type":"assistant","message":{"content":[{"type":"text","text":"%s"}]}}\n' "$2"
+  } > "$1"
+}
+
+subagent_stop_json() {  # <agent_type> <transcript-path>
+  printf '{"hook_event_name":"SubagentStop","agent_type":"%s","agent_transcript_path":"%s"}' \
+    "$1" "$2"
+}
+
+record_run() {  # <proj> <payload> -> echoes the hook's exit code
+  local proj="$1" payload="$2" rc=0
+  printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$proj" bash "$HOOKS_DIR/$R" >/dev/null 2>&1 || rc=$?
+  printf '%s' "$rc"
+}
+
+state_field() {  # <state-file> <key>
+  python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' \
+    "$1" "$2" 2>/dev/null
+}
+
+# A coder or a tester stopping says nothing about the review loop, so it must
+# not create a counter out of nothing.
+PROJ=$(new_proj)
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+RC=$(record_run "$PROJ" "$(subagent_stop_json coder "$PROJ/transcript.jsonl")")
+if [ "$RC" -eq 0 ] && [ ! -f "$PROJ/$STATE_REL" ]; then
+  report 0 "$R" "non-reviewer agent_type -> no loop-state.json, exit 0"
+else
+  report 1 "$R" "non-reviewer agent_type -> no loop-state.json, exit 0 (rc=$RC)"
+fi
+rm -rf "$PROJ"
+
+# ...nor edit the one a previous reviewer left behind: every non-reviewer turn
+# would otherwise nudge the counter the reviewer owns.
+PROJ=$(new_proj)
+printf '{"last_verdict":"BLOCK","attempt":2}\n' > "$PROJ/$STATE_REL"
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>APPROVE</verdict>'
+RC=$(record_run "$PROJ" "$(subagent_stop_json tester "$PROJ/transcript.jsonl")")
+if [ "$RC" -eq 0 ] && [ "$(state_field "$PROJ/$STATE_REL" attempt)" = "2" ] \
+   && [ "$(state_field "$PROJ/$STATE_REL" last_verdict)" = "BLOCK" ]; then
+  report 0 "$R" "non-reviewer agent_type -> existing loop-state.json untouched"
+else
+  report 1 "$R" "non-reviewer agent_type -> existing loop-state.json untouched (rc=$RC)"
+fi
+rm -rf "$PROJ"
 
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
