@@ -38,10 +38,14 @@ if command -v jq >/dev/null 2>&1; then
   elif ! jq -e 'type == "object"' "$STATE_FILE" >/dev/null 2>&1; then
     STATUS="bad-state"
   else
-    STOP_ACTIVE=$(printf '%s' "$INPUT" | jq -r 'if .stop_hook_active then "true" else "false" end')
+    # `== true` and not a bare truth test: jq calls 0, "", [] and {} true where
+    # python3 calls them false, and the branch a host happens to take must not
+    # change an answer. Both flags are booleans, so anything else is a mangled
+    # file and reads as unset.
+    STOP_ACTIVE=$(printf '%s' "$INPUT" | jq -r 'if .stop_hook_active == true then "true" else "false" end')
     VERDICT=$(jq -r '.last_verdict // ""' "$STATE_FILE")
     ATTEMPT=$(jq -r '.attempt // 0' "$STATE_FILE")
-    ENFORCED=$(jq -r 'if .enforced then "true" else "false" end' "$STATE_FILE")
+    ENFORCED=$(jq -r 'if .enforced == true then "true" else "false" end' "$STATE_FILE")
   fi
 elif command -v python3 >/dev/null 2>&1; then
   OUT=$(printf '%s' "$INPUT" | python3 -c '
@@ -72,10 +76,12 @@ elif state is None:
     print("bad-state")
 else:
     print("ok")
-print("true" if (payload or {}).get("stop_hook_active") else "false")
+# `is True`, not plain truthiness: jq above counts 0, "", [] and {} as true, and
+# the two readers have to answer the same for every state file, not just tidy ones.
+print("true" if (payload or {}).get("stop_hook_active") is True else "false")
 print(one_line((state or {}).get("last_verdict") or ""))
 print(one_line((state or {}).get("attempt") or 0))
-print("true" if (state or {}).get("enforced") else "false")
+print("true" if (state or {}).get("enforced") is True else "false")
 ' "$STATE_FILE" 2>/dev/null) || OUT=""
   { IFS= read -r STATUS; IFS= read -r STOP_ACTIVE; IFS= read -r VERDICT
     IFS= read -r ATTEMPT; IFS= read -r ENFORCED; } <<< "$OUT"
