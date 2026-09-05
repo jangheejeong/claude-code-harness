@@ -42,13 +42,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NOTES_DIR = REPO_ROOT / ".claude" / "notes"
 
-VERDICT_TAG = re.compile(r"<verdict>\s*(APPROVE)\s*</verdict>", re.IGNORECASE)
-VERDICT_EXIT = {"APPROVE": 0}
+VERDICT_TAG = re.compile(
+    r"<verdict>\s*(APPROVE|REQUEST\s+CHANGES)\s*</verdict>", re.IGNORECASE
+)
+# The tag carries the reviewer's own wording; callers get the short form.
+VERDICT_ALIASES = {"REQUEST CHANGES": "CHANGES"}
+VERDICT_EXIT = {"APPROVE": 0, "CHANGES": 4}
 
 
 def parse_verdict(text: str) -> str:
     """Extract the reviewer's machine-readable verdict from its log."""
-    return VERDICT_TAG.findall(text)[-1].upper()
+    tag = " ".join(VERDICT_TAG.findall(text)[-1].split()).upper()
+    return VERDICT_ALIASES.get(tag, tag)
 
 
 def report_verdict(log_path: Path) -> int:
