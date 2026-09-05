@@ -264,6 +264,49 @@ cmd_case 0 "APPROVE" "no claude CLI on PATH -> still parses (not exit 2)" \
   env PATH=/var/empty "$REAL_PY" "$RUN_PHASE" --parse-verdict "$VERDICT_LOG"
 rm -f "$VERDICT_LOG"
 
+# ---------- run_phase.py : agent run reports the reviewer's verdict ----------
+# The `claude` CLI exits 0 whatever the reviewer concluded, so a stub CLI is
+# enough to pin the status line the harness derives from the run's log.
+TMP_SUBPROJ=$(mktemp -d /tmp/hooktest-subproj-XXXXXX)
+printf '# Plans\n' > "$TMP_SUBPROJ/Plans.md"
+
+agent_run_case() {  # <expected-exit> <status-substring> <desc> <agent> <cli-exit> <cli-stdout>
+  local expected="$1" want="$2" desc="$3" agent="$4" cli_exit="$5" cli_out="$6"
+  local bin out actual=0
+  bin=$(mktemp -d /tmp/hooktest-bin-XXXXXX)
+  {
+    printf '#!/bin/bash\n'
+    printf "cat <<'CLAUDE_EOF'\n"
+    printf '%s\n' "$cli_out"
+    printf 'CLAUDE_EOF\n'
+    printf 'exit %s\n' "$cli_exit"
+  } > "$bin/claude"
+  chmod +x "$bin/claude"
+  out=$(PATH="$bin:$PATH" python3 "$RUN_PHASE" --subproject "$TMP_SUBPROJ" \
+          --phase 999 --agent "$agent" 2>/dev/null) || actual=$?
+  rm -rf "$bin"
+  if [ "$actual" -eq "$expected" ] && printf '%s' "$out" | grep -qF "$want"; then
+    report 0 "run_phase.py" "$desc"
+  else
+    report 1 "run_phase.py" "$desc (expected exit $expected + '$want', got $actual: $out)"
+  fi
+}
+
+agent_run_case 5 "status=BLOCK" "reviewer BLOCK -> status=BLOCK, exit 5" reviewer 0 \
+  '### 결론
+BLOCK — 하드코딩된 토큰
+
+<verdict>BLOCK</verdict>'
+agent_run_case 0 "status=OK" "reviewer APPROVE -> status=OK, exit 0" reviewer 0 \
+  '<verdict>APPROVE</verdict>'
+agent_run_case 0 "status=OK" "coder success -> status=OK, exit 0 (no regression)" coder 0 \
+  'phase done'
+agent_run_case 3 "status=FAIL(7)" "agent failure -> status=FAIL(7), exit 3 (no regression)" coder 7 \
+  'crashed'
+
+rm -rf "$TMP_SUBPROJ"
+rm -f "$REPO_ROOT"/.claude/notes/phase-999-*.log
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
