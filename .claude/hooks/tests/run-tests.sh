@@ -713,6 +713,49 @@ else
 fi
 rm -rf "$PROJ"
 
+record_state_case() {  # <desc> <agent> <verdict-text> <seed-state|-> <want-verdict> <want-attempt>
+  local desc="$1" agent="$2" text="$3" seed="$4" want_v="$5" want_a="$6"
+  local proj rc ok=0 got_v got_a
+  proj=$(new_proj)
+  [ "$seed" = "-" ] || printf '%s\n' "$seed" > "$proj/$STATE_REL"
+  assistant_jsonl "$proj/transcript.jsonl" "$text"
+  rc=$(record_run "$proj" "$(subagent_stop_json "$agent" "$proj/transcript.jsonl")")
+  got_v=$(state_field "$proj/$STATE_REL" last_verdict)
+  got_a=$(state_field "$proj/$STATE_REL" attempt)
+  rm -rf "$proj"
+  [ "$rc" -eq 0 ] && [ "$got_v" = "$want_v" ] && [ "$got_a" = "$want_a" ] || ok=1
+  if [ "$ok" -eq 0 ]; then
+    report 0 "$R" "$desc"
+  else
+    report 1 "$R" "$desc (rc=$rc, got $got_v/$got_a, want $want_v/$want_a)"
+  fi
+}
+
+# A BLOCK spends one of the three attempts. The first one has no state file to
+# read, so "increment" has to mean "start at 1", not "crash on a missing key".
+record_state_case "reviewer BLOCK, no prior state -> last_verdict=BLOCK, attempt=1" \
+  reviewer '<verdict>BLOCK</verdict>' - BLOCK 1
+
+record_state_case "reviewer BLOCK again -> attempt increments 1 -> 2" \
+  reviewer '<verdict>BLOCK</verdict>' '{"last_verdict":"BLOCK","attempt":1}' BLOCK 2
+
+# The reviewer may quote a tag while deliberating; only its final answer counts.
+# Reading thinking blocks would let a rehearsed APPROVE reset the budget.
+PROJ=$(new_proj)
+{
+  printf '{"type":"assistant","message":{"content":['
+  printf '{"type":"thinking","thinking":"<verdict>APPROVE</verdict> 로 끝낼까 했지만"},'
+  printf '{"type":"text","text":"### 결론\\nBLOCK\\n\\n<verdict>BLOCK</verdict>"}'
+  printf ']}}\n'
+} > "$PROJ/transcript.jsonl"
+RC=$(record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")")
+if [ "$RC" -eq 0 ] && [ "$(state_field "$PROJ/$STATE_REL" last_verdict)" = "BLOCK" ]; then
+  report 0 "$R" "thinking block quoting a verdict is ignored, text block wins"
+else
+  report 1 "$R" "thinking block quoting a verdict is ignored, text block wins (rc=$RC)"
+fi
+rm -rf "$PROJ"
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
