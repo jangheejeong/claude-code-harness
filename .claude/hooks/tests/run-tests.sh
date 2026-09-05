@@ -1451,6 +1451,15 @@ enforce_case 0 "fractional attempt -> exit 0 + warning" \
 enforce_case 0 "attempt written as a boolean -> exit 0 + warning" \
   '{"last_verdict":"BLOCK","attempt":true}' "$(stop_json)" 'WARNING' -
 
+# All digits and still uncountable: `[ n -ge 3 ]` compares as a signed 64-bit
+# integer, so a longer number kills the test itself. A dead test is false, which
+# reads as "budget left" — the turn would be held on a number nobody can count,
+# with bash's own error on stderr alongside.
+enforce_case 0 "attempt past 64-bit -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":99999999999999999999}' "$(stop_json)" 'WARNING' -
+enforce_case 0 "attempt one past the signed 64-bit ceiling -> exit 0 + warning" \
+  '{"last_verdict":"BLOCK","attempt":9223372036854775808}' "$(stop_json)" 'WARNING' -
+
 # An absent or null attempt is a different event from an unreadable one: nothing
 # says the counter is broken, only that no attempt has been recorded yet. It
 # reads as 0, so the turn continues on 0/3 and the next reviewer run writes a
