@@ -1001,6 +1001,51 @@ rm -rf "$NOJQ_BIN"
 enforce_case 0 "no jq and no python3 -> exit 0 + warning" \
   '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'WARNING' - /var/empty
 
+# ---------- enforce-loop.sh : one verdict buys one re-dispatch ----------
+# Nothing in the repo deletes loop-state.json, and attempt only grows when a
+# reviewer runs — so a loop the user walked away from (Esc, a change of subject,
+# a closed session) leaves a BLOCK on disk that never ages out. Without a
+# consume-once mark, every later turn of every later session ends in exit 2
+# telling the model to re-dispatch a coder for a phase nobody is working on.
+
+later_turn() {  # <proj> <session-id> -> exit code of one Stop with no reviewer in between
+  local rc=0
+  printf '{"session_id":"%s","hook_event_name":"Stop","stop_hook_active":false}' "$2" \
+    | CLAUDE_PROJECT_DIR="$1" bash "$HOOKS_DIR/$E" >/dev/null 2>&1 || rc=$?
+  printf '%s' "$rc"
+}
+
+PROJ=$(new_proj)
+printf '{"last_verdict":"BLOCK","attempt":1}\n' > "$PROJ/$STATE_REL"
+RC1=$(later_turn "$PROJ" s1)
+RC2=$(later_turn "$PROJ" a-later-session)
+RC3=$(later_turn "$PROJ" a-different-session-days-later)
+GOT_A=$(state_field "$PROJ/$STATE_REL" attempt)
+rm -rf "$PROJ"
+if [ "$RC1" -eq 2 ] && [ "$RC2" -eq 0 ] && [ "$RC3" -eq 0 ] && [ "$GOT_A" = "1" ]; then
+  report 0 "$E" "an abandoned BLOCK blocks once, then lets later turns end"
+else
+  report 1 "$E" "an abandoned BLOCK blocks once, then lets later turns end (rc=$RC1/$RC2/$RC3 attempt=$GOT_A)"
+fi
+
+# The live loop is what must not change: the reviewer records a fresh verdict on
+# every cycle, and a fresh verdict is unspent. If consuming one leaked into the
+# next cycle, enforcement would switch itself off after the first attempt.
+PROJ=$(new_proj)
+assistant_jsonl "$PROJ/block.jsonl" '<verdict>BLOCK</verdict>'
+BLOCKED_TWICE=""
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/block.jsonl")" >/dev/null
+[ "$(later_turn "$PROJ" s1)" -eq 2 ] || BLOCKED_TWICE="first cycle did not block"
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/block.jsonl")" >/dev/null
+RC=0
+OUT=$(printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOKS_DIR/$E" 2>&1) || RC=$?
+rm -rf "$PROJ"
+if [ -z "$BLOCKED_TWICE" ] && [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -qF 'attempt 2/3'; then
+  report 0 "loop" "a new reviewer verdict re-arms enforcement (a live loop is unaffected)"
+else
+  report 1 "loop" "a new reviewer verdict re-arms enforcement ($BLOCKED_TWICE rc=$RC out='$OUT')"
+fi
+
 # ---------- settings.json wiring ----------
 # A hook that is written but not registered enforces nothing, and the failure
 # is invisible: the session just carries on as it did before.
