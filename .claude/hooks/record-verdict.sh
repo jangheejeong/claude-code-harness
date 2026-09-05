@@ -136,6 +136,12 @@ except (TypeError, ValueError):
     attempt = 0
 
 state["last_verdict"] = verdict
+# A new verdict has not been acted on yet. enforce-loop.sh flips this to true
+# when it spends the verdict on one re-dispatch, which is what keeps a loop the
+# user walked away from from blocking the end of every future turn. Do not drop
+# it as redundant bookkeeping: without it an abandoned BLOCK on disk is
+# indistinguishable from a live one.
+state["enforced"] = False
 if verdict == "APPROVE":
     state["attempt"] = 0  # the loop ended: hand the budget back to the next phase
 elif verdict == "UNKNOWN":

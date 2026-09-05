@@ -31,6 +31,7 @@ STATUS="ok"  # ok | bad-payload | bad-state
 STOP_ACTIVE="false"
 VERDICT=""
 ATTEMPT=0
+ENFORCED="false"
 if command -v jq >/dev/null 2>&1; then
   if ! printf '%s' "$INPUT" | jq -e 'type == "object"' >/dev/null 2>&1; then
     STATUS="bad-payload"
@@ -40,6 +41,7 @@ if command -v jq >/dev/null 2>&1; then
     STOP_ACTIVE=$(printf '%s' "$INPUT" | jq -r 'if .stop_hook_active then "true" else "false" end')
     VERDICT=$(jq -r '.last_verdict // ""' "$STATE_FILE")
     ATTEMPT=$(jq -r '.attempt // 0' "$STATE_FILE")
+    ENFORCED=$(jq -r 'if .enforced then "true" else "false" end' "$STATE_FILE")
   fi
 elif command -v python3 >/dev/null 2>&1; then
   OUT=$(printf '%s' "$INPUT" | python3 -c '
@@ -64,8 +66,10 @@ else:
 print("true" if (payload or {}).get("stop_hook_active") else "false")
 print((state or {}).get("last_verdict") or "")
 print((state or {}).get("attempt") or 0)
+print("true" if (state or {}).get("enforced") else "false")
 ' "$STATE_FILE" 2>/dev/null) || OUT=""
-  { IFS= read -r STATUS; IFS= read -r STOP_ACTIVE; IFS= read -r VERDICT; IFS= read -r ATTEMPT; } <<< "$OUT"
+  { IFS= read -r STATUS; IFS= read -r STOP_ACTIVE; IFS= read -r VERDICT
+    IFS= read -r ATTEMPT; IFS= read -r ENFORCED; } <<< "$OUT"
   [ -z "$STATUS" ] && STATUS="bad-payload"
 else
   warn "jq and python3 both missing — loop enforcement disabled"
@@ -124,6 +128,37 @@ needs_fixing() {  # <verdict>
 
 needs_fixing "$VERDICT" || exit 0
 
+# One verdict buys one re-dispatch. Nothing deletes loop-state.json and attempt
+# only grows when a reviewer runs, so a loop the user walked away from would
+# otherwise sit on disk holding the end of every future turn in every future
+# session — telling the model to re-dispatch a coder for a phase nobody is
+# working on. A live loop never notices: record-verdict.sh writes a fresh,
+# unspent verdict on every cycle.
+[ "$ENFORCED" = "true" ] && exit 0
+
+# Marks the verdict spent. Runs immediately before the exit 2 below, so a turn
+# is only ever released for a block that actually happened.
+mark_enforced() {
+  # python3 is the only in-place JSON editor this hook has. Where it is missing
+  # the mark is simply not written and enforcement degrades to what it did
+  # before consume-once existed: block every turn until a new verdict lands.
+  # Loud and wrong beats quiet and off.
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$STATE_FILE" <<'PY' 2>/dev/null || true
+import json, os, sys
+
+path = sys.argv[1]
+with open(path) as f:
+    state = json.load(f)
+state["enforced"] = True
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(state, f)
+    f.write("\n")
+os.replace(tmp, path)  # a reader sees the old file or the new one, never half of one
+PY
+}
+
 # Budget spent: let the turn end, because three more machine attempts will not
 # find what three already missed. Exit 0 here is "stop", not "passed" — the
 # message on stdout is what keeps it from reading as a clean finish.
@@ -135,6 +170,7 @@ fi
 
 # Exit 2 on Stop = "do not stop, continue the conversation". stderr is what the
 # model reads, so it has to be an instruction, not just a complaint.
+mark_enforced  # this block is the one re-dispatch this verdict pays for
 {
   echo "[enforce-loop] Reviewer verdict ${VERDICT} — the phase is not done (attempt ${ATTEMPT}/${MAX_ATTEMPTS})."
   echo "Re-dispatch the coder in fix mode with the reviewer's findings, then re-run the reviewer."
