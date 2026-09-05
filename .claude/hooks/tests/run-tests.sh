@@ -819,6 +819,46 @@ else
 fi
 rm -rf "$PROJ"
 
+# The one exit code this hook must never produce (D1). On SubagentStop, exit 2
+# means "prevent the subagent from stopping" — the read-only reviewer would be
+# told to keep going with nothing it is allowed to change.
+PROJ=$(new_proj)
+assistant_jsonl "$PROJ/block.jsonl" '<verdict>BLOCK</verdict>'
+assistant_jsonl "$PROJ/approve.jsonl" '<verdict>APPROVE</verdict>'
+printf 'garbage\n' > "$PROJ/garbage.jsonl"
+printf '\xff\xfe\x00 truncated {"type":"assistant"\n' > "$PROJ/binary.jsonl"
+printf '{"last_verdict":' > "$PROJ/$STATE_REL"  # a half-written counter, on purpose
+
+SAW_TWO=""
+for PAYLOAD in \
+  'not json at all' \
+  '{}' \
+  '[]' \
+  'null' \
+  '' \
+  '{"hook_event_name":"SubagentStop","agent_type":null}' \
+  "$(subagent_stop_json coder "$PROJ/block.jsonl")" \
+  "$(subagent_stop_json reviewer "$PROJ/block.jsonl")" \
+  "$(subagent_stop_json reviewer "$PROJ/approve.jsonl")" \
+  "$(subagent_stop_json reviewer "$PROJ/garbage.jsonl")" \
+  "$(subagent_stop_json reviewer "$PROJ/binary.jsonl")" \
+  "$(subagent_stop_json reviewer "$PROJ")" \
+  "$(subagent_stop_json reviewer /nonexistent/x.jsonl)" \
+  "$(subagent_stop_json reviewer '')"; do
+  RC=$(record_run "$PROJ" "$PAYLOAD")
+  [ "$RC" -eq 2 ] && SAW_TWO="$SAW_TWO|$PAYLOAD"
+done
+RC=0
+printf '%s' "$(subagent_stop_json reviewer "$PROJ/block.jsonl")" \
+  | env PATH=/var/empty CLAUDE_PROJECT_DIR="$PROJ" /bin/bash "$HOOKS_DIR/$R" >/dev/null 2>&1 || RC=$?
+[ "$RC" -eq 2 ] && SAW_TWO="$SAW_TWO|no-jq-no-python3"
+if [ -z "$SAW_TWO" ]; then
+  report 0 "$R" "no input produces exit 2 (D1: never stop the subagent from stopping)"
+else
+  report 1 "$R" "no input produces exit 2 (got 2 for: $SAW_TWO)"
+fi
+rm -rf "$PROJ"
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
