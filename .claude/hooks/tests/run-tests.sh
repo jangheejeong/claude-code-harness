@@ -1363,6 +1363,43 @@ else
   report 1 "$R" "no parser failure of any shape edits the state file ($STATE_TOUCHED)"
 fi
 
+# ---------- record-verdict.sh : it has to find its own parser ----------
+# The hook looks up run_phase.py next to itself, so how it was invoked decides
+# whether it finds it at all. settings.json uses an absolute path, but a
+# wrapper, a CI step or a hand run does not have to — and when the lookup
+# misses, the guard above is the only thing between a typo and a lost attempt.
+# These cases keep the trigger fixed rather than only its blast radius.
+
+REPO_ROOT=$(cd "$HOOKS_DIR/../.." && pwd)
+
+invocation_case() {  # <desc> <cwd> <hook-as-invoked>
+  local desc="$1" cwd="$2" as="$3" proj rc=0 got_v got_a
+  proj=$(new_proj)
+  assistant_jsonl "$proj/transcript.jsonl" '<verdict>BLOCK</verdict>'
+  ( cd "$cwd" && printf '%s' "$(subagent_stop_json reviewer "$proj/transcript.jsonl")" \
+      | CLAUDE_PROJECT_DIR="$proj" bash "$as" >/dev/null 2>&1 ) || rc=$?
+  got_v=$(state_field "$proj/$STATE_REL" last_verdict)
+  got_a=$(state_field "$proj/$STATE_REL" attempt)
+  rm -rf "$proj"
+  if [ "$rc" -eq 0 ] && [ "$got_v" = "BLOCK" ] && [ "$got_a" = "1" ]; then
+    report 0 "$R" "$desc"
+  else
+    report 1 "$R" "$desc (rc=$rc, got $got_v/$got_a, want BLOCK/1)"
+  fi
+}
+
+# `bash record-verdict.sh` from the hooks directory: $0 carries no slash, so
+# stripping a directory component off it leaves the file name itself.
+invocation_case "invoked by bare name from the hooks dir -> records BLOCK, attempt 1" \
+  "$HOOKS_DIR" "$R"
+
+# Through a symlink the parser lives next to the real file, not next to the link.
+SYMDIR=$(mktemp -d /tmp/hooktest-symlink-XXXXXX)
+ln -s "$HOOKS_DIR/$R" "$SYMDIR/hook.sh"
+invocation_case "invoked through a symlink -> records BLOCK, attempt 1" \
+  "$SYMDIR" "$SYMDIR/hook.sh"
+rm -rf "$SYMDIR"
+
 # ---------- both hooks : CLAUDE_PROJECT_DIR is not guaranteed ----------
 # Hooks are invoked with the variable set, but a wrapper script, a manual run or
 # a test harness can drop it. Neither hook may crash, and neither may reach for
