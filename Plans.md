@@ -69,8 +69,8 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
 
 #### Phase 1 리뷰 이월 사항
 
-- **[NEW][NIT] `run_phase.py:137`** — 에이전트 실행 경로의 `read_text` 만 `OSError` 무방비. 같은 파일 `report_verdict:70-73` 은 잡는데 여기만 비대칭이라, 터지면 traceback + exit `1` 이 나가고 D5 의 "1 = bad args" 와 구분이 안 된다. **Phase 2 착수 전에 처리** — Phase 2 훅이 `case $?` 로 분기하므로 exit code 의미가 겹치면 안 된다.
-- **[EXISTING] `run_phase.py:123`** — argparse 에러가 exit `2` 로 나가 D5 의 "2 = CLI missing" 과 충돌한다. base 커밋 `7573899` 에서도 재현되므로 본 diff 가 만든 게 아니다. 다만 위와 같은 이유로 **Phase 2 훅이 exit code 로 분기하기 전에 정리하는 편이 안전**하다. `argparse.ArgumentParser.error()` 를 오버라이드해 `1` 로 내린다.
+- ✅ **해결 (2026-09-05)** — **[NEW][NIT] `run_phase.py:137`** — 에이전트 실행 경로의 `read_text` 만 `OSError` 무방비. 같은 파일 `report_verdict:70-73` 은 잡는데 여기만 비대칭이라, 터지면 traceback + exit `1` 이 나가고 D5 의 "1 = bad args" 와 구분이 안 된다. **Phase 2 착수 전에 처리** — Phase 2 훅이 `case $?` 로 분기하므로 exit code 의미가 겹치면 안 된다.
+- ✅ **해결 (2026-09-05)** — **[EXISTING] `run_phase.py:123`** — argparse 에러가 exit `2` 로 나가 D5 의 "2 = CLI missing" 과 충돌한다. base 커밋 `7573899` 에서도 재현되므로 본 diff 가 만든 게 아니다. 다만 위와 같은 이유로 **Phase 2 훅이 exit code 로 분기하기 전에 정리하는 편이 안전**하다. `argparse.ArgumentParser.error()` 를 오버라이드해 `1` 로 내린다.
 - **[NEW][NIT] `HARNESS.md:173`** — `메인엔 status=OK 한 줄만` 문구가 이제 거짓. 리뷰어 경로는 `status=CHANGES` / `status=BLOCK` 도 낸다. **Phase 4 에서 처리** (Q2 의 단일 PR 결정 때문에 그 전에는 main 에 닿지 않음).
 - **Question → Phase 2 설계 입력** — 태그를 인용만 하고 자기 판정 태그를 빠뜨린 로그는 `UNKNOWN` 이 아니라 **인용된 값으로 파싱된다.** Phase 1 에서는 `UNKNOWN` 도 exit 0 이라 무해했지만, Phase 2 는 `APPROVE` 가 `attempt` 를 0 으로 리셋하고 `UNKNOWN` 은 리셋 없이 통과하므로 **차이가 생긴다.** Phase 2 에서 "마지막 태그가 파일의 마지막 비어있지 않은 줄일 때만 채택" 으로 조일지 판단할 것.
 - **Question → 별도 결정 필요** — `CLAUDE.md` 의 "기존 코드 전체를 포맷팅하지 않는다" 와 레포 자신의 `.claude/hooks/post-edit-lint.sh` (Edit/Write 마다 `ruff format`) 가 실제로 충돌한다. 이번 diff 의 재포맷은 코더의 선택이 아니라 훅의 결과였다. 어느 쪽을 조정할지는 본 계획 범위 밖.
