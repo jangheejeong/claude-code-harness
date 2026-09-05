@@ -93,7 +93,7 @@ def report_verdict(log_path: Path) -> int:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser()
+    p = UsageErrorParser()
     p.add_argument(
         "--subproject", required=True, help="Top-level subproject dir, e.g. api-server"
     )
