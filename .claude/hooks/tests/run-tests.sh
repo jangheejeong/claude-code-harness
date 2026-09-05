@@ -1117,6 +1117,39 @@ else
   report 1 "loop" "a new reviewer verdict re-arms enforcement ($BLOCKED_TWICE rc=$RC out='$OUT')"
 fi
 
+# A verdict that lands between this hook's read and its mark has not been reacted
+# to by anyone. The two hooks are separate processes on separate events and this
+# harness runs reviewers as background teammates, so a SubagentStop really can
+# land inside a Stop — but a test that waits for it would be timing, not a test.
+# The seam below is that interleaving made deterministic: a python3 that writes a
+# newer verdict into the state file and only then runs the real one, so the mark
+# always sees a state this hook never read. Stamping that newer verdict spent
+# would leave a BLOCK nobody answered, and the next Stop would let the turn end
+# — enforcement off in a live loop, the failure this phase exists to prevent.
+PROJ=$(new_proj)
+printf '{"last_verdict":"BLOCK","attempt":1,"enforced":false}\n' > "$PROJ/$STATE_REL"
+RACE_BIN=$(mktemp -d /tmp/hooktest-race-XXXXXX)
+cat > "$RACE_BIN/python3" <<EOF
+#!/bin/bash
+# mark_enforced is the only python3 call in the hook that reads its program from
+# stdin, so "\$1 is -" is exactly "the mark is about to be written".
+[ "\${1-}" = "-" ] && printf '{"last_verdict":"BLOCK","attempt":2,"enforced":false}\n' > "$PROJ/$STATE_REL"
+exec "$REAL_PY" "\$@"
+EOF
+chmod +x "$RACE_BIN/python3"
+RC=0
+ERR=$(printf '%s' "$(stop_json)" \
+  | env PATH="$RACE_BIN:$PATH" CLAUDE_PROJECT_DIR="$PROJ" /bin/bash "$HOOKS_DIR/$E" 2>&1 >/dev/null) || RC=$?
+GOT_A=$(state_field "$PROJ/$STATE_REL" attempt)
+GOT_E=$(state_field "$PROJ/$STATE_REL" enforced)
+rm -rf "$PROJ" "$RACE_BIN"
+if [ "$RC" -eq 2 ] && printf '%s' "$ERR" | grep -qF 'attempt 1/3' \
+   && [ "$GOT_A" = "2" ] && [ "$GOT_E" != "True" ]; then
+  report 0 "$E" "a verdict that landed after the read is left unspent"
+else
+  report 1 "$E" "a verdict that landed after the read is left unspent (rc=$RC attempt=$GOT_A enforced=$GOT_E err='$ERR')"
+fi
+
 # ---------- settings.json wiring ----------
 # A hook that is written but not registered enforces nothing, and the failure
 # is invisible: the session just carries on as it did before.
