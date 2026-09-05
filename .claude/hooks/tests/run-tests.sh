@@ -1065,6 +1065,44 @@ else
   report 1 "$A" "still cosmetic only, with no stake in the loop state"
 fi
 
+# ---------- record-verdict.sh + enforce-loop.sh : the budget end to end ----------
+# The two hooks only mean something together: one counts, the other stops. Run
+# them in the order a real session would and walk the budget to its end.
+PROJ=$(new_proj)
+# \n stays a JSON escape here: the transcript is one record per physical line.
+assistant_jsonl "$PROJ/transcript.jsonl" '### 결론\nBLOCK — 하드코딩된 토큰\n\n<verdict>BLOCK</verdict>'
+BLOCK_PAYLOAD=$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")
+
+loop_turn() {  # -> "<exit-code> <stdout+stderr>" of one reviewer-then-Stop cycle
+  local out rc=0
+  record_run "$PROJ" "$BLOCK_PAYLOAD" >/dev/null
+  out=$(printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOKS_DIR/$E" 2>&1) || rc=$?
+  printf '%s %s' "$rc" "$out"
+}
+
+TURN1=$(loop_turn)
+TURN2=$(loop_turn)
+TURN3=$(loop_turn)
+case "$TURN1 :: $TURN2 :: $TURN3" in
+  "2 "*"attempt 1/3"*"2 "*"attempt 2/3"*"사람 개입"*)
+    report 0 "loop" "three BLOCKs: continue, continue, then hand over to a human" ;;
+  *)
+    report 1 "loop" "three BLOCKs: continue, continue, then hand over to a human ($TURN1 :: $TURN2 :: $TURN3)" ;;
+esac
+
+# An APPROVE mid-loop hands the budget back, so the next phase starts from 3
+# again rather than inheriting a spent counter.
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>APPROVE</verdict>'
+RC=$(record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")")
+APPROVED=$(printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOKS_DIR/$E" 2>&1; printf ' rc=%s' "$?")
+if [ "$RC" -eq 0 ] && [ "$(state_field "$PROJ/$STATE_REL" attempt)" = "0" ] \
+   && [ "$APPROVED" = " rc=0" ]; then
+  report 0 "loop" "an APPROVE after a spent budget ends the loop and resets it"
+else
+  report 1 "loop" "an APPROVE after a spent budget ends the loop and resets it (rc=$RC out='$APPROVED')"
+fi
+rm -rf "$PROJ"
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
