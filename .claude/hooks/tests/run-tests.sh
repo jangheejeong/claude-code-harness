@@ -225,6 +225,16 @@ BLOCK — 하드코딩된 토큰
 
 <verdict>BLOCK</verdict>'
 
+# A reviewer may quote the tag inside its findings; only the closing one counts.
+verdict_case 5 "BLOCK" "multiple tags -> last one wins" \
+  '#### [NEW][CHANGES] run_phase.py:12 — 태그 누락
+개선안: 마지막 줄에 <verdict>APPROVE</verdict> 를 붙일 것
+
+### 결론
+BLOCK
+
+<verdict>BLOCK</verdict>'
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
