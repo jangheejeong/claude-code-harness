@@ -47,12 +47,19 @@ VERDICT_TAG = re.compile(
 )
 # The tag carries the reviewer's own wording; callers get the short form.
 VERDICT_ALIASES = {"REQUEST CHANGES": "CHANGES"}
-VERDICT_EXIT = {"APPROVE": 0, "CHANGES": 4, "BLOCK": 5}
+VERDICT_EXIT = {"APPROVE": 0, "CHANGES": 4, "BLOCK": 5, "UNKNOWN": 0}
 
 
 def parse_verdict(text: str) -> str:
-    """Extract the reviewer's machine-readable verdict from its log."""
-    tag = " ".join(VERDICT_TAG.findall(text)[-1].split()).upper()
+    """Extract the reviewer's machine-readable verdict from its log.
+
+    An agent that never emits the tag yields UNKNOWN, which maps to the
+    harness's pre-tag behavior — a missing tag must not read as a failure.
+    """
+    tags = VERDICT_TAG.findall(text)
+    if not tags:
+        return "UNKNOWN"
+    tag = " ".join(tags[-1].split()).upper()
     return VERDICT_ALIASES.get(tag, tag)
 
 
