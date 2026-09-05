@@ -22,10 +22,12 @@ Usage:
 Requires: `claude` CLI v2.1+ on PATH (except for --parse-verdict, which is pure).
 
 Exit codes:
-  0  agent finished, see log
+  0  agent finished, see log (verdict APPROVE or UNKNOWN)
   1  bad arguments
   2  claude CLI missing
   3  agent run failed (non-zero exit or timeout)
+  4  reviewer verdict REQUEST CHANGES
+  5  reviewer verdict BLOCK
 """
 
 from __future__ import annotations
