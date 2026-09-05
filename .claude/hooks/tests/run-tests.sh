@@ -770,6 +770,36 @@ record_state_case "reviewer UNKNOWN -> recorded, attempt left as it was" \
 record_state_case "reviewer REQUEST CHANGES -> recorded as CHANGES, attempt increments" \
   reviewer '<verdict>REQUEST CHANGES</verdict>' '{"last_verdict":"BLOCK","attempt":1}' CHANGES 2
 
+# Same headless-safe contract as announce-agent.sh: a payload this hook cannot
+# read is not a reason to disturb the session, and not a reason to invent state.
+survives_case() {  # <desc> <payload> [transcript-path-to-create]
+  local desc="$1" payload="$2" proj rc
+  proj=$(new_proj)
+  rc=$(record_run "$proj" "$payload")
+  if [ "$rc" -eq 0 ] && [ ! -f "$proj/$STATE_REL" ]; then
+    report 0 "$R" "$desc"
+  else
+    report 1 "$R" "$desc (rc=$rc)"
+  fi
+  rm -rf "$proj"
+}
+
+survives_case "garbage stdin -> exit 0, no state written" 'not json at all'
+survives_case "empty payload -> exit 0, no state written" '{}'
+survives_case "reviewer with a transcript path that does not exist -> exit 0" \
+  "$(subagent_stop_json reviewer /nonexistent/transcript.jsonl)"
+
+# A transcript whose lines are not JSON is a truncated write, not a verdict.
+PROJ=$(new_proj)
+printf 'half a line without a close\n' > "$PROJ/transcript.jsonl"
+RC=$(record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")")
+if [ "$RC" -eq 0 ] && [ "$(state_field "$PROJ/$STATE_REL" last_verdict)" = "UNKNOWN" ]; then
+  report 0 "$R" "unparseable transcript lines -> UNKNOWN, exit 0"
+else
+  report 1 "$R" "unparseable transcript lines -> UNKNOWN, exit 0 (rc=$RC)"
+fi
+rm -rf "$PROJ"
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
