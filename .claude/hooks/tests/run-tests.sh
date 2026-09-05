@@ -1044,12 +1044,16 @@ rm -rf "$NOJQ_BIN"
 enforce_case 0 "no jq and no python3 -> exit 0 + warning" \
   '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'WARNING' - /var/empty
 
-# ---------- enforce-loop.sh : one verdict buys one re-dispatch ----------
+# ---------- enforce-loop.sh : one verdict buys one reaction ----------
 # Nothing in the repo deletes loop-state.json, and attempt only grows when a
 # reviewer runs — so a loop the user walked away from (Esc, a change of subject,
 # a closed session) leaves a BLOCK on disk that never ages out. Without a
 # consume-once mark, every later turn of every later session ends in exit 2
 # telling the model to re-dispatch a coder for a phase nobody is working on.
+#
+# A re-dispatch is one reaction to a verdict; the hand-over-to-a-human banner an
+# exhausted budget prints is the other. Both are covered here, because a state
+# with attempt at 3 never reaches the exit 2 path at all.
 
 later_turn() {  # <proj> <session-id> -> exit code of one Stop with no reviewer in between
   local rc=0
@@ -1069,6 +1073,30 @@ if [ "$RC1" -eq 2 ] && [ "$RC2" -eq 0 ] && [ "$RC3" -eq 0 ] && [ "$GOT_A" = "1" 
   report 0 "$E" "an abandoned BLOCK blocks once, then lets later turns end"
 else
   report 1 "$E" "an abandoned BLOCK blocks once, then lets later turns end (rc=$RC1/$RC2/$RC3 attempt=$GOT_A)"
+fi
+
+# An exhausted budget exits 0, so it holds no turn — but it announces the
+# hand-over on stdout, and an abandoned one announces it on every message the
+# user sends, forever. Milder than the block above, same root cause: the
+# escalation is a reaction, and the verdict already paid for one.
+abandoned_turn() {  # <proj> <session-id> -> stdout of one Stop, no reviewer in between
+  printf '{"session_id":"%s","hook_event_name":"Stop","stop_hook_active":false}' "$2" \
+    | CLAUDE_PROJECT_DIR="$1" bash "$HOOKS_DIR/$E" 2>/dev/null
+}
+
+PROJ=$(new_proj)
+printf '{"last_verdict":"BLOCK","attempt":3}\n' > "$PROJ/$STATE_REL"
+OUT1=$(abandoned_turn "$PROJ" s1); RC1=$?
+OUT2=$(abandoned_turn "$PROJ" a-later-session); RC2=$?
+OUT3=$(abandoned_turn "$PROJ" a-different-session-days-later); RC3=$?
+GOT_A=$(state_field "$PROJ/$STATE_REL" attempt)
+rm -rf "$PROJ"
+if [ "$RC1" -eq 0 ] && [ "$RC2" -eq 0 ] && [ "$RC3" -eq 0 ] && [ "$GOT_A" = "3" ] \
+   && printf '%s' "$OUT1" | grep -qF '3/3' && printf '%s' "$OUT1" | grep -qF '사람 개입' \
+   && [ -z "$OUT2" ] && [ -z "$OUT3" ]; then
+  report 0 "$E" "an abandoned spent budget asks for a human once, then goes quiet"
+else
+  report 1 "$E" "an abandoned spent budget asks for a human once, then goes quiet (rc=$RC1/$RC2/$RC3 attempt=$GOT_A out1='$OUT1' out2='$OUT2' out3='$OUT3')"
 fi
 
 # The live loop is what must not change: the reviewer records a fresh verdict on
