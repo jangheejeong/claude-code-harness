@@ -162,6 +162,28 @@ fi
 unset CLAUDE_PROJECT_DIR
 rm -rf "$TMP_PROJ"
 
+# ---------- run_phase.py --parse-verdict ----------
+REPO_ROOT="$(cd "$HOOKS_DIR/../.." && pwd)"
+REVIEWER_MD="$REPO_ROOT/.claude/agents/reviewer.md"
+
+# The verdict tag must be the template's LAST line so a hook can read the
+# reviewer's conclusion by tailing the log instead of re-parsing the review.
+VERDICT_TEMPLATE_LINE='<verdict>APPROVE|REQUEST CHANGES|BLOCK</verdict>'
+TAG_LINE=$(grep -nxF "$VERDICT_TEMPLATE_LINE" "$REVIEWER_MD" | head -1 | cut -d: -f1)
+NEXT_LINE=$(awk -v n="$((${TAG_LINE:-0} + 1))" 'NR==n' "$REVIEWER_MD")
+if [ -n "$TAG_LINE" ] && [ "$NEXT_LINE" = '```' ]; then
+  report 0 "reviewer.md" "verdict tag is the last line of the output template"
+else
+  report 1 "reviewer.md" "verdict tag is the last line of the output template (line='$TAG_LINE' next='$NEXT_LINE')"
+fi
+
+if grep -qF '### 결론' "$REVIEWER_MD" && grep -qF '### 판정 표' "$REVIEWER_MD" \
+   && grep -qF '### Findings' "$REVIEWER_MD"; then
+  report 0 "reviewer.md" "결론 / 판정 표 / Findings sections intact"
+else
+  report 1 "reviewer.md" "결론 / 판정 표 / Findings sections intact"
+fi
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
