@@ -109,7 +109,13 @@ except (TypeError, ValueError):
     attempt = 0
 
 state["last_verdict"] = verdict
-state["attempt"] = attempt + 1
+if verdict == "APPROVE":
+    state["attempt"] = 0  # the loop ended: hand the budget back to the next phase
+elif verdict == "UNKNOWN":
+    state["attempt"] = attempt  # no judgement was made, so no attempt was spent
+else:
+    state["attempt"] = attempt + 1
+
 with open(path, "w") as f:
     json.dump(state, f)
     f.write("\n")
