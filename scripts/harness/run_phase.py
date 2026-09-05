@@ -45,6 +45,14 @@ from typing import NoReturn
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NOTES_DIR = REPO_ROOT / ".claude" / "notes"
 
+# Both parsers print this: the pre-scan one knows a single option, and its
+# generated usage line would otherwise hide every real option from a caller
+# who has just mistyped one.
+USAGE = (
+    "run_phase.py --subproject DIR --phase N --agent AGENT [options]\n"
+    "       run_phase.py --parse-verdict LOGFILE"
+)
+
 VERDICT_TAG = re.compile(
     r"<verdict>\s*(APPROVE|REQUEST\s+CHANGES|BLOCK)\s*</verdict>", re.IGNORECASE
 )
@@ -93,7 +101,7 @@ def report_verdict(log_path: Path) -> int:
 
 
 def parse_args() -> argparse.Namespace:
-    p = UsageErrorParser()
+    p = UsageErrorParser(usage=USAGE)
     p.add_argument(
         "--subproject", required=True, help="Top-level subproject dir, e.g. api-server"
     )
@@ -169,7 +177,7 @@ def verdict_log_arg(argv: list[str]) -> str | None:
     The main parser marks --subproject/--phase/--agent required, which would
     reject a standalone verdict lookup.
     """
-    peek = UsageErrorParser(add_help=False)
+    peek = UsageErrorParser(add_help=False, usage=USAGE)
     peek.add_argument("--parse-verdict", default=None)
     known, _ = peek.parse_known_args(argv)
     return known.parse_verdict
