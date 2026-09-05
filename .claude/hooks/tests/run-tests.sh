@@ -762,11 +762,17 @@ rm -rf "$PROJ"
 
 # The reviewer may quote a tag while deliberating; only its final answer counts.
 # Reading thinking blocks would let a rehearsed APPROVE reset the budget.
+#
+# The thinking block is filed after the answer and its own last line is a bare
+# tag, which is the only arrangement that tells the two rules apart: with the
+# block filter removed the placement rule finds the rehearsed APPROVE and the
+# budget resets. Thinking first would prove nothing — the text block's last line
+# wins either way.
 PROJ=$(new_proj)
 {
   printf '{"type":"assistant","message":{"content":['
-  printf '{"type":"thinking","thinking":"<verdict>APPROVE</verdict> 로 끝낼까 했지만"},'
-  printf '{"type":"text","text":"### 결론\\nBLOCK\\n\\n<verdict>BLOCK</verdict>"}'
+  printf '{"type":"text","text":"### 결론\\nBLOCK\\n\\n<verdict>BLOCK</verdict>"},'
+  printf '{"type":"thinking","thinking":"<verdict>APPROVE</verdict> 로 끝낼걸 그랬나:\\n<verdict>APPROVE</verdict>"}'
   printf ']}}\n'
 } > "$PROJ/transcript.jsonl"
 RC=$(record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")")

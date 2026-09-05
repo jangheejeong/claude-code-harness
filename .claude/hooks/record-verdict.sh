@@ -137,7 +137,7 @@ PY
 # Preserves keys this hook does not know about, so Phase 3 can add its own.
 record_state() {  # <verdict>
   python3 - "$STATE_FILE" "$1" <<'PY'
-import json, sys
+import json, os, sys
 
 path, verdict = sys.argv[1], sys.argv[2]
 try:
@@ -166,9 +166,14 @@ elif verdict == "UNKNOWN":
 else:
     state["attempt"] = attempt + 1
 
-with open(path, "w") as f:
+# open(path, "w") truncates first, and a Stop firing inside that window would
+# read a zero-byte file, warn and give up the turn. Rename instead: a reader
+# sees the old file or the new one, never half of one.
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
     json.dump(state, f)
     f.write("\n")
+os.replace(tmp, path)
 PY
 }
 
@@ -228,7 +233,10 @@ case "$VERDICT" in
     ;;
 esac
 
-mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true
+# Parameter expansion, not dirname: self_dir() above avoids external commands so
+# that a thin PATH cannot drown out this hook's one warning, and this line sits
+# under the same rule. STATE_FILE always carries a directory component.
+mkdir -p "${STATE_FILE%/*}" 2>/dev/null || true
 record_state "$VERDICT" || warn "could not write $STATE_FILE"
 
 exit 0
