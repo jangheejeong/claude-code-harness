@@ -65,9 +65,21 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
   - [ ] 에이전트 실행 경로: `--agent reviewer` 실행 후 로그의 verdict 가 BLOCK 이면 `[run_phase] status=BLOCK` 을 출력하고 exit `5` (기존 `status=OK` 회귀 금지)
 - **Risk**: 리뷰어가 태그를 빠뜨릴 수 있다 → `UNKNOWN`+exit 0 으로 안전하게 열어두고, Phase 2 의 훅이 `UNKNOWN` 을 "루프 비활성" 으로 취급한다. 침묵 실패가 아니라 기존 동작으로 되돌아가는 쪽.
 
+**Review: APPROVE — 2026-09-05.** 인수 기준 9/9 충족, 109/109 통과, 수정 루프 0/3 사용. 파싱 경로는 리뷰어의 실제 출력에 대고 실전 검증 완료 (`--parse-verdict` → `APPROVE`, rc 0). 이월 사항은 아래 참조.
+
+#### Phase 1 리뷰 이월 사항
+
+- **[NEW][NIT] `run_phase.py:137`** — 에이전트 실행 경로의 `read_text` 만 `OSError` 무방비. 같은 파일 `report_verdict:70-73` 은 잡는데 여기만 비대칭이라, 터지면 traceback + exit `1` 이 나가고 D5 의 "1 = bad args" 와 구분이 안 된다. **Phase 2 착수 전에 처리** — Phase 2 훅이 `case $?` 로 분기하므로 exit code 의미가 겹치면 안 된다.
+- **[EXISTING] `run_phase.py:123`** — argparse 에러가 exit `2` 로 나가 D5 의 "2 = CLI missing" 과 충돌한다. base 커밋 `7573899` 에서도 재현되므로 본 diff 가 만든 게 아니다. 다만 위와 같은 이유로 **Phase 2 훅이 exit code 로 분기하기 전에 정리하는 편이 안전**하다. `argparse.ArgumentParser.error()` 를 오버라이드해 `1` 로 내린다.
+- **[NEW][NIT] `HARNESS.md:173`** — `메인엔 status=OK 한 줄만` 문구가 이제 거짓. 리뷰어 경로는 `status=CHANGES` / `status=BLOCK` 도 낸다. **Phase 4 에서 처리** (Q2 의 단일 PR 결정 때문에 그 전에는 main 에 닿지 않음).
+- **Question → Phase 2 설계 입력** — 태그를 인용만 하고 자기 판정 태그를 빠뜨린 로그는 `UNKNOWN` 이 아니라 **인용된 값으로 파싱된다.** Phase 1 에서는 `UNKNOWN` 도 exit 0 이라 무해했지만, Phase 2 는 `APPROVE` 가 `attempt` 를 0 으로 리셋하고 `UNKNOWN` 은 리셋 없이 통과하므로 **차이가 생긴다.** Phase 2 에서 "마지막 태그가 파일의 마지막 비어있지 않은 줄일 때만 채택" 으로 조일지 판단할 것.
+- **Question → 별도 결정 필요** — `CLAUDE.md` 의 "기존 코드 전체를 포맷팅하지 않는다" 와 레포 자신의 `.claude/hooks/post-edit-lint.sh` (Edit/Write 마다 `ruff format`) 가 실제로 충돌한다. 이번 diff 의 재포맷은 코더의 선택이 아니라 훅의 결과였다. 어느 쪽을 조정할지는 본 계획 범위 밖.
+
 ### Phase 2 — 루프 예산이 실제로 강제된다
 
 `SubagentStop` 기록 + `Stop` 강제. 머지 시 "max 3" 이 처음으로 실행되는 규칙이 된다.
+
+> **Phase 1 실행 중 관찰 (2026-09-05)** — coder·tester·reviewer 세 서브에이전트가 **전부** 보고 없이 턴을 끝냈다. 작업물 자체는 정상이었지만 결과를 git·테스트로 우회 검증해야 했고, 리뷰 결과는 리뷰어에게 재요청해서야 받았다. `/work` 의 "Wait for the diff summary" 와 `/review` 의 "Render the reviewer's verdict" 는 **서브에이전트가 알아서 보고한다는 가정** 위에 서 있는데 3/3 으로 깨졌다. `record-verdict.sh` 가 `SubagentStop` 에서 결과를 디스크에 남기면 보고가 에이전트의 선의가 아니라 훅의 책임이 된다 — 본 Phase 의 가치가 계획 수립 시점보다 커졌다.
 
 - **Scope**: 기록 훅 + 강제 훅 + settings 등록 + 테스트
 - **Touched files (expected)**:
