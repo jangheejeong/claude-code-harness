@@ -23,9 +23,9 @@ Requires: `claude` CLI v2.1+ on PATH (except for --parse-verdict, which is pure)
 
 Exit codes:
   0  agent finished, see log (verdict APPROVE or UNKNOWN)
-  1  bad arguments
+  1  bad arguments (including any argparse usage error)
   2  claude CLI missing
-  3  agent run failed (non-zero exit or timeout)
+  3  agent run failed (non-zero exit, timeout, or unreadable log)
   4  reviewer verdict REQUEST CHANGES
   5  reviewer verdict BLOCK
 """
