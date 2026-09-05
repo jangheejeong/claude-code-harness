@@ -526,6 +526,13 @@ agent_run_case 4 "status=CHANGES" "reviewer REQUEST CHANGES -> status=CHANGES, e
 # back to OK is the documented Phase 1 risk mitigation, not a silent pass.
 agent_run_case 0 "status=OK" "reviewer echoing its own template -> status=OK" reviewer 0 \
   "$VERDICT_TEMPLATE_LINE"
+# The agent-run path reads the log through the same parser, so the placement
+# rule has to hold here too — otherwise a quoted tag still drives the exit code
+# on the only path Phase 2 actually runs.
+agent_run_case 0 "status=OK" "reviewer quoting the tag mid-log -> status=OK, not BLOCK" reviewer 0 \
+  '개선안: 마지막 줄에 <verdict>BLOCK</verdict> 를 붙일 것
+
+리뷰 계속'
 # A run that crashed cannot be trusted to have finished reviewing, so the
 # failure outranks the verdict sitting in the partial log: FAIL(1)/exit 3, not
 # BLOCK/exit 5. Phase 2 must retry the run, not spend a loop budget on it.
