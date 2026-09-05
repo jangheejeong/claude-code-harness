@@ -1854,6 +1854,20 @@ else
   report 1 "update.sh" "both the diff-report and the copy loop read that one list (found $LOOP_READERS)"
 fi
 
+# Criterion 2 — one definition, no second copy. A hook name written anywhere
+# else in the file is a list that can drift out of sync with this one, which is
+# the failure being fixed rather than a style preference.
+SECOND_COPIES=""
+for H in $MANAGED; do
+  N=$(grep -c -- "$H" "$UPDATE_SH")
+  [ "$N" -eq 1 ] || SECOND_COPIES="$SECOND_COPIES $H(x$N)"
+done
+if [ -z "$SECOND_COPIES" ]; then
+  report 0 "update.sh" "each hook name appears exactly once — no second list to drift"
+else
+  report 1 "update.sh" "each hook name appears exactly once — no second list to drift ($SECOND_COPIES)"
+fi
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
