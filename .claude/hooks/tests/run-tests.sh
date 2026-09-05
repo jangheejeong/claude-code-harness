@@ -212,6 +212,13 @@ APPROVE — 이슈 없음
 
 <verdict>APPROVE</verdict>'
 
+# Tag keeps the reviewer's own wording; the parsed value is normalized.
+verdict_case 4 "CHANGES" "REQUEST CHANGES -> stdout CHANGES, exit 4" \
+  '### 결론
+REQUEST CHANGES — 인수 기준 1건 미달
+
+<verdict>REQUEST CHANGES</verdict>'
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
