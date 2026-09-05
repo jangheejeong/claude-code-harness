@@ -410,6 +410,15 @@ BLOCK — 하드코딩된 토큰
 
 <verdict>BLOCK</verdict>'
 
+# "Last line" means last *non-empty* line: a log is a redirected stdout stream,
+# and a trailing newline or a stray space after the tag is not the agent
+# forgetting to judge.
+TRAIL_LOG=$(mktemp /tmp/hooktest-verdict-XXXXXX)
+printf '### 결론\nBLOCK\n\n<verdict>BLOCK</verdict>   \n\n\t\n\n' > "$TRAIL_LOG"
+verdict_file_case 5 "BLOCK" quiet "trailing blank lines and spaces after the tag -> still parses" \
+  "$TRAIL_LOG"
+rm -f "$TRAIL_LOG"
+
 # ---------- run_phase.py : usage errors exit 1, not 2 ----------
 # argparse exits 2 on any usage error, which collides with "2 = claude CLI
 # missing". A Phase 2 hook branching on `case $?` would read a typo as a
