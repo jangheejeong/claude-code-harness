@@ -123,6 +123,8 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
 
 무진전 감지(no-progress detection). 예산을 다 쓰기 전에 헛도는 루프를 끊는다.
 
+> **Phase 2 리뷰에서 이월 (2026-09-05)** — consume-once 를 도입하면서 **기록 실패의 방향이 뒤집혔다.** 예전에는 파서가 죽으면 옛 BLOCK 이 계속 차단해 시끄러웠는데, 지금은 옛 판정이 이미 소비돼 턴이 조용히 끝난다. 남는 신호는 `SubagentStop` stderr 한 줄뿐이고 그건 transcript 모드에서만 보인다. 선택지 A 를 고른 이상 불가피한 대가지만, **본 Phase 가 이 침묵을 드러낼 자리인지 결정할 것** — 무진전 감지가 "판정이 아예 기록되지 않은 사이클" 도 무진전으로 셀 수 있다면 같은 장치로 덮인다.
+
 - **Scope**: `loop-state.json` 에 diff 지문 추가 + `enforce-loop.sh` 분기 + 테스트
 - **Touched files (expected)**: `.claude/hooks/record-verdict.sh`, `.claude/hooks/enforce-loop.sh`, `.claude/hooks/tests/run-tests.sh`
 - **Out of scope**: 문서 (Phase 4)
@@ -145,6 +147,7 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
 - **Out of scope**: `google` 브랜치 포팅
 - **Acceptance** (TDD-ready):
   - [ ] 세 스킬 파일의 "max 3" 문구가 `.claude/hooks/enforce-loop.sh` 가 강제한다는 사실을 명시한다 (모델이 자율적으로 세는 게 아님)
+  - [ ] **리뷰어 이름 규약을 문서화한다** — `record-verdict.sh` 의 `reviewer | reviewer-*` 게이트가 이제 **루프 강제 전체의 on/off 를 결정하는 계약**인데 어디에도 적혀 있지 않다. 관찰된 이름 3종(`reviewer`, `reviewer-phase1`, `reviewer-phase2`)은 다 걸리지만, 리뷰어를 `phase3-reviewer` 나 `review-gate` 로 띄우면 Phase 2 가 통째로, 조용히 꺼진다. `work/SKILL.md` 와 `HARNESS.md` 에 "리뷰어 서브에이전트 이름은 `reviewer` 로 시작해야 한다" 를 명시할 것. (코드가 아니라 규약이 안 적힌 문제라 리뷰에서 차단 사유는 아니었다)
   - [ ] `work/SKILL.md` 에 **에이전트 수명 규칙**을 추가한다: 다음 서브에이전트를 띄우기 전에 이전 서브에이전트를 명시적으로 종료한다. **idle 은 종료가 아니다.** (2026-09-05 실제 발생: 완료된 `coder` 를 닫지 않은 채 다음 `coder` 를 띄워 두 에이전트가 같은 두 파일의 쓰기 권한을 동시에 보유. 앞 에이전트가 스스로 충돌을 감지하고 멈춰서 손상은 없었으나, 그 감지는 어디에도 규칙으로 없다. `work/SKILL.md:51` 의 worktree 격리는 사용자가 `--parallel` 을 명시한 경우만 다루므로 이 사각지대를 못 덮는다)
   - [ ] `HARNESS.md` 훅 목록에 `record-verdict.sh` / `enforce-loop.sh` 와 담당 이벤트가 등재된다
   - [ ] `README.md` 의 "BLOCK verdict" 절(현 `:276`)이 소진 시 실제 동작(exit 0 + 사람 개입 요청)을 기술한다
