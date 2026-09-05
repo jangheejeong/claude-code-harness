@@ -1868,6 +1868,20 @@ else
   report 1 "update.sh" "each hook name appears exactly once — no second list to drift ($SECOND_COPIES)"
 fi
 
+# Criterion 5 — "all 4 hooks" was true for years and then quietly was not. Any
+# count the user reads has to be derived from the list, so it cannot go stale
+# again the next time a hook is added.
+TYPED_COUNTS=""
+while IFS= read -r PHRASE; do
+  [ -n "$PHRASE" ] || continue
+  TYPED_COUNTS="$TYPED_COUNTS '$PHRASE'"
+done <<< "$(grep -oE '[0-9]+ hooks?' "$UPDATE_SH")"
+if [ -z "$TYPED_COUNTS" ] && grep -q 'echo .*\$HOOK_COUNT' "$UPDATE_SH"; then
+  report 0 "update.sh" "the hook count the user sees is counted from the list, never typed"
+else
+  report 1 "update.sh" "the hook count the user sees is counted from the list, never typed (typed:$TYPED_COUNTS)"
+fi
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
