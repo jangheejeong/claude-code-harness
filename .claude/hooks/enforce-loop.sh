@@ -149,20 +149,30 @@ needs_fixing "$VERDICT" || exit 0
 
 # Marks the verdict spent. Called on both reaction paths below and nowhere else,
 # so the mark only ever follows something the user actually saw.
-mark_enforced() {
+mark_enforced() {  # <verdict> <attempt>: the ones this run actually reacted to
   # python3 is the only in-place JSON editor this hook has. Where it is missing
   # the mark is simply not written and enforcement degrades to what it did
   # before consume-once existed: block every turn until a new verdict lands.
   # Loud and wrong beats quiet and off.
   command -v python3 >/dev/null 2>&1 || return 0
-  python3 - "$STATE_FILE" <<'PY' 2>/dev/null || true
+  python3 - "$STATE_FILE" "$1" "$2" <<'PY' 2>/dev/null || true
 import json, os, sys
 
-path = sys.argv[1]
+path, verdict, attempt = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path) as f:
     state = json.load(f)
+# record-verdict.sh may have written a newer verdict since this hook read the
+# file — SubagentStop and Stop are separate processes and the reviewer runs as a
+# background teammate, so nothing orders them. Stamping that one spent would
+# leave a verdict nobody reacted to already consumed, and the next Stop would
+# release the turn: enforcement silently off in a live loop. Only stamp the
+# verdict this run actually answered; a newer one stays armed for its own turn.
+# Do not simplify this back to "set enforced on whatever is on disk".
+if (str(state.get("last_verdict") or "") != verdict
+        or str(state.get("attempt") or 0) != attempt):
+    raise SystemExit(0)
 state["enforced"] = True
-tmp = path + ".tmp"
+tmp = "%s.%d.tmp" % (path, os.getpid())  # a name record-verdict.sh cannot be holding open
 with open(tmp, "w") as f:
     json.dump(state, f)
     f.write("\n")
@@ -174,7 +184,7 @@ PY
 # find what three already missed. Exit 0 here is "stop", not "passed" — the
 # message on stdout is what keeps it from reading as a clean finish.
 if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
-  mark_enforced  # this banner is the one reaction this verdict pays for
+  mark_enforced "$VERDICT" "$ATTEMPT"  # this banner is the one reaction this verdict pays for
   echo "[enforce-loop] 자동 수정 루프 ${ATTEMPT}/${MAX_ATTEMPTS} 소진 — 마지막 리뷰 판정은 ${VERDICT} 입니다."
   echo "성공이 아닙니다. 사람 개입이 필요합니다: 리뷰 findings 를 직접 확인하고 범위를 다시 정하세요."
   exit 0
@@ -182,7 +192,7 @@ fi
 
 # Exit 2 on Stop = "do not stop, continue the conversation". stderr is what the
 # model reads, so it has to be an instruction, not just a complaint.
-mark_enforced  # this block is the one reaction this verdict pays for
+mark_enforced "$VERDICT" "$ATTEMPT"  # this block is the one reaction this verdict pays for
 {
   echo "[enforce-loop] Reviewer verdict ${VERDICT} — the phase is not done (attempt ${ATTEMPT}/${MAX_ATTEMPTS})."
   echo "Re-dispatch the coder in fix mode with the reviewer's findings, then re-run the reviewer."
