@@ -57,6 +57,15 @@ def load(opener):
 payload = load(lambda: json.load(sys.stdin))
 state = load(lambda: json.load(open(sys.argv[1])))
 
+
+def one_line(value):
+    # A newline is the field separator below, so it cannot survive inside a
+    # value: one in last_verdict would push attempt down a line and make this
+    # branch read a budget the state file never held — an answer jq would not
+    # have given.
+    return str(value).replace("\n", " ").replace("\r", " ")
+
+
 if payload is None:
     print("bad-payload")
 elif state is None:
@@ -64,8 +73,8 @@ elif state is None:
 else:
     print("ok")
 print("true" if (payload or {}).get("stop_hook_active") else "false")
-print((state or {}).get("last_verdict") or "")
-print((state or {}).get("attempt") or 0)
+print(one_line((state or {}).get("last_verdict") or ""))
+print(one_line((state or {}).get("attempt") or 0))
 print("true" if (state or {}).get("enforced") else "false")
 ' "$STATE_FILE" 2>/dev/null) || OUT=""
   { IFS= read -r STATUS; IFS= read -r STOP_ACTIVE; IFS= read -r VERDICT

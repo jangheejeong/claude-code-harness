@@ -61,8 +61,17 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     d = {}
-print(d.get("agent_type") or d.get("subagent_type") or "unknown")
-print(d.get("agent_transcript_path") or "")
+
+
+def one_line(value):
+    # A newline is the field separator below, so it cannot survive inside a
+    # value: one in agent_type would push the transcript path up a line and
+    # make this branch read a verdict out of a file the payload never named.
+    return str(value).replace("\n", " ").replace("\r", " ")
+
+
+print(one_line(d.get("agent_type") or d.get("subagent_type") or "unknown"))
+print(one_line(d.get("agent_transcript_path") or ""))
 ' 2>/dev/null) || OUT=""
   { IFS= read -r AGENT; IFS= read -r TRANSCRIPT; } <<< "$OUT"
 else
