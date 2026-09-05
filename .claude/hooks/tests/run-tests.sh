@@ -1716,6 +1716,28 @@ enforce_case 0 "a newline in last_verdict -> exit 0 (jq)" \
   "$SHIFTED_STATE" "$(stop_json)" - -
 enforce_case 0 "a newline in last_verdict -> exit 0 (python3 fallback, same answer)" \
   "$SHIFTED_STATE" "$(stop_json)" - - "$EDGE_NOJQ"
+
+# The two readers disagree about what is true: jq's only falsy values are false
+# and null, python's also include 0, "", [] and {}. Both flags this hook reads
+# are booleans, so these values only arrive from a hand-edited state file or a
+# host that renders them differently — but "whether jq is installed changes
+# nothing else" is the contract, and an `enforced: 0` that looks spent to jq and
+# armed to python3 breaks it in the direction that switches enforcement off.
+# Both readers count JSON true and nothing else, so a mangled flag reads as unset
+# and the verdict stays armed. Phase 3 puts more keys in this file; they inherit
+# the same rule.
+for FALSY in 0 '""' '[]' '{}'; do
+  FALSY_STATE="{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"enforced\":$FALSY}"
+  enforce_case 2 "enforced: $FALSY is not true, so the verdict is still armed (jq)" \
+    "$FALSY_STATE" "$(stop_json)" 'attempt 1/3' -
+  enforce_case 2 "enforced: $FALSY is not true, so the verdict is still armed (python3 fallback)" \
+    "$FALSY_STATE" "$(stop_json)" 'attempt 1/3' - "$EDGE_NOJQ"
+done
+
+enforce_case 2 "stop_hook_active: 0 is not true, so the budget still bites (jq)" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json 0)" 'attempt 1/3' -
+enforce_case 2 "stop_hook_active: 0 is not true, so the budget still bites (python3 fallback)" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json 0)" 'attempt 1/3' - "$EDGE_NOJQ"
 rm -rf "$EDGE_NOJQ"
 
 # The same shift in record-verdict.sh is worse: a newline in agent_type pushes
