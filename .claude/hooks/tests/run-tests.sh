@@ -225,8 +225,9 @@ BLOCK — 하드코딩된 토큰
 
 <verdict>BLOCK</verdict>'
 
-# A reviewer may quote the tag inside its findings; only the closing one counts.
-verdict_case 5 "BLOCK" "multiple tags -> last one wins" \
+# A reviewer may quote the tag inside its findings; only the one on the log's
+# last non-empty line counts as its judgement.
+verdict_case 5 "BLOCK" "multiple tags -> the one on the last line wins" \
   '#### [NEW][CHANGES] run_phase.py:12 — 태그 누락
 개선안: 마지막 줄에 <verdict>APPROVE</verdict> 를 붙일 것
 
@@ -279,7 +280,7 @@ verdict_case 5 "BLOCK" "template line above a real verdict -> real one wins" \
   "$VERDICT_TEMPLATE_LINE
 <verdict>BLOCK</verdict>"
 
-verdict_case 5 "BLOCK" "tag quoted in a fenced block -> last one still wins" \
+verdict_case 5 "BLOCK" "tag fenced above a real verdict -> the last line wins" \
   '리뷰어는 이렇게 끝내야 한다:
 ```
 <verdict>APPROVE</verdict>
