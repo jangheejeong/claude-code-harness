@@ -382,6 +382,18 @@ usage_error_case "missing required arguments -> exit 1" --subproject x
 usage_error_case "unknown flag -> exit 1" \
   --subproject x --phase 1 --agent coder --bogus
 
+# The pre-scan parser knows only --parse-verdict, so its usage line used to
+# hide every real option from whoever had just mistyped one.
+PEEK_ERR=$(mktemp /tmp/hooktest-err-XXXXXX)
+python3 "$RUN_PHASE" --parse-verdict >/dev/null 2>"$PEEK_ERR"
+ERR=$(cat "$PEEK_ERR"); rm -f "$PEEK_ERR"
+if printf '%s' "$ERR" | grep -q -- '--subproject' \
+   && printf '%s' "$ERR" | grep -q -- '--parse-verdict'; then
+  report 0 "run_phase.py" "pre-scan usage line shows both invocation forms"
+else
+  report 1 "run_phase.py" "pre-scan usage line shows both invocation forms (err='$ERR')"
+fi
+
 # --help is not a usage error: overriding error() must not swallow it.
 HELP_OUT=$(python3 "$RUN_PHASE" --help 2>/dev/null)
 RC=$?
