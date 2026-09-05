@@ -892,6 +892,18 @@ enforce_case() {  # <expected-exit> <desc> <state|-> <payload> <want-stderr|-> <
 enforce_case 0 "no loop-state.json -> exit 0 (an ordinary turn is not a loop)" \
   - "$(stop_json)" - -
 
+# A BLOCK with budget left is the case the whole plan exists for: the turn must
+# not end, and the model has to be told what to do with the turn it just got
+# back. stderr is the only channel Stop's exit 2 gives us for that.
+enforce_case 2 "BLOCK at attempt 1 -> exit 2, stderr counts the attempt (1/3)" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'attempt 1/3' -
+
+enforce_case 2 "BLOCK at attempt 1 -> stderr names the verdict being acted on" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'BLOCK' -
+
+enforce_case 2 "BLOCK at attempt 1 -> stderr says to re-dispatch the coder" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'coder' -
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
