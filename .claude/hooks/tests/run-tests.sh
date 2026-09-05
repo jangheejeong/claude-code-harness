@@ -382,6 +382,15 @@ usage_error_case "missing required arguments -> exit 1" --subproject x
 usage_error_case "unknown flag -> exit 1" \
   --subproject x --phase 1 --agent coder --bogus
 
+# --help is not a usage error: overriding error() must not swallow it.
+HELP_OUT=$(python3 "$RUN_PHASE" --help 2>/dev/null)
+RC=$?
+if [ "$RC" -eq 0 ] && printf '%s' "$HELP_OUT" | grep -q -- '--parse-verdict'; then
+  report 0 "run_phase.py" "--help -> exit 0 with the option list"
+else
+  report 1 "run_phase.py" "--help -> exit 0 with the option list (rc=$RC)"
+fi
+
 # ---------- run_phase.py : agent run reports the reviewer's verdict ----------
 # The `claude` CLI exits 0 whatever the reviewer concluded, so a stub CLI is
 # enough to pin the status line the harness derives from the run's log.
@@ -432,6 +441,19 @@ agent_run_case 0 "status=OK" "reviewer echoing its own template -> status=OK" re
 # BLOCK/exit 5. Phase 2 must retry the run, not spend a loop budget on it.
 agent_run_case 3 "status=FAIL(1)" "crashed run outranks the verdict in its log" reviewer 1 \
   '<verdict>BLOCK</verdict>'
+
+# Exit 2 must keep meaning "claude CLI missing" — the Phase 2 hook routes on
+# it, and lowering the usage errors to 1 was only safe if 2 still says this.
+CLI_ERR=$(mktemp /tmp/hooktest-err-XXXXXX)
+RC=0
+env PATH=/var/empty "$REAL_PY" "$RUN_PHASE" --subproject "$TMP_SUBPROJ" \
+  --phase 999 --agent coder >/dev/null 2>"$CLI_ERR" || RC=$?
+ERR=$(cat "$CLI_ERR"); rm -f "$CLI_ERR"
+if [ "$RC" -eq 2 ] && printf '%s' "$ERR" | grep -q 'claude'; then
+  report 0 "run_phase.py" "agent run without the claude CLI -> exit 2"
+else
+  report 1 "run_phase.py" "agent run without the claude CLI -> exit 2 (rc=$RC err='$ERR')"
+fi
 
 rm -rf "$TMP_SUBPROJ"
 rm -f "$REPO_ROOT"/.claude/notes/phase-999-*.log
