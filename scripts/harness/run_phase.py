@@ -65,7 +65,12 @@ def parse_verdict(text: str) -> str:
 
 def report_verdict(log_path: Path) -> int:
     """Print the verdict of a reviewer log and map it to an exit code."""
-    verdict = parse_verdict(log_path.read_text(errors="replace"))
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError as exc:
+        print(f"ERROR: cannot read verdict log {log_path}: {exc}", file=sys.stderr)
+        return 1
+    verdict = parse_verdict(text)
     print(verdict)
     return VERDICT_EXIT[verdict]
 
