@@ -1278,6 +1278,29 @@ else
   report 1 "$R" "the verdict parser cannot run -> no loop-state.json, warning, exit 0 (rc=$RC state=$STATE_AFTER err='$ERR')"
 fi
 
+# The same with a budget already in flight, which is when it matters: a review
+# mid-loop has two of its three attempts spent, and a hook that cannot read the
+# verdict has no business touching either field. Compared byte for byte — a
+# rewrite that happens to preserve the values still means the hook decided
+# something it had no basis to decide.
+PROJ=$(new_proj)
+ORPHAN=$(orphan_hook)
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+printf '{"last_verdict":"BLOCK","attempt":2}\n' > "$PROJ/$STATE_REL"
+cp "$PROJ/$STATE_REL" "$PROJ/state.before"
+ERR=$(printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$ORPHAN/.claude/hooks/$R" 2>&1 >/dev/null)
+RC=$?
+SAME=0
+cmp -s "$PROJ/state.before" "$PROJ/$STATE_REL" || SAME=1
+STATE_AFTER=$(cat "$PROJ/$STATE_REL" 2>/dev/null)
+rm -rf "$ORPHAN" "$PROJ"
+if [ "$RC" -eq 0 ] && [ "$SAME" -eq 0 ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
+  report 0 "$R" "the verdict parser cannot run -> an in-flight loop-state.json is untouched"
+else
+  report 1 "$R" "the verdict parser cannot run -> an in-flight loop-state.json is untouched (rc=$RC state=$STATE_AFTER err='$ERR')"
+fi
+
 # ---------- both hooks : CLAUDE_PROJECT_DIR is not guaranteed ----------
 # Hooks are invoked with the variable set, but a wrapper script, a manual run or
 # a test harness can drop it. Neither hook may crash, and neither may reach for
