@@ -939,6 +939,13 @@ enforce_case 0 "BLOCK at attempt 3 -> stdout still names the unresolved verdict"
 enforce_case 0 "BLOCK at attempt 4 -> exit 0, still past the budget" \
   '{"last_verdict":"BLOCK","attempt":4}' "$(stop_json)" - '사람 개입'
 
+# stop_hook_active means this turn only exists because a Stop hook blocked the
+# previous one. Blocking again would re-block our own continuation forever;
+# Claude Code caps that at 8, but the budget of 3 is meant to bite first, and
+# this guard is what makes it possible to bite at all.
+enforce_case 0 "stop_hook_active=true -> exit 0, no second block on our own continuation" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json true)" - -
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
