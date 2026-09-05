@@ -800,6 +800,25 @@ else
 fi
 rm -rf "$PROJ"
 
+# No JSON reader at all: the hook goes quiet rather than half-recording, but it
+# says so — a loop budget that silently stopped being counted is worse than one
+# that is loudly not counted.
+PROJ=$(new_proj)
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+ERR=$(printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
+  | env PATH=/var/empty CLAUDE_PROJECT_DIR="$PROJ" /bin/bash "$HOOKS_DIR/$R" 2>&1 >/dev/null)
+RC=$?
+# The warning has to be the only thing on stderr: a shell error alongside it
+# reads as a broken hook and trains the reader to ignore the channel.
+if [ "$RC" -eq 0 ] && printf '%s' "$ERR" | grep -qi 'WARNING' \
+   && ! printf '%s' "$ERR" | grep -q 'command not found' \
+   && [ ! -f "$PROJ/$STATE_REL" ]; then
+  report 0 "$R" "no jq and no python3 -> warning on stderr, exit 0"
+else
+  report 1 "$R" "no jq and no python3 -> warning on stderr, exit 0 (rc=$RC err='$ERR')"
+fi
+rm -rf "$PROJ"
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
