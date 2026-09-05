@@ -13,8 +13,11 @@
 
 set -u
 
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-RUN_PHASE="$HOOK_DIR/../../scripts/harness/run_phase.py"
+# Shell-builtin only: this runs before the jq/python3 check, and on a host
+# without them a `dirname: command not found` would drown out the one warning
+# this hook exists to print. The hook and the parser ship in the same repo, so
+# the path is derived from $0 rather than from $CLAUDE_PROJECT_DIR.
+RUN_PHASE="${0%/*}/../../scripts/harness/run_phase.py"
 STATE_FILE="${CLAUDE_PROJECT_DIR:-.}/.claude/notes/loop-state.json"
 
 warn() { echo "[record-verdict] WARNING: $*" >&2; }
