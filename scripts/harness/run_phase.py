@@ -56,6 +56,9 @@ USAGE = (
 VERDICT_TAG = re.compile(
     r"<verdict>\s*(APPROVE|REQUEST\s+CHANGES|BLOCK)\s*</verdict>", re.IGNORECASE
 )
+# Same tag, but only where it is allowed to count: at the very end of the log
+# once trailing whitespace is stripped, i.e. on its last non-empty line.
+FINAL_VERDICT_TAG = re.compile(VERDICT_TAG.pattern + r"\Z", re.IGNORECASE)
 # The tag carries the reviewer's own wording; callers get the short form.
 VERDICT_ALIASES = {"REQUEST CHANGES": "CHANGES"}
 VERDICT_EXIT = {"APPROVE": 0, "CHANGES": 4, "BLOCK": 5, "UNKNOWN": 0}
@@ -75,17 +78,39 @@ class UsageErrorParser(argparse.ArgumentParser):
         raise SystemExit(1)
 
 
+def short_verdict(raw: str) -> str:
+    """Normalize a tag's own wording to the short form callers branch on."""
+    tag = " ".join(raw.split()).upper()
+    return VERDICT_ALIASES.get(tag, tag)
+
+
 def parse_verdict(text: str) -> str:
     """Extract the reviewer's machine-readable verdict from its log.
 
-    An agent that never emits the tag yields UNKNOWN, which maps to the
-    harness's pre-tag behavior — a missing tag must not read as a failure.
+    Only a tag on the log's last non-empty line counts — do not relax this
+    back to "last tag anywhere". A reviewer that quotes the tag while writing
+    up a finding and then forgets to judge would otherwise have its quote read
+    as a real verdict, and in the loop hooks a stray APPROVE resets the retry
+    budget for free.
+
+    Tightening trades one silent failure for another: should the CLI ever
+    append anything after the tag, every verdict turns UNKNOWN and loop
+    enforcement switches off wholesale. So a misplaced tag says so on stderr,
+    while a log with no tag at all stays quiet — that one is the documented
+    backward-compatible path, not an anomaly.
     """
-    tags = VERDICT_TAG.findall(text)
-    if not tags:
-        return "UNKNOWN"
-    tag = " ".join(tags[-1].split()).upper()
-    return VERDICT_ALIASES.get(tag, tag)
+    final = FINAL_VERDICT_TAG.search(text.rstrip())
+    if final:
+        return short_verdict(final.group(1))
+    stray = VERDICT_TAG.findall(text)
+    if stray:
+        print(
+            f"WARNING: ignoring {len(stray)} <verdict> tag(s) "
+            f"(last: {short_verdict(stray[-1])}) — a verdict only counts on the "
+            "log's last non-empty line; reading the verdict as UNKNOWN",
+            file=sys.stderr,
+        )
+    return "UNKNOWN"
 
 
 def report_verdict(log_path: Path) -> int:
