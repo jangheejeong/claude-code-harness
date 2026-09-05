@@ -739,6 +739,27 @@ record_state_case "reviewer BLOCK, no prior state -> last_verdict=BLOCK, attempt
 record_state_case "reviewer BLOCK again -> attempt increments 1 -> 2" \
   reviewer '<verdict>BLOCK</verdict>' '{"last_verdict":"BLOCK","attempt":1}' BLOCK 2
 
+# A reviewer spawned as a teammate arrives under its teammate name — this repo's
+# own .claude/notes/agent-activity.log carries reviewer-phase1 and
+# reviewer-phase2. An exact match switches the whole loop off on that path, and
+# nothing anywhere records that it was off.
+record_state_case "reviewer spawned as reviewer-phase2 -> still records BLOCK" \
+  reviewer-phase2 '<verdict>BLOCK</verdict>' - BLOCK 1
+record_state_case "reviewer spawned as reviewer-phase1 -> still resets on APPROVE" \
+  reviewer-phase1 '<verdict>APPROVE</verdict>' '{"last_verdict":"BLOCK","attempt":2}' APPROVE 0
+
+# The prefix is a prefix, not a substring: an agent that merely has "reviewer"
+# in its name does not own the loop counter.
+PROJ=$(new_proj)
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+RC=$(record_run "$PROJ" "$(subagent_stop_json code-reviewer "$PROJ/transcript.jsonl")")
+if [ "$RC" -eq 0 ] && [ ! -f "$PROJ/$STATE_REL" ]; then
+  report 0 "$R" "code-reviewer is not the reviewer -> no loop-state.json, exit 0"
+else
+  report 1 "$R" "code-reviewer is not the reviewer -> no loop-state.json, exit 0 (rc=$RC)"
+fi
+rm -rf "$PROJ"
+
 # The reviewer may quote a tag while deliberating; only its final answer counts.
 # Reading thinking blocks would let a rehearsed APPROVE reset the budget.
 PROJ=$(new_proj)
