@@ -43,6 +43,12 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
 
 ## Phases (vertical slices)
 
+> **실행 순서 변경 (2026-09-06)** — **1 → 2 → 4 → (후속) 3.** 번호는 그대로 두고 순서만 바꾼다 (이미 여러 커밋·노트가 "Phase 3 = 무진전 감지", "Phase 4 = 문서" 로 참조하고 있어 renumber 하면 그 참조가 전부 거짓이 된다).
+>
+> 이유: Phase 2 를 머지해도 **하네스를 쓰는 다른 프로젝트에서는 아무 일도 일어나지 않는다.** `update.sh:84`·`:194` 가 복사하는 훅이 `block-destructive protect-secrets announce-agent post-edit-lint` 하드코딩 4개라 신규 훅 두 개가 전파되지 않고, `:89` 는 `settings.json` 을 *"installed only when the project has none"* 으로 다뤄 기존 프로젝트에 새 훅이 등록될 일이 없다. 거기에 `HARNESS.md:173` 은 이제 거짓이고, 세 스킬 파일의 "max 3" 은 여전히 모델이 센다는 뜻으로 읽힌다.
+>
+> 즉 지금 상태로 머지하면 **"루프 강제를 만들었다" 가 사실이 아니다** — 이 레포에서만 참이고, 문서는 반대를 말하고, 리뷰어 이름 하나 잘못 지으면 조용히 꺼진다. Phase 4 는 그 셋을 닫아 "만들었다" 를 사실로 만드는 작업이고, Phase 3(무진전 감지)은 그게 사실이 된 뒤에 얹는 개선이다. 무한 루프는 이미 예산 상한 3회가 막고 있으므로 Phase 3 부재가 위험을 남기지 않는다.
+
 ### Phase 1 — verdict 가 기계 판독 가능해진다
 
 리뷰어 출력 → 파싱 → exit code 까지 한 줄로 관통하는 슬라이스. 이것만 머지해도 "BLOCK 이 OK 로 보고되는" 문제가 사라진다.
@@ -132,7 +138,9 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
 - **[NEW][NIT] `run-tests.sh:1729-1740`** — 진리값 테스트의 **python3 쪽 절반이 공허하다.** 고른 값(`0`,`""`,`[]`,`{}`)이 python 에서 원래 falsy 라, `enforce-loop.sh:84` 의 `is True` 를 맨 truthiness 로 되돌려도 247/247 그대로 통과한다 (직접 뮤테이션 확인). 두 리더가 갈리는 값은 **truthy 이지만 `true` 는 아닌** 쪽 — `1`, `"true"`, `[1]` — 으로 옮겨갔는데 표에 없다. 코드는 맞고 테스트만 못 잡는다. `stop_hook_active` 짝도 같은 상태. **Phase 3 착수 시 함께 처리** — Phase 3 이 같은 파일에 키를 얹으므로 그때 안전망이 필요하다.
 - **Question → Phase 3** — 레이스 테스트의 이음새(`run-tests.sh:1136`)는 `mark_enforced` 가 훅의 유일한 `python3 -` 호출이라는 데 의존한다. 깨지는 방향은 안전하지만(가짜가 읽기 시점에 발화하면 `attempt` 불일치로 시끄럽게 죽는다), 그 제약이 **테스트 파일에만** 적혀 있어 훅을 고치는 사람은 못 본다. Phase 3 이 같은 이음새를 재사용한다면 헬퍼로 뽑으면서 `enforce-loop.sh` 쪽에도 주석을 남길 것.
 
-### Phase 3 — 같은 자리를 맴돌면 즉시 멈춘다
+### Phase 3 — 같은 자리를 맴돌면 즉시 멈춘다 (후속 티켓으로 연기, 2026-09-06)
+
+> **본 PR 에 포함하지 않는다.** 무한 루프는 이미 예산 상한 3회가 막고 있어 부재가 위험을 남기지 않는다. 무진전 감지는 루프를 *더 일찍* 멈추는 개선이다. 아래 이월 NIT 2건(진리값 테스트 안전망, 레이스 이음새 문서화)도 본 Phase 착수 시에만 의미가 있으므로 함께 간다.
 
 무진전 감지(no-progress detection). 예산을 다 쓰기 전에 헛도는 루프를 끊는다.
 
@@ -149,16 +157,26 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
   - [ ] `last_diff_sha` 가 없는 상태(첫 사이클) → 무진전으로 판정하지 않는다
 - **Risk**: coder 가 테스트만 추가하고 프로덕션 코드를 안 고친 경우도 diff 는 바뀐다 → 무진전 감지는 **완전한 그물이 아니라 하한선**이다. 진짜 판정은 리뷰어가 한다.
 
-### Phase 4 — 문서가 실제 동작과 일치한다
+### Phase 4 — 만든 것이 실제로 전파되고, 문서가 그것과 일치한다
 
-산문 "max 3" 이 훅을 가리키게 만들고, 아키텍처 문서에 루프 계층을 반영한다.
+**실행 순서상 Phase 2 다음.** 산문 "max 3" 이 훅을 가리키게 만들고, 신규 훅이 다른 프로젝트에도 실제로 설치되게 한다.
 
-- **Scope**: 스킬 3종 + HARNESS.md + README 2종 동기화
+- **Scope**: `update.sh` 전파 + 스킬 3종 + HARNESS.md + README 2종 동기화
 - **Touched files (expected)**:
+  - `update.sh` — 훅 목록 2곳(`:84`, `:194`) + `settings.json` 취급(`:89`) + 안내 문구(`:16`, `:146`)
   - `.claude/skills/work/SKILL.md:34`, `.claude/skills/review/SKILL.md:22`, `.claude/skills/orchestrator/SKILL.md:35`
   - `HARNESS.md`, `README.md`, `README.en.md`
-- **Out of scope**: `google` 브랜치 포팅
+- **Out of scope**: `google` 브랜치 포팅 (별도 작업), Phase 3 의 무진전 감지
 - **Acceptance** (TDD-ready):
+
+  전파 — `[EXISTING][CHANGES]`, 본 diff 가 만든 건 아니지만 신규 훅이 생겨서 드러났다
+  - [ ] `update.sh:84` 과 `:194` 의 하드코딩 훅 목록에 `record-verdict.sh` 와 `enforce-loop.sh` 가 포함된다. **두 곳 다** — 한쪽만 고치면 diff 보고와 실제 복사가 어긋난다
+  - [ ] 목록이 한 곳에 정의되고 두 루프가 그것을 참조한다 (같은 목록을 두 번 적는 구조가 이 누락을 만들었다)
+  - [ ] `settings.json` 이 이미 있는 프로젝트에서 `update.sh` 를 돌리면, 새 훅 두 개가 **등록되지 않았다는 사실이 출력에 명시된다.** 조용히 파일만 복사하고 끝내지 않는다 (파일만 있고 등록이 없으면 기능이 죽은 채로 설치된 것과 같다)
+  - [ ] 그 경우 사용자가 붙여넣을 수 있는 `settings.json` 스니펫(`Stop` + `SubagentStop` 항목)이 출력되거나, 문서의 해당 절을 가리킨다
+  - [ ] `update.sh --help` / 상단 주석의 "all 4" 류 문구가 실제 개수와 일치한다
+
+  문서
   - [ ] 세 스킬 파일의 "max 3" 문구가 `.claude/hooks/enforce-loop.sh` 가 강제한다는 사실을 명시한다 (모델이 자율적으로 세는 게 아님)
   - [ ] **리뷰어 이름 규약을 문서화한다** — `record-verdict.sh` 의 `reviewer | reviewer-*` 게이트가 이제 **루프 강제 전체의 on/off 를 결정하는 계약**인데 어디에도 적혀 있지 않다. 관찰된 이름 3종(`reviewer`, `reviewer-phase1`, `reviewer-phase2`)은 다 걸리지만, 리뷰어를 `phase3-reviewer` 나 `review-gate` 로 띄우면 Phase 2 가 통째로, 조용히 꺼진다. `work/SKILL.md` 와 `HARNESS.md` 에 "리뷰어 서브에이전트 이름은 `reviewer` 로 시작해야 한다" 를 명시할 것. (코드가 아니라 규약이 안 적힌 문제라 리뷰에서 차단 사유는 아니었다)
   - [ ] `work/SKILL.md` 에 **에이전트 수명 규칙**을 추가한다: 다음 서브에이전트를 띄우기 전에 이전 서브에이전트를 명시적으로 종료한다. **idle 은 종료가 아니다.** (2026-09-05 실제 발생: 완료된 `coder` 를 닫지 않은 채 다음 `coder` 를 띄워 두 에이전트가 같은 두 파일의 쓰기 권한을 동시에 보유. 앞 에이전트가 스스로 충돌을 감지하고 멈춰서 손상은 없었으나, 그 감지는 어디에도 규칙으로 없다. `work/SKILL.md:51` 의 worktree 격리는 사용자가 `--parallel` 을 명시한 경우만 다루므로 이 사각지대를 못 덮는다)
@@ -173,7 +191,7 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
 ## Open questions (해결됨 — 2026-09-05)
 
 - [x] **Q1 — verdict 어휘.** `<verdict>` 태그 안에는 `REQUEST CHANGES` (reviewer.md 의 기존 `### 결론` 표기와 동일), `run_phase.py` 의 파싱 결과 문자열은 `CHANGES` 로 정규화. Phase 1 인수 기준이 이미 이 형태다.
-- [x] **Q2 — PR 단위.** 4개 Phase 를 `feat/loop-enforcement` 한 브랜치에 누적하고 **PR 1개**. 훅·스크립트·문서가 서로 맞물려서, 부분 머지된 중간 상태(예: verdict 태그는 있는데 훅이 없는)가 더 헷갈리기 때문. `/release` 는 Phase 4 이후에 한 번만 호출한다.
+- [x] **Q2 — PR 단위.** (2026-09-06 갱신: Phase 3 이 후속 티켓으로 빠져 **PR 범위는 Phase 1 + 2 + 4**.) `feat/loop-enforcement` 한 브랜치에 누적하고 **PR 1개**. 훅·스크립트·문서가 서로 맞물려서, 부분 머지된 중간 상태(예: verdict 태그는 있는데 훅이 없는)가 더 헷갈리기 때문. `/release` 는 Phase 4 이후에 한 번만 호출한다.
 
 ## Approval
 
