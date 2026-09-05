@@ -61,6 +61,15 @@ needs_fixing() {  # <verdict>
 
 needs_fixing "$VERDICT" || exit 0
 
+# Budget spent: let the turn end, because three more machine attempts will not
+# find what three already missed. Exit 0 here is "stop", not "passed" — the
+# message on stdout is what keeps it from reading as a clean finish.
+if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+  echo "[enforce-loop] 자동 수정 루프 ${ATTEMPT}/${MAX_ATTEMPTS} 소진 — 마지막 리뷰 판정은 ${VERDICT} 입니다."
+  echo "성공이 아닙니다. 사람 개입이 필요합니다: 리뷰 findings 를 직접 확인하고 범위를 다시 정하세요."
+  exit 0
+fi
+
 # Exit 2 on Stop = "do not stop, continue the conversation". stderr is what the
 # model reads, so it has to be an instruction, not just a complaint.
 {
