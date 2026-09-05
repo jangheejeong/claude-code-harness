@@ -419,6 +419,23 @@ verdict_file_case 5 "BLOCK" quiet "trailing blank lines and spaces after the tag
   "$TRAIL_LOG"
 rm -f "$TRAIL_LOG"
 
+# The case the rule exists for: the reviewer quoted the tag while writing up a
+# finding and then never judged. Reading the quote as a judgement would hand
+# Phase 2 an APPROVE that resets the retry budget for free.
+verdict_placement_case 0 "UNKNOWN" warn "tag quoted mid-findings, none at the end -> UNKNOWN + warning" \
+  '#### [NEW][CHANGES] run_phase.py:12 — 태그 누락
+개선안: 마지막 줄에 <verdict>APPROVE</verdict> 를 붙일 것
+
+### 결론
+리뷰 계속'
+
+verdict_placement_case 0 "UNKNOWN" warn "tag only inside a fenced block -> UNKNOWN + warning" \
+  '리뷰어는 이렇게 끝내야 한다:
+```
+<verdict>BLOCK</verdict>
+```
+이상.'
+
 # ---------- run_phase.py : usage errors exit 1, not 2 ----------
 # argparse exits 2 on any usage error, which collides with "2 = claude CLI
 # missing". A Phase 2 hook branching on `case $?` would read a typo as a
