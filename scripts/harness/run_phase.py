@@ -40,6 +40,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NOTES_DIR = REPO_ROOT / ".claude" / "notes"
@@ -50,6 +51,20 @@ VERDICT_TAG = re.compile(
 # The tag carries the reviewer's own wording; callers get the short form.
 VERDICT_ALIASES = {"REQUEST CHANGES": "CHANGES"}
 VERDICT_EXIT = {"APPROVE": 0, "CHANGES": 4, "BLOCK": 5, "UNKNOWN": 0}
+
+
+class UsageErrorParser(argparse.ArgumentParser):
+    """An ArgumentParser whose usage errors exit 1 instead of argparse's 2.
+
+    D5 already spends 2 on "claude CLI missing", and the Phase 2 hooks branch
+    on `case $?` — leaving argparse's default would make an argument typo
+    indistinguishable from a missing CLI.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        print(f"ERROR: {message}", file=sys.stderr)
+        raise SystemExit(1)
 
 
 def parse_verdict(text: str) -> str:
@@ -146,7 +161,7 @@ def verdict_log_arg(argv: list[str]) -> str | None:
     The main parser marks --subproject/--phase/--agent required, which would
     reject a standalone verdict lookup.
     """
-    peek = argparse.ArgumentParser(add_help=False)
+    peek = UsageErrorParser(add_help=False)
     peek.add_argument("--parse-verdict", default=None)
     known, _ = peek.parse_known_args(argv)
     return known.parse_verdict
