@@ -241,6 +241,19 @@ verdict_case 0 "UNKNOWN" "no tag -> stdout UNKNOWN, exit 0" \
   '### 결론
 APPROVE — 태그를 모르는 구버전 리뷰어 출력'
 
+# A wrong path is a caller bug (exit 1), and must read as one — a Python
+# traceback would be indistinguishable from the script itself crashing.
+MISSING_ERR=$(mktemp /tmp/hooktest-err-XXXXXX)
+MISSING_OUT=$(python3 "$RUN_PHASE" --parse-verdict /nonexistent/review.log 2>"$MISSING_ERR")
+RC=$?
+ERR=$(cat "$MISSING_ERR"); rm -f "$MISSING_ERR"
+if [ "$RC" -eq 1 ] && [ -z "$MISSING_OUT" ] && printf '%s' "$ERR" | grep -q 'ERROR' \
+   && ! printf '%s' "$ERR" | grep -q 'Traceback'; then
+  report 0 "run_phase.py" "missing log file -> exit 1 with a readable error"
+else
+  report 1 "run_phase.py" "missing log file -> exit 1 with a readable error (rc=$RC out='$MISSING_OUT')"
+fi
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
