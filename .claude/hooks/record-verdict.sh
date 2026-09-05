@@ -137,14 +137,38 @@ final_assistant_text "$TRANSCRIPT" > "$ANSWER" 2>/dev/null || {
   exit 0
 }
 
-# run_phase.py owns the placement rule; exit 1 means it could not read the file.
-# The other exit codes (0/4/5) all carry a verdict on stdout.
+# run_phase.py owns the placement rule. Exactly three exit codes carry a verdict
+# on stdout: 0 = APPROVE/UNKNOWN, 4 = CHANGES, 5 = BLOCK (D5).
+#
+# The list is of the codes that DO carry a verdict, not of the known failure
+# ones — do not narrow it back to `[ "$PARSE_RC" -eq 1 ]`. Filtering only the
+# documented failure lets every undocumented one through: python3's own exit 2
+# when $RUN_PHASE is not there, a traceback from a future change to the parser.
+# Those arrive with VERDICT empty, and an empty verdict is the worst value this
+# hook can write — record_state counts it as a spent attempt (one of the three
+# gone), while enforce-loop.sh reads it as "no verdict to enforce" and releases
+# the turn. The counter this hook exists to keep would be corrupted by the very
+# failure nobody looks at.
 PARSE_RC=0
 VERDICT=$(python3 "$RUN_PHASE" --parse-verdict "$ANSWER") || PARSE_RC=$?
-if [ "$PARSE_RC" -eq 1 ]; then
-  warn "run_phase.py could not parse the verdict — nothing recorded"
-  exit 0
-fi
+case "$PARSE_RC" in
+  0 | 4 | 5) ;;
+  *)
+    warn "run_phase.py exited $PARSE_RC without a verdict — nothing recorded"
+    exit 0
+    ;;
+esac
+
+# Checked separately on purpose: the exit code and the word on stdout can fail
+# independently. A parser that exits 0 having printed nothing (or something this
+# hook does not know) must not reach record_state either.
+case "$VERDICT" in
+  APPROVE | CHANGES | BLOCK | UNKNOWN) ;;
+  *)
+    warn "run_phase.py printed no recognisable verdict ('${VERDICT}') — nothing recorded"
+    exit 0
+    ;;
+esac
 
 mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true
 record_state "$VERDICT" || warn "could not write $STATE_FILE"
