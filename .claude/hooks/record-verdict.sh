@@ -73,7 +73,15 @@ fi
 
 # Only the reviewer owns the loop counter. Anyone else stopping says nothing
 # about the review, so neither create nor touch the state file.
-[ "$AGENT" = "reviewer" ] || exit 0
+#
+# A reviewer spawned as a teammate arrives under its teammate name —
+# "reviewer-phase2" and the like, as .claude/notes/agent-activity.log shows. An
+# exact match turns the whole loop off on that path and leaves no trace that it
+# was off. The prefix stays a prefix: "code-reviewer" is somebody else.
+case "$AGENT" in
+  reviewer | reviewer-*) ;;
+  *) exit 0 ;;
+esac
 
 # Past this point python3 is not optional: the verdict parser is run_phase.py,
 # and reimplementing its placement rule in bash would let the two drift.
