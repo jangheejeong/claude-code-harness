@@ -121,6 +121,23 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def run_status(returncode: int, agent: str, log_path: Path) -> tuple[str, int]:
+    """Turn a finished agent run into a status label and this script's exit code.
+
+    The `claude` CLI exits 0 whatever the reviewer concluded, so without reading
+    the verdict out of the log a BLOCK would be reported as a clean success.
+    """
+    if returncode != 0:
+        return f"FAIL({returncode})", 3
+    if agent != "reviewer":
+        return "OK", 0
+
+    verdict = parse_verdict(log_path.read_text(errors="replace"))
+    if verdict in ("CHANGES", "BLOCK"):
+        return verdict, VERDICT_EXIT[verdict]
+    return "OK", 0
+
+
 def verdict_log_arg(argv: list[str]) -> str | None:
     """Peek for --parse-verdict ahead of the main parser.
 
@@ -222,11 +239,11 @@ def main() -> int:
             )
             return 3
 
-    status = "OK" if proc.returncode == 0 else f"FAIL({proc.returncode})"
+    status, exit_code = run_status(proc.returncode, args.agent, log_path)
     print(
         f"[run_phase] status={status} log={log_path.relative_to(REPO_ROOT)}", flush=True
     )
-    return 0 if proc.returncode == 0 else 3
+    return exit_code
 
 
 if __name__ == "__main__":
