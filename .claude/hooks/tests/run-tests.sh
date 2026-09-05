@@ -1301,6 +1301,68 @@ else
   report 1 "$R" "the verdict parser cannot run -> an in-flight loop-state.json is untouched (rc=$RC state=$STATE_AFTER err='$ERR')"
 fi
 
+# The empty string is the one value last_verdict must never take, whatever the
+# parser did. It is not a harmless placeholder: record_state counts "" as a
+# judgement and spends an attempt, while enforce-loop.sh finds no verdict it
+# recognises and releases the turn. One empty write burns a retry and switches
+# enforcement off in the same breath, which is why this is swept rather than
+# spot-checked — the exit code and the printed word fail independently.
+EMPTY_WRITES=""
+STATE_TOUCHED=""
+run_stubbed_parser() {  # <label> <hook-path> <proj> <state-before|-->
+  # Every parser this is called with failed to produce a verdict, so both of the
+  # hook's two guards are under test at once: the exit code and the word on
+  # stdout can fail independently, and neither may reach the state file.
+  local label="$1" hook="$2" proj="$3" before="$4" got after
+  printf '%s' "$(subagent_stop_json reviewer "$proj/transcript.jsonl")" \
+    | CLAUDE_PROJECT_DIR="$proj" bash "$hook" >/dev/null 2>&1
+  after=absent
+  [ -e "$proj/$STATE_REL" ] && after=$(cat "$proj/$STATE_REL" 2>/dev/null)
+  [ "$after" = "$before" ] || STATE_TOUCHED="$STATE_TOUCHED|$label -> $after"
+  [ -f "$proj/$STATE_REL" ] || return 0
+  got=$(state_field "$proj/$STATE_REL" last_verdict)
+  [ -n "$got" ] || EMPTY_WRITES="$EMPTY_WRITES|$label"
+}
+
+# Each parser below is a way for run_phase.py to come back with no verdict:
+# absent, silent, talkative but unrecognisable, or a real verdict word carried
+# out on an exit code that does not mean what it says.
+while IFS='|' read -r STUB_LABEL STUB_BODY; do
+  [ -n "$STUB_LABEL" ] || continue
+  for SEED in - '{"last_verdict":"BLOCK","attempt":1}'; do
+    PROJ=$(new_proj)
+    assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+    SEED_LABEL="on a fresh project"
+    BEFORE=absent
+    if [ "$SEED" != "-" ]; then
+      printf '%s\n' "$SEED" > "$PROJ/$STATE_REL"
+      BEFORE=$(cat "$PROJ/$STATE_REL")
+      SEED_LABEL="mid-budget"
+    fi
+    if [ "$STUB_BODY" = "-" ]; then ORPHAN=$(orphan_hook); else ORPHAN=$(orphan_hook "$STUB_BODY"); fi
+    run_stubbed_parser "$STUB_LABEL, $SEED_LABEL" "$ORPHAN/.claude/hooks/$R" "$PROJ" "$BEFORE"
+    rm -rf "$ORPHAN" "$PROJ"
+  done
+done <<'STUBS'
+no run_phase.py at all|-
+a parser that prints nothing and exits 0|import sys; sys.exit(0)
+a parser that prints an unknown word|print("LGTM")
+a verdict word on an exit code that carries none|import sys; print("BLOCK"); sys.exit(3)
+a parser that crashes|raise RuntimeError("boom")
+STUBS
+
+if [ -z "$EMPTY_WRITES" ]; then
+  report 0 "$R" "last_verdict is never written as an empty string"
+else
+  report 1 "$R" "last_verdict is never written as an empty string (empty after: $EMPTY_WRITES)"
+fi
+
+if [ -z "$STATE_TOUCHED" ]; then
+  report 0 "$R" "no parser failure of any shape edits the state file"
+else
+  report 1 "$R" "no parser failure of any shape edits the state file ($STATE_TOUCHED)"
+fi
+
 # ---------- both hooks : CLAUDE_PROJECT_DIR is not guaranteed ----------
 # Hooks are invoked with the variable set, but a wrapper script, a manual run or
 # a test harness can drop it. Neither hook may crash, and neither may reach for
