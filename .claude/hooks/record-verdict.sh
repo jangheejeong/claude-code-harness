@@ -53,7 +53,7 @@ AGENT="unknown"
 TRANSCRIPT=""
 if command -v jq >/dev/null 2>&1; then
   AGENT=$(printf '%s' "$INPUT" | jq -r '.agent_type // .subagent_type // "unknown"' 2>/dev/null) || AGENT="unknown"
-  TRANSCRIPT=$(printf '%s' "$INPUT" | jq -r '.agent_transcript_path // .transcript_path // ""' 2>/dev/null) || TRANSCRIPT=""
+  TRANSCRIPT=$(printf '%s' "$INPUT" | jq -r '.agent_transcript_path // ""' 2>/dev/null) || TRANSCRIPT=""
 elif command -v python3 >/dev/null 2>&1; then
   OUT=$(printf '%s' "$INPUT" | python3 -c '
 import json, sys
@@ -62,7 +62,7 @@ try:
 except Exception:
     d = {}
 print(d.get("agent_type") or d.get("subagent_type") or "unknown")
-print(d.get("agent_transcript_path") or d.get("transcript_path") or "")
+print(d.get("agent_transcript_path") or "")
 ' 2>/dev/null) || OUT=""
   { IFS= read -r AGENT; IFS= read -r TRANSCRIPT; } <<< "$OUT"
 else
@@ -163,7 +163,18 @@ with open(path, "w") as f:
 PY
 }
 
-if [ -z "$TRANSCRIPT" ] || [ ! -f "$TRANSCRIPT" ]; then
+# Only `agent_transcript_path` is the subagent's own transcript. `transcript_path`
+# in the same payload is the MAIN session's, and its last assistant text is
+# whatever the main session said — if that quoted a verdict, this hook would
+# record a judgement the reviewer never made. Do not restore it as a fallback:
+# on a build that does not send agent_transcript_path there is nothing here to
+# read, and silently reading the wrong file is the failure this hook exists to
+# remove.
+if [ -z "$TRANSCRIPT" ]; then
+  warn "payload carried no agent_transcript_path — verdict not recorded"
+  exit 0
+fi
+if [ ! -f "$TRANSCRIPT" ]; then
   warn "no readable agent transcript ('${TRANSCRIPT}') — verdict not recorded"
   exit 0
 fi
