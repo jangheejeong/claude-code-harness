@@ -933,6 +933,12 @@ enforce_case 0 "BLOCK at attempt 3 -> stdout asks for a human, not a success" \
 enforce_case 0 "BLOCK at attempt 3 -> stdout still names the unresolved verdict" \
   '{"last_verdict":"BLOCK","attempt":3}' "$(stop_json)" - 'BLOCK'
 
+# Past the boundary. A counter that overshot (a stale file, a hand edit, two
+# reviewers in one phase) must still let the turn end: the comparison is a
+# threshold, not an equality test.
+enforce_case 0 "BLOCK at attempt 4 -> exit 0, still past the budget" \
+  '{"last_verdict":"BLOCK","attempt":4}' "$(stop_json)" - '사람 개입'
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
