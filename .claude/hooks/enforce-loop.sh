@@ -25,39 +25,77 @@ INPUT=$(cat 2>/dev/null) || INPUT=""
 [ -f "$STATE_FILE" ] || exit 0
 
 # --- payload + state read: jq -> python3 -> warn + exit 0 (as in announce-agent.sh) ---
+# Both branches produce the same four values, STATUS first, so that a malformed
+# input is reported identically whichever reader the host happens to have.
+STATUS="ok"  # ok | bad-payload | bad-state
 STOP_ACTIVE="false"
 VERDICT=""
 ATTEMPT=0
 if command -v jq >/dev/null 2>&1; then
-  STOP_ACTIVE=$(printf '%s' "$INPUT" | jq -r 'if .stop_hook_active then "true" else "false" end' 2>/dev/null) || STOP_ACTIVE="false"
-  VERDICT=$(jq -r '.last_verdict // ""' "$STATE_FILE" 2>/dev/null) || VERDICT=""
-  ATTEMPT=$(jq -r '.attempt // 0' "$STATE_FILE" 2>/dev/null) || ATTEMPT=0
+  if ! printf '%s' "$INPUT" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    STATUS="bad-payload"
+  elif ! jq -e 'type == "object"' "$STATE_FILE" >/dev/null 2>&1; then
+    STATUS="bad-state"
+  else
+    STOP_ACTIVE=$(printf '%s' "$INPUT" | jq -r 'if .stop_hook_active then "true" else "false" end')
+    VERDICT=$(jq -r '.last_verdict // ""' "$STATE_FILE")
+    ATTEMPT=$(jq -r '.attempt // 0' "$STATE_FILE")
+  fi
 elif command -v python3 >/dev/null 2>&1; then
   OUT=$(printf '%s' "$INPUT" | python3 -c '
 import json, sys
 
-def as_dict(value):
-    return value if isinstance(value, dict) else {}
+def load(opener):
+    try:
+        value = opener()
+    except Exception:
+        return None
+    return value if isinstance(value, dict) else None
 
-try:
-    payload = as_dict(json.load(sys.stdin))
-except Exception:
-    payload = {}
-try:
-    with open(sys.argv[1]) as f:
-        state = as_dict(json.load(f))
-except Exception:
-    state = {}
+payload = load(lambda: json.load(sys.stdin))
+state = load(lambda: json.load(open(sys.argv[1])))
 
-print("true" if payload.get("stop_hook_active") else "false")
-print(state.get("last_verdict") or "")
-print(state.get("attempt") or 0)
+if payload is None:
+    print("bad-payload")
+elif state is None:
+    print("bad-state")
+else:
+    print("ok")
+print("true" if (payload or {}).get("stop_hook_active") else "false")
+print((state or {}).get("last_verdict") or "")
+print((state or {}).get("attempt") or 0)
 ' "$STATE_FILE" 2>/dev/null) || OUT=""
-  { IFS= read -r STOP_ACTIVE; IFS= read -r VERDICT; IFS= read -r ATTEMPT; } <<< "$OUT"
+  { IFS= read -r STATUS; IFS= read -r STOP_ACTIVE; IFS= read -r VERDICT; IFS= read -r ATTEMPT; } <<< "$OUT"
+  [ -z "$STATUS" ] && STATUS="bad-payload"
 else
   warn "jq and python3 both missing — loop enforcement disabled"
   exit 0
 fi
+
+# Anything unreadable releases the turn. A session held by a hook that no
+# longer knows what it is enforcing cannot be talked out of it — but say so,
+# because a budget that quietly stopped being counted is the exact failure
+# this hook was written to end.
+case "$STATUS" in
+  bad-payload)
+    warn "unreadable Stop payload — loop budget not enforced for this turn"
+    exit 0
+    ;;
+  bad-state)
+    warn "unreadable $STATE_FILE — loop budget not enforced for this turn"
+    exit 0
+    ;;
+esac
+
+# Valid JSON can still hold an uncountable attempt. Left alone it reaches
+# `[ "$ATTEMPT" -ge ... ]`, where bash's own error makes the comparison false
+# and the turn gets blocked on a number nobody can count.
+case "$ATTEMPT" in
+  '' | *[!0-9]*)
+    warn "attempt in $STATE_FILE is not a number ('$ATTEMPT') — loop budget not enforced"
+    exit 0
+    ;;
+esac
 
 # This turn only exists because a Stop hook blocked the previous one. Blocking
 # it again would re-block our own continuation on every turn; Claude Code caps
