@@ -1816,6 +1816,44 @@ else
   report 1 "loop" "a quoted tag with no judgement -> UNKNOWN, budget untouched, turn ends (rc=$RC got $GOT_V/$GOT_A)"
 fi
 
+# ---------- update.sh : propagation ----------
+# The hooks above only matter in this repo until update.sh carries them into the
+# projects that use the harness. update.sh clones over the network and copies
+# into the current directory, so nothing here runs it end to end: the helper half
+# is sourced in isolation and the rest is asserted against the file's text.
+
+UPDATE_SH="$REPO_ROOT/update.sh"
+
+# Sourced from a directory with no .claude/, so that a missing library guard
+# stops update.sh at its own sanity check instead of cloning anything.
+LIB_SAFE_DIR=$(mktemp -d /tmp/hooktest-lib-XXXXXX)
+
+update_lib() {  # <shell code> -> its stdout, after sourcing update.sh's helper half
+  ( cd "$LIB_SAFE_DIR" && HARNESS_UPDATE_LIB=1 . "$UPDATE_SH" && eval "$1" ) 2>/dev/null
+}
+
+MANAGED=$(update_lib 'printf "%s" "$MANAGED_HOOKS"')
+
+# Criterion 1 — both loops (diff report, copy) propagate every managed hook.
+# record-verdict.sh and enforce-loop.sh were in neither list, so no project
+# outside this repo ever received them.
+MISSING_FROM_LIST=""
+for H in block-destructive protect-secrets announce-agent post-edit-lint record-verdict enforce-loop; do
+  printf '%s' " $MANAGED " | grep -qF " $H " || MISSING_FROM_LIST="$MISSING_FROM_LIST $H"
+done
+if [ -z "$MISSING_FROM_LIST" ]; then
+  report 0 "update.sh" "the managed hook list names every hook the repo ships"
+else
+  report 1 "update.sh" "the managed hook list names every hook the repo ships (missing:$MISSING_FROM_LIST)"
+fi
+
+LOOP_READERS=$(grep -c 'for h in \$MANAGED_HOOKS' "$UPDATE_SH")
+if [ "$LOOP_READERS" -eq 2 ]; then
+  report 0 "update.sh" "both the diff-report and the copy loop read that one list"
+else
+  report 1 "update.sh" "both the diff-report and the copy loop read that one list (found $LOOP_READERS)"
+fi
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
