@@ -5,7 +5,7 @@ description: Run the full Plan → Work (TDD) → Review → Release loop end-to
 
 # /orchestrator — Full loop (TDD by default)
 
-End-to-end harness. The user types `/orchestrator <natural-language task>` once and the orchestrator runs the rest, stopping at three hard gates — plan approval, fix-loop exhaustion (3 attempts), PR merge — plus a per-phase optional stop after each review verdict.
+End-to-end harness. The user types `/orchestrator <natural-language task>` once and the orchestrator runs the rest, stopping at three hard gates — plan approval, the fix loop ending without an APPROVE (3 attempts spent, or stalled on an unchanged working tree), PR merge — plus a per-phase optional stop after each review verdict.
 
 ## Sequence (with stops)
 
@@ -20,7 +20,7 @@ for phase in Plans.md:
                                               <- tester verifies TDD via git history + adds edge cases
     /review                                   <- reviewer (Fable) 4-lens on the phase diff
                                               <- BLOCK or REQUEST CHANGES → auto-fix loop max 3
-                                              ⛔ STOP if loop exhausts
+                                              ⛔ STOP if loop exhausts or stalls
                                               <- APPROVE → `Review: APPROVE` line in Plans.md
                                               -- STOP optional (skipped by --auto on APPROVE) --
     release steps (inline)                    <- documenter → CHANGELOG → docs commit → push → gh pr create
@@ -32,7 +32,8 @@ for phase in Plans.md:
 
 - One Phase at a time. `/work` flows directly into `/review` — no stop in between.
 - The per-phase optional stop sits **after** the `/review` verdict: post the gate summary and wait for the user. `next` runs the release steps and starts the next phase, `pause` stops, `parallel <N>` only on explicit signal.
-- On BLOCK or REQUEST CHANGES the auto-fix loop runs: spawn coder with the findings, re-run `/review` — 3 cycles, then ⛔ STOP. The count is not yours to keep: `.claude/hooks/record-verdict.sh` records every reviewer verdict in `.claude/notes/loop-state.json` and `.claude/hooks/enforce-loop.sh` reads it at the end of each main turn — while budget remains it exits 2 and refuses to let the turn end, and once the budget is spent it lets the turn end with a message saying this is not success and a human is needed. Reviewer subagents must be named `reviewer` or `reviewer-*`, or none of this fires.
+- On BLOCK or REQUEST CHANGES the auto-fix loop runs: spawn coder with the findings, re-run `/review` — 3 cycles, then ⛔ STOP. The count is not yours to keep: `.claude/hooks/record-verdict.sh` records every reviewer verdict in `.claude/notes/loop-state.json` and `.claude/hooks/enforce-loop.sh` reads it at the end of each main turn — while budget remains **and the working tree has moved since the last cycle** it exits 2 and refuses to let the turn end, and once the budget is spent it lets the turn end with a message saying this is not success and a human is needed. Reviewer subagents must be named `reviewer` or `reviewer-*`, or none of this fires.
+- **Budget left and the hook still exits 0** — read the stderr before assuming it passed. `무진전 중단` means the working tree fingerprints identically to the previous cycle: the coder's round reached no file, so the hook spends none of the remaining attempts. That is a stop, not a pass. Do not run another cycle and do not report success; ⛔ STOP and hand the findings to the user, the same as on exhaustion.
 - `/release` is user-invocable only (`disable-model-invocation: true` hides it from the model entirely), so the orchestrator does NOT invoke the skill. Instead it performs the same steps INLINE, following `.claude/skills/release/SKILL.md`: verify `Review: APPROVE` in Plans.md → documenter → CHANGELOG → Plans.md checkboxes → `docs(<scope>): phase <n> docs sync` commit → clean-tree check (`git status --porcelain` empty) → push → `gh pr create`. One PR per phase by default, or one cumulative PR if the user requests it.
 - `--auto` flag (off by default) skips the per-phase optional stop **only if** the review verdict is APPROVE. Plan approval and final PR merge gates are always preserved.
 - A summary is posted at every gate: completed Phase, TDD commit trail (red → green), diff size, verdict, next gate.
