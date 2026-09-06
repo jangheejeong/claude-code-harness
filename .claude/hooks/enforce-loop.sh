@@ -34,6 +34,8 @@ ATTEMPT=0
 ENFORCED="false"
 LAST_DIFF=""
 PREV_DIFF=""
+RECORD_FAILED="false"
+RECORD_FAILED_REASON=""
 if command -v jq >/dev/null 2>&1; then
   if ! printf '%s' "$INPUT" | jq -e 'type == "object"' >/dev/null 2>&1; then
     STATUS="bad-payload"
@@ -55,6 +57,8 @@ if command -v jq >/dev/null 2>&1; then
     # different ones.
     LAST_DIFF=$(jq -r '(.last_diff_sha // "") | tostring | gsub("[\n\r]"; " ")' "$STATE_FILE")
     PREV_DIFF=$(jq -r '(.prev_diff_sha // "") | tostring | gsub("[\n\r]"; " ")' "$STATE_FILE")
+    RECORD_FAILED=$(jq -r 'if .record_failed == true then "true" else "false" end' "$STATE_FILE")
+    RECORD_FAILED_REASON=$(jq -r '(.record_failed_reason // "") | tostring | gsub("[\n\r]"; " ")' "$STATE_FILE")
   fi
 elif command -v python3 >/dev/null 2>&1; then
   OUT=$(printf '%s' "$INPUT" | python3 -c '
@@ -93,10 +97,13 @@ print(one_line((state or {}).get("attempt") or 0))
 print("true" if (state or {}).get("enforced") is True else "false")
 print(one_line((state or {}).get("last_diff_sha") or ""))
 print(one_line((state or {}).get("prev_diff_sha") or ""))
+print("true" if (state or {}).get("record_failed") is True else "false")
+print(one_line((state or {}).get("record_failed_reason") or ""))
 ' "$STATE_FILE" 2>/dev/null) || OUT=""
   { IFS= read -r STATUS; IFS= read -r STOP_ACTIVE; IFS= read -r VERDICT
     IFS= read -r ATTEMPT; IFS= read -r ENFORCED
-    IFS= read -r LAST_DIFF; IFS= read -r PREV_DIFF; } <<< "$OUT"
+    IFS= read -r LAST_DIFF; IFS= read -r PREV_DIFF
+    IFS= read -r RECORD_FAILED; IFS= read -r RECORD_FAILED_REASON; } <<< "$OUT"
   [ -z "$STATUS" ] && STATUS="bad-payload"
 else
   warn "jq and python3 both missing — loop enforcement disabled"
@@ -117,6 +124,88 @@ case "$STATUS" in
     exit 0
     ;;
 esac
+
+# Every in-place edit of the state file goes through here, so that the rule they
+# all obey is written down once: read what is on disk now, change nothing unless
+# it still matches what this run reacted to, and swap the file in whole.
+#
+# The mode is a literal argument, and the race test in tests/run-tests.sh keys
+# its fake python3 on seeing "mark-enforced" there — it is how that test fires
+# exactly when the enforced mark is about to be written, and not on the hook's
+# other python3 calls. Passing the mode through stdin or an environment variable
+# would leave that seam unwritable, and the race it pins (a verdict landing
+# between this hook's read and its mark) is the one that switches enforcement
+# off in a live loop.
+state_edit() {  # mark-enforced <verdict> <attempt> | clear-record-failure <reason>
+  # python3 is the only in-place JSON editor this hook has. Where it is missing
+  # no mark is written and enforcement degrades to what it did before
+  # consume-once existed: react on every turn until a new verdict lands. Loud
+  # and wrong beats quiet and off.
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$1" "$STATE_FILE" "${2-}" "${3-}" <<'PY' 2>/dev/null || true
+import json, os, sys
+
+mode, path = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    state = json.load(f)
+
+if mode == "mark-enforced":
+    verdict, attempt = sys.argv[3], sys.argv[4]
+    # record-verdict.sh may have written a newer verdict since this hook read
+    # the file — SubagentStop and Stop are separate processes and the reviewer
+    # runs as a background teammate, so nothing orders them. Stamping that one
+    # spent would leave a verdict nobody reacted to already consumed, and the
+    # next Stop would release the turn: enforcement silently off in a live loop.
+    # Only stamp the verdict this run actually answered; a newer one stays armed
+    # for its own turn. Do not simplify this back to "set enforced on whatever
+    # is on disk".
+    if (str(state.get("last_verdict") or "") != verdict
+            or str(state.get("attempt") or 0) != attempt):
+        raise SystemExit(0)
+    state["enforced"] = True
+elif mode == "clear-record-failure":
+    reason = sys.argv[3]
+    # Same rule, same reason: a failure that landed after the read has not been
+    # announced to anybody. Clearing it would swallow it. Matching on the reason
+    # is what makes a *different* later failure survive this — an identical one
+    # is a message the user just read.
+    if (state.get("record_failed") is not True
+            or str(state.get("record_failed_reason") or "") != reason):
+        raise SystemExit(0)
+    state.pop("record_failed", None)
+    state.pop("record_failed_reason", None)
+else:
+    raise SystemExit(0)
+
+tmp = "%s.%d.tmp" % (path, os.getpid())  # a name record-verdict.sh cannot be holding open
+with open(tmp, "w") as f:
+    json.dump(state, f)
+    f.write("\n")
+os.replace(tmp, path)  # a reader sees the old file or the new one, never half of one
+PY
+}
+
+# Marks the verdict spent. Called on the reaction paths below and nowhere else,
+# so the mark only ever follows something the user actually saw.
+mark_enforced() {  # <verdict> <attempt>: the ones this run actually reacted to
+  state_edit mark-enforced "$1" "$2"
+}
+
+# A reviewer ran and record-verdict.sh could not write down what it decided. The
+# budget was not counted for that cycle and nothing downstream can recover it,
+# so this is reported and the turn is released: re-dispatching a coder does not
+# repair a parser, and the previous verdict was spent long ago. Announced once,
+# by the same "one reaction, then consumed" rule the verdict itself follows.
+#
+# Before the attempt guards on purpose — this fact does not depend on the
+# counter, and a state file with a broken attempt is exactly the kind that would
+# otherwise swallow it.
+if [ "$RECORD_FAILED" = "true" ]; then
+  state_edit clear-record-failure "$RECORD_FAILED_REASON"
+  echo "[enforce-loop] 리뷰어 판정이 기록되지 않았습니다: ${RECORD_FAILED_REASON}"
+  echo "이번 사이클은 루프 예산에 세어지지 않았습니다. 자동으로 고칠 수 있는 문제가 아니니, 훅과 파서 상태를 사람이 확인하세요."
+  exit 0
+fi
 
 # Valid JSON can still hold an uncountable attempt. Left alone it reaches
 # `[ "$ATTEMPT" -ge ... ]`, where bash's own error makes the comparison false
@@ -164,39 +253,6 @@ needs_fixing "$VERDICT" || exit 0
 # sends. A live loop never notices: record-verdict.sh writes a fresh, unspent
 # verdict on every cycle.
 [ "$ENFORCED" = "true" ] && exit 0
-
-# Marks the verdict spent. Called on both reaction paths below and nowhere else,
-# so the mark only ever follows something the user actually saw.
-mark_enforced() {  # <verdict> <attempt>: the ones this run actually reacted to
-  # python3 is the only in-place JSON editor this hook has. Where it is missing
-  # the mark is simply not written and enforcement degrades to what it did
-  # before consume-once existed: block every turn until a new verdict lands.
-  # Loud and wrong beats quiet and off.
-  command -v python3 >/dev/null 2>&1 || return 0
-  python3 - "$STATE_FILE" "$1" "$2" <<'PY' 2>/dev/null || true
-import json, os, sys
-
-path, verdict, attempt = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path) as f:
-    state = json.load(f)
-# record-verdict.sh may have written a newer verdict since this hook read the
-# file — SubagentStop and Stop are separate processes and the reviewer runs as a
-# background teammate, so nothing orders them. Stamping that one spent would
-# leave a verdict nobody reacted to already consumed, and the next Stop would
-# release the turn: enforcement silently off in a live loop. Only stamp the
-# verdict this run actually answered; a newer one stays armed for its own turn.
-# Do not simplify this back to "set enforced on whatever is on disk".
-if (str(state.get("last_verdict") or "") != verdict
-        or str(state.get("attempt") or 0) != attempt):
-    raise SystemExit(0)
-state["enforced"] = True
-tmp = "%s.%d.tmp" % (path, os.getpid())  # a name record-verdict.sh cannot be holding open
-with open(tmp, "w") as f:
-    json.dump(state, f)
-    f.write("\n")
-os.replace(tmp, path)  # a reader sees the old file or the new one, never half of one
-PY
-}
 
 # Budget spent: let the turn end, because three more machine attempts will not
 # find what three already missed. Exit 0 here is "stop", not "passed" — the

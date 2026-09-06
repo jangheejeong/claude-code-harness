@@ -1994,6 +1994,35 @@ else
   report 1 "loop" "a reviewer whose verdict could not be recorded is reported on the next turn (rc=$RC1/$RC2 out1='$OUT1' out2='$OUT2')"
 fi
 
+# The same interleaving as the verdict race, on the other mark: a reviewer can
+# fail to record while this hook is announcing the previous failure. Consuming
+# whatever is on disk would swallow a failure nobody has read, and that one is
+# gone for good — nothing re-announces it, because the reviewer that would have
+# re-marked it has already stopped.
+PROJ=$(new_proj)
+printf '{"record_failed":true,"record_failed_reason":"the first failure"}\n' > "$PROJ/$STATE_REL"
+CLEAR_BIN=$(mktemp -d /tmp/hooktest-clear-XXXXXX)
+cat > "$CLEAR_BIN/python3" <<EOF
+#!/bin/bash
+# Fires when the hook is about to clear the mark it announced, and not on its
+# other python3 calls: the edit mode is the first argument after the \`-\`.
+[ "\${2-}" = "clear-record-failure" ] && printf '{"record_failed":true,"record_failed_reason":"a second, later failure"}\n' > "$PROJ/$STATE_REL"
+exec "$REAL_PY" "\$@"
+EOF
+chmod +x "$CLEAR_BIN/python3"
+RC=0
+OUT=$(printf '%s' "$(stop_json)" \
+  | env PATH="$CLEAR_BIN:$PATH" CLAUDE_PROJECT_DIR="$PROJ" /bin/bash "$HOOKS_DIR/$E" 2>/dev/null) || RC=$?
+STILL_MARKED=$(state_field "$PROJ/$STATE_REL" record_failed)
+STILL_REASON=$(state_field "$PROJ/$STATE_REL" record_failed_reason)
+rm -rf "$PROJ" "$CLEAR_BIN"
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -qF 'the first failure' \
+   && [ "$STILL_MARKED" = "True" ] && [ "$STILL_REASON" = "a second, later failure" ]; then
+  report 0 "$E" "a failure that landed after the read is left unannounced, not consumed"
+else
+  report 1 "$E" "a failure that landed after the read is left unannounced, not consumed (rc=$RC marked=$STILL_MARKED reason='$STILL_REASON' out='$OUT')"
+fi
+
 # An unreadable state file cannot be un-marked, so it keeps the warning it had.
 # Announcing out of a file this hook could not parse would be inventing a fact.
 enforce_case 0 "a truncated state file is still just a warning -> exit 0" \
