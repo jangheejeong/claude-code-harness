@@ -1837,8 +1837,14 @@ MANAGED=$(update_lib 'printf "%s" "$MANAGED_HOOKS"')
 # Criterion 1 — both loops (diff report, copy) propagate every managed hook.
 # record-verdict.sh and enforce-loop.sh were in neither list, so no project
 # outside this repo ever received them.
+#
+# The oracle is the hooks directory, not a list typed here: a seventh hook added
+# to disk and forgotten in MANAGED_HOOKS is the exact drift this phase closed,
+# and a literal list here would pass right through it a second time.
 MISSING_FROM_LIST=""
-for H in block-destructive protect-secrets announce-agent post-edit-lint record-verdict enforce-loop; do
+for F in "$REPO_ROOT"/.claude/hooks/*.sh; do
+  [ -f "$F" ] || continue  # tests/ lives here too, and whatever lands here later
+  H=$(basename "$F" .sh)
   printf '%s' " $MANAGED " | grep -qF " $H " || MISSING_FROM_LIST="$MISSING_FROM_LIST $H"
 done
 if [ -z "$MISSING_FROM_LIST" ]; then
