@@ -2298,16 +2298,29 @@ else
   report 1 "$R" "an untracked new file moves the fingerprint (last='$FP4' before='$FP3')"
 fi
 
+# ...and so is the next edit to that same file. `?? path` is one line whatever
+# the file holds, so a fingerprint built out of names alone reads a coder
+# iterating on a module it never added as a coder that did nothing — and the
+# hook then says the tree is identical when it is not.
+printf 'a real second draft\n' > "$PROJ/untracked.txt"
+record_block "$PROJ"
+FP4B=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+if [ -n "$FP4B" ] && [ "$FP4B" != "$FP4" ]; then
+  report 0 "$R" "editing an untracked file moves the fingerprint, not just creating it"
+else
+  report 1 "$R" "editing an untracked file moves the fingerprint, not just creating it (last='$FP4B' before='$FP4')"
+fi
+
 # A commit moves it too, which is the ordinary case: the coder committed its
 # green checkpoint between the two reviews.
 git -C "$PROJ" add -A >/dev/null 2>&1
 git -C "$PROJ" commit -qm work --no-gpg-sign >/dev/null 2>&1
 record_block "$PROJ"
 FP5=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
-if [ -n "$FP5" ] && [ "$FP5" != "$FP4" ]; then
+if [ -n "$FP5" ] && [ "$FP5" != "$FP4B" ]; then
   report 0 "$R" "committing the same work still moves the fingerprint"
 else
-  report 1 "$R" "committing the same work still moves the fingerprint (last='$FP5' before='$FP4')"
+  report 1 "$R" "committing the same work still moves the fingerprint (last='$FP5' before='$FP4B')"
 fi
 rm -rf "$PROJ"
 
@@ -2401,6 +2414,24 @@ if [ "${MOVED1%% *}" -eq 2 ] && [ "${MOVED2%% *}" -eq 2 ] \
   report 0 "loop" "one edit between the cycles: the loop keeps its budget and continues"
 else
   report 1 "loop" "one edit between the cycles: the loop keeps its budget and continues ('$MOVED1' :: '$MOVED2')"
+fi
+
+# The same two cycles again, with the edit landing in a file the coder never
+# added — the ordinary shape of a coder rolling a new module before its first
+# commit. A fingerprint made of untracked *names* cannot see that, and the hook
+# then stops a live loop at 2/3 while saying the tree is identical. Both halves
+# are wrong: the stop and the sentence.
+PROJ=$(new_git_proj)
+printf 'first draft\n' > "$PROJ/newmodule.py"
+NEWFILE1=$(cycle "$PROJ")
+printf 'a real second draft\n' > "$PROJ/newmodule.py"
+NEWFILE2=$(cycle "$PROJ")
+rm -rf "$PROJ"
+if [ "${NEWFILE1%% *}" -eq 2 ] && [ "${NEWFILE2%% *}" -eq 2 ] \
+   && printf '%s' "$NEWFILE2" | grep -qF 'attempt 2/3'; then
+  report 0 "loop" "an edit to a never-added file keeps the loop running, not stopped as stalled"
+else
+  report 1 "loop" "an edit to a never-added file keeps the loop running, not stopped as stalled ('$NEWFILE1' :: '$NEWFILE2')"
 fi
 
 # ---------- update.sh : propagation ----------
