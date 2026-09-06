@@ -953,6 +953,13 @@ enforce_case 2 "BLOCK at attempt 1 -> stderr names the verdict being acted on" \
 enforce_case 2 "BLOCK at attempt 1 -> stderr says to re-dispatch the coder" \
   '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'coder' -
 
+# ...and not only the coder. The findings decide who fixes them: the review that
+# produced this very case returned CHANGES whose entire fix was documentation,
+# and a model reading "re-dispatch the coder" literally puts a coder on a docs
+# pass.
+enforce_case 2 "BLOCK at attempt 1 -> stderr names the documenter as well" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'documenter' -
+
 # The reviewer's own wording, as it appears in the <verdict> tag. record-verdict
 # stores the normalized "CHANGES", but a state file written by hand or by an
 # older build carries the long form, and both mean "not done".
