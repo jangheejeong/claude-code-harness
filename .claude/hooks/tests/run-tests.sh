@@ -2319,7 +2319,10 @@ MANAGED=$(update_lib 'printf "%s" "$MANAGED_HOOKS"')
 # and a literal list here would pass right through it a second time.
 MISSING_FROM_LIST=""
 for F in "$REPO_ROOT"/.claude/hooks/*.sh; do
-  [ -f "$F" ] || continue  # tests/ lives here too, and whatever lands here later
+  # Not about tests/, which is a directory and does not match *.sh at all: this
+  # skips a directory that happens to be named something.sh, and the glob itself
+  # when the pattern matches nothing.
+  [ -f "$F" ] || continue
   H=$(basename "$F" .sh)
   printf '%s' " $MANAGED " | grep -qF " $H " || MISSING_FROM_LIST="$MISSING_FROM_LIST $H"
 done
@@ -2346,10 +2349,14 @@ fi
 # preference.
 drifting_lists() {  # <file> -> hook names introduced by more than one list
   local file="$1" found="" h n
+  # An assignment or a `for ... in` naming the hook. The assignment may be
+  # exported, declared or appended to — `+=` in particular reads as adding to the
+  # one list while actually writing a second copy of the names. Prose that
+  # mentions a hook is left alone: it carries no names into the propagation loops.
+  local assign='^[[:space:]]*((local|export|readonly|declare)[[:space:]]+(-[A-Za-z]+[[:space:]]+)*)?[A-Za-z_][A-Za-z0-9_]*\+?=[^#]*'
+  local loop='^[[:space:]]*for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]][^#]*'
   for h in $MANAGED; do
-    # An assignment or a `for ... in` naming the hook. Prose that mentions one is
-    # left alone: it carries no names into the propagation loops.
-    n=$(grep -cE "^[[:space:]]*(local[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=[^#]*$h|^[[:space:]]*for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]][^#]*$h" "$file")
+    n=$(grep -cE "$assign$h|$loop$h" "$file")
     [ "$n" -eq 1 ] || found="$found $h(x$n)"
   done
   printf '%s' "${found# }"
