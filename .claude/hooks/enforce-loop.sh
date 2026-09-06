@@ -36,6 +36,30 @@ LAST_DIFF=""
 PREV_DIFF=""
 RECORD_FAILED="false"
 RECORD_FAILED_REASON=""
+
+# One rendering rule for every string-valued key this hook reads out of the
+# state file, written down once because its copies have already drifted apart
+# three times in this phase alone. A value is a JSON string with newlines
+# squashed to spaces, or it is nothing.
+#
+# The type test, and not `//`: jq falls through only on null and false while the
+# python3 branch below also falls through on 0, [] and {} — and these values'
+# *equality* is what decides an exit code and whether a mark is ever cleared. Do
+# not put `tostring` back. It is what made a `last_diff_sha: 0` stop the loop
+# under jq and re-dispatch under python3, and a `record_failed_reason: 0` be
+# announced by jq and then never recognised by python3's compare-and-set, so
+# the same two lines greeted every turn from then on.
+#
+# The squash is not cosmetic either: the python3 branch separates its fields by
+# newlines, so one surviving inside a value would push every later field down a
+# line and have this hook judge a budget the file never held.
+#
+# Every jq site that renders one of these keys goes through this variable, the
+# compare-and-set below included — what a run announces and what it later
+# matches have to be the same bytes. string_or_nothing() in the python3 branch
+# is this same rule in the other engine: change one and change the other.
+STATE_STRING_JQ='if (.[$k] | type) == "string" then .[$k] | gsub("[\n\r]"; " ") else "" end'
+
 if command -v jq >/dev/null 2>&1; then
   if ! printf '%s' "$INPUT" | jq -e 'type == "object"' >/dev/null 2>&1; then
     STATUS="bad-payload"
@@ -50,24 +74,20 @@ if command -v jq >/dev/null 2>&1; then
     VERDICT=$(jq -r '.last_verdict // ""' "$STATE_FILE")
     ATTEMPT=$(jq -r '.attempt // 0' "$STATE_FILE")
     ENFORCED=$(jq -r 'if .enforced == true then "true" else "false" end' "$STATE_FILE")
-    # A fingerprint is a JSON string or it is nothing. record-verdict.sh's
-    # record_state holds the other half of that rule — it only ever writes a
-    # string here or leaves the key out, and it refuses to stringify a corrupt
-    # one on the way — so a number, a list or a boolean is a hand-edited or
-    # corrupt file, not a tree anybody measured.
+    # record-verdict.sh's record_state holds the other half of the fingerprint
+    # rule — it only ever writes a string there or leaves the key out, and it
+    # refuses to stringify a corrupt one on the way — so a number, a list or a
+    # boolean is a hand-edited or corrupt file, not a tree anybody measured.
     # Reading it as absent keeps the loop running, and that is the deliberately
     # safe direction: stopping a loop that should continue is enforcement
     # switching itself off, which is the failure this hook exists to prevent.
-    #
-    # The type test, not `//`: jq falls through only on null and false while the
-    # python3 branch below also falls through on 0, [] and {}, and their
-    # *equality* decides whether the loop stops. Do not put `tostring` back —
-    # it is what made a `last_diff_sha: 0` stop the loop under jq and re-dispatch
-    # under python3. The newline squash stays, for the same byte-identity reason.
-    LAST_DIFF=$(jq -r 'if (.last_diff_sha | type) == "string" then .last_diff_sha | gsub("[\n\r]"; " ") else "" end' "$STATE_FILE")
-    PREV_DIFF=$(jq -r 'if (.prev_diff_sha | type) == "string" then .prev_diff_sha | gsub("[\n\r]"; " ") else "" end' "$STATE_FILE")
+    LAST_DIFF=$(jq -r --arg k last_diff_sha "$STATE_STRING_JQ" "$STATE_FILE")
+    PREV_DIFF=$(jq -r --arg k prev_diff_sha "$STATE_STRING_JQ" "$STATE_FILE")
     RECORD_FAILED=$(jq -r 'if .record_failed == true then "true" else "false" end' "$STATE_FILE")
-    RECORD_FAILED_REASON=$(jq -r '(.record_failed_reason // "") | tostring | gsub("[\n\r]"; " ")' "$STATE_FILE")
+    # Absent for this one means "announce the failure with no reason attached",
+    # which is still the whole fact — the mark is what says a verdict went
+    # unrecorded, and the reason only says which way.
+    RECORD_FAILED_REASON=$(jq -r --arg k record_failed_reason "$STATE_STRING_JQ" "$STATE_FILE")
   fi
 elif command -v python3 >/dev/null 2>&1; then
   OUT=$(printf '%s' "$INPUT" | python3 -c '
@@ -92,15 +112,15 @@ def one_line(value):
     return str(value).replace("\n", " ").replace("\r", " ")
 
 
-def fingerprint(value):
-    # A fingerprint is a JSON string or it is nothing — same rule as the jq
-    # branch above, and it has to stay the same rule: these two values are the
-    # only ones in the state file whose equality decides an exit code. `or ""`
-    # is what it must not go back to; that let 0, [] and {} through here while
-    # jq stringified them, so one reader stopped the loop on a tree nobody
-    # measured and the other re-dispatched. Absent means "not measured", which
-    # keeps the loop running — the safe direction, because a loop stopped early
-    # is enforcement silently switching off.
+def string_or_nothing(value):
+    # $STATE_STRING_JQ above, in the other engine, and it has to stay the same
+    # rule: these are the values whose equality decides an exit code and whether
+    # an announced mark is ever cleared. `or ""` is what it must not go back to;
+    # that let 0, [] and {} through here while jq stringified them, so one reader
+    # stopped the loop on a tree nobody measured and the other re-dispatched.
+    # Absent means "not measured", which keeps the loop running — the safe
+    # direction, because a loop stopped early is enforcement silently switching
+    # off.
     return one_line(value) if isinstance(value, str) else ""
 
 
@@ -116,10 +136,10 @@ print("true" if (payload or {}).get("stop_hook_active") is True else "false")
 print(one_line((state or {}).get("last_verdict") or ""))
 print(one_line((state or {}).get("attempt") or 0))
 print("true" if (state or {}).get("enforced") is True else "false")
-print(fingerprint((state or {}).get("last_diff_sha")))
-print(fingerprint((state or {}).get("prev_diff_sha")))
+print(string_or_nothing((state or {}).get("last_diff_sha")))
+print(string_or_nothing((state or {}).get("prev_diff_sha")))
 print("true" if (state or {}).get("record_failed") is True else "false")
-print(one_line((state or {}).get("record_failed_reason") or ""))
+print(string_or_nothing((state or {}).get("record_failed_reason")))
 ' "$STATE_FILE" 2>/dev/null) || OUT=""
   { IFS= read -r STATUS; IFS= read -r STOP_ACTIVE; IFS= read -r VERDICT
     IFS= read -r ATTEMPT; IFS= read -r ENFORCED
@@ -180,11 +200,14 @@ state_edit() {  # mark-enforced <verdict> <attempt> | clear-record-failure <reas
     local tmp="$STATE_FILE.$$.tmp"  # a name record-verdict.sh cannot be holding open
     # The same compare-and-set the python3 branch below explains: clear only the
     # failure this run announced, so one that landed after the read survives.
-    jq --arg reason "${2-}" '
-      if (.record_failed == true
-          and ((.record_failed_reason // "") | tostring) == $reason)
+    # Through $STATE_STRING_JQ, because $reason arrived from a reader that used
+    # it: a clear that renders the value on disk any other way cannot match the
+    # mark its own hook just announced, and a mark that cannot be matched is
+    # announced on every turn for good.
+    jq --arg reason "${2-}" --arg k record_failed_reason "
+      if (.record_failed == true and ($STATE_STRING_JQ) == \$reason)
       then del(.record_failed, .record_failed_reason)
-      else . end' "$STATE_FILE" > "$tmp" 2>/dev/null \
+      else . end" "$STATE_FILE" > "$tmp" 2>/dev/null \
       && mv "$tmp" "$STATE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
     return 0
   fi
@@ -215,8 +238,19 @@ elif mode == "clear-record-failure":
     # announced to anybody. Clearing it would swallow it. Matching on the reason
     # is what makes a *different* later failure survive this — an identical one
     # is a message the user just read.
+    #
+    # Rendered the way the reader that produced `reason` rendered it — a string
+    # with newlines squashed, or nothing (string_or_nothing() and
+    # $STATE_STRING_JQ at the top of this file, and note that on an ordinary host
+    # the reader was jq and this is python3). `str(... or "")` is what it must
+    # not go back to: that read a `record_failed_reason: 0` as "" while jq had
+    # just announced "0", so the mark was never cleared and the same two lines
+    # greeted every turn after it.
+    existing = state.get("record_failed_reason")
+    if not isinstance(existing, str):
+        existing = ""
     if (state.get("record_failed") is not True
-            or str(state.get("record_failed_reason") or "") != reason):
+            or existing.replace("\n", " ").replace("\r", " ") != reason):
         raise SystemExit(0)
     state.pop("record_failed", None)
     state.pop("record_failed_reason", None)
