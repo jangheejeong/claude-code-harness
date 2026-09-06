@@ -53,7 +53,10 @@ registration_snippet() {  # <upstream-settings> <hook names...> -> JSON on stdou
   local upstream="$1"
   shift
   command -v python3 >/dev/null 2>&1 || return 1
-  python3 - "$upstream" "$@" <<'PY'
+  # stderr is swallowed on purpose: this runs inside the ✅ Done. block, and a
+  # traceback between "NOT registered" and the reference path is the worst place
+  # to read one. A parse failure already degrades to the reference line below.
+  python3 - "$upstream" "$@" 2>/dev/null <<'PY'
 import json, sys
 
 upstream, names = sys.argv[1], sys.argv[2:]
