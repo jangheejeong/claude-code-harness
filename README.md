@@ -252,7 +252,7 @@ $ cd ~/your-project && claude
 
 **BLOCK verdict.** `reviewer` 가 BLOCK (또는 REQUEST CHANGES) 을 내고 자동 fix 루프 3회가 풀지 못하면 흐름이 멈춘다.
 
-이 3회는 모델이 알아서 세는 숫자가 아니라 hook 두 개가 디스크에 적어가며 강제한다. 리뷰어가 끝날 때마다 `record-verdict.sh` 가 판정과 시도 횟수를 `.claude/notes/loop-state.json` 에 기록하고, 매 턴 끝에 `enforce-loop.sh` 가 그 파일을 읽는다. 예산이 남아 있으면 exit 2 로 **턴을 끝내지 못하게 막고** 재투입을 지시하므로, BLOCK 위에서 조용히 마무리하는 선택 자체가 사라진다. 예산을 다 쓰면 (`attempt` 3) 턴을 끝내되 이렇게 출력한다:
+이 3회는 모델이 알아서 세는 숫자가 아니라 hook 두 개가 디스크에 적어가며 강제한다. 리뷰어가 끝날 때마다 `record-verdict.sh` 가 판정과 시도 횟수를 `.claude/notes/loop-state.json` 에 기록하고, 매 턴 끝에 `enforce-loop.sh` 가 그 파일을 읽는다. 예산이 남아 있으면 exit 2 로 **턴을 끝내지 못하게 막고** 재투입을 지시한다 — 새 BLOCK 이 기록된 뒤 오는 턴은 그 위에서 조용히 마무리될 수 없다. 예산을 다 쓰면 (`attempt` 3) 턴을 끝내되 이렇게 출력한다:
 
 ```text
 [enforce-loop] 자동 수정 루프 3/3 소진 — 마지막 리뷰 판정은 BLOCK 입니다.

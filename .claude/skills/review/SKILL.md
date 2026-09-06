@@ -20,7 +20,7 @@ allowed-tools: Agent, Read, Edit, Grep, Glob, Bash
 - Spawn `@agent-coder` with the findings (fix mode).
 - Re-run `/review` after the coder reports done.
 - The budget is 3 cycles per Phase, and **you are not the one counting them**. `.claude/hooks/record-verdict.sh` writes each reviewer verdict and the attempt number to `.claude/notes/loop-state.json`, and `.claude/hooks/enforce-loop.sh` reads that file at the end of every main turn:
-  - budget left → the hook exits 2, which refuses to end the turn and puts the re-dispatch instruction on stderr. Ending the turn on a BLOCK is not something you can decide to do.
+  - budget left → the hook exits 2, which refuses to end the turn and puts the re-dispatch instruction on stderr. The turn after a fresh BLOCK does not end on your say-so.
   - budget spent (attempt 3) → the hook lets the turn end and prints that this is **not** success and a human has to take it from here. Escalate, do not start a fourth cycle.
 
 ## On APPROVE

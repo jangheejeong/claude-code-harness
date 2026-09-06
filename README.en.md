@@ -252,7 +252,7 @@ If revisions are needed, prefer natural language over editing `Plans.md` directl
 
 **BLOCK verdict.** When `reviewer` issues BLOCK (or REQUEST CHANGES) and the 3 rounds of the auto-fix loop can't resolve it, the flow stops.
 
-Those 3 rounds are not a number the model keeps in its head — two hooks keep it on disk. Every time the reviewer finishes, `record-verdict.sh` writes the verdict and the attempt count to `.claude/notes/loop-state.json`, and at the end of every turn `enforce-loop.sh` reads that file. While budget remains it exits 2, which **refuses to let the turn end** and puts the re-dispatch instruction on stderr, so quietly wrapping up on a BLOCK stops being an available move. Once the budget is spent (`attempt` 3) it lets the turn end and prints:
+Those 3 rounds are not a number the model keeps in its head — two hooks keep it on disk. Every time the reviewer finishes, `record-verdict.sh` writes the verdict and the attempt count to `.claude/notes/loop-state.json`, and at the end of every turn `enforce-loop.sh` reads that file. While budget remains it exits 2, which **refuses to let the turn end** and puts the re-dispatch instruction on stderr — the turn that follows a freshly recorded BLOCK cannot quietly wrap up on it. Once the budget is spent (`attempt` 3) it lets the turn end and prints:
 
 ```text
 [enforce-loop] 자동 수정 루프 3/3 소진 — 마지막 리뷰 판정은 BLOCK 입니다.

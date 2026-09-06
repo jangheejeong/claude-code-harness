@@ -184,7 +184,7 @@ Claude 의 도구 호출 직전/직후, 그리고 agent · 턴이 끝나는 시�
 
 | 상태 | 훅의 반응 |
 |---|---|
-| 마지막 판정이 `BLOCK` / `REQUEST CHANGES`, 예산 남음 | **exit 2** — 턴을 끝내지 못하게 막고, stderr 로 "findings 들고 coder 재투입 후 리뷰어 재실행" 을 지시. 모델이 BLOCK 위에서 턴을 끝내는 선택 자체가 불가능해진다 |
+| 마지막 판정이 `BLOCK` / `REQUEST CHANGES`, 예산 남음 | **exit 2** — 턴을 끝내지 못하게 막고, stderr 로 "findings 들고 coder 재투입 후 리뷰어 재실행" 을 지시. 새 BLOCK 이 기록된 뒤 오는 턴은 그 위에서 그냥 끝날 수 없다 |
 | 같은 판정, `attempt` 가 3 도달 | **exit 0** — 턴을 끝내되 "성공이 아닙니다. 사람 개입이 필요합니다" 를 출력. 세 번 더 돌려도 못 찾을 것을 기계에 맡기지 않는다 |
 | `APPROVE` / `UNKNOWN` / 이미 반응한 판정 | exit 0, 조용히 통과 |
 | 상태 파일 손상, 페이로드 불량, `jq`·`python3` 부재 | exit 0 + stderr 경고 — 세션을 훅 안에 가두지 않는다 |
