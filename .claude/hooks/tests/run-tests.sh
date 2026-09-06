@@ -1935,6 +1935,49 @@ else
   report 1 "update.sh" "the run computes the unregistered hooks and prints the notice"
 fi
 
+# Criterion 4 — naming the hooks is only half an answer; the user still has to
+# know what to write. The snippet is lifted out of the shipped settings.json
+# rather than typed into update.sh, so it cannot describe a set of hooks that no
+# longer exists, and it carries only the missing entries — pasting it must not
+# register announce-agent.sh a second time.
+SNIPPET=$(update_lib "registration_snippet '$REPO_ROOT/.claude/settings.json' record-verdict enforce-loop")
+SNIPPET_SHAPE=$(printf '%s' "$SNIPPET" | python3 -c '
+import json, sys
+
+registration = json.load(sys.stdin)
+commands = sorted(hook["command"].rsplit("/", 1)[-1]
+                  for groups in registration.values()
+                  for group in groups
+                  for hook in group["hooks"])
+print(",".join(sorted(registration)), ",".join(commands))
+' 2>/dev/null)
+if [ "$SNIPPET_SHAPE" = "Stop,SubagentStop enforce-loop.sh,record-verdict.sh" ]; then
+  report 0 "update.sh" "the snippet is valid JSON carrying the Stop and SubagentStop entries, and nothing else"
+else
+  report 1 "update.sh" "the snippet is valid JSON carrying the Stop and SubagentStop entries, and nothing else (got '$SNIPPET_SHAPE')"
+fi
+
+NOTICE=$(update_lib "registration_notice '$REPO_ROOT/.claude/settings.json' '$LIB_SAFE_DIR/backup' record-verdict enforce-loop")
+if printf '%s' "$NOTICE" | grep -qF '"Stop"' \
+   && printf '%s' "$NOTICE" | grep -qF '"SubagentStop"' \
+   && printf '%s' "$NOTICE" | grep -qF '.claude/settings.json'; then
+  report 0 "update.sh" "the notice embeds that snippet under the file to paste it into"
+else
+  report 1 "update.sh" "the notice embeds that snippet under the file to paste it into (got '$NOTICE')"
+fi
+
+# python3 prints the snippet, but the notice is the part that must never go
+# missing: without a parser it still has to leave the user somewhere to look.
+NOTICE_NOPY=$( ( cd "$LIB_SAFE_DIR" \
+  && HARNESS_UPDATE_LIB=1 . "$UPDATE_SH" \
+  && PATH=/var/empty eval "registration_notice '$REPO_ROOT/.claude/settings.json' '$LIB_SAFE_DIR/backup' record-verdict enforce-loop" ) 2>/dev/null )
+if printf '%s' "$NOTICE_NOPY" | grep -qF 'record-verdict.sh' \
+   && printf '%s' "$NOTICE_NOPY" | grep -qF 'settings.json.upstream-latest'; then
+  report 0 "update.sh" "with no python3 the notice still names the hooks and the file to copy from"
+else
+  report 1 "update.sh" "with no python3 the notice still names the hooks and the file to copy from (got '$NOTICE_NOPY')"
+fi
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
