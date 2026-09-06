@@ -229,11 +229,32 @@ diff_fingerprint() {  # -> hash of the repo's current state, or "" if unavailabl
     git -C "$dir" diff HEAD -- ':(exclude).claude/notes' 2>/dev/null
     # One blob id per untracked file, which is the only place their contents
     # appear at all. `--exclude-standard` keeps gitignored trees (node_modules
-    # and friends) out, so what is hashed is what a coder could have written;
-    # ls-files lists regular files and symlinks only, so nothing here blocks on
-    # a fifo. Measured on this repo: ~3ms with no untracked files, ~30ms with
-    # 500 of them, against a hook that runs once per reviewer stop.
+    # and friends) out, so what is hashed is what a coder could have written.
+    #
+    # The readability filter is not tidiness. `git hash-object` open()s each
+    # argument and die()s on the first one it cannot, abandoning every argument
+    # after it — so one dangling symlink sorting early drops the contents of
+    # every untracked file behind it, while its own `?? path` line above stays
+    # exactly the same whatever those files then hold. The fingerprint freezes,
+    # and a live loop is cut short as "무진전" with budget still on it: the
+    # false stop this list was added to prevent, back through another door.
+    #
+    # `[ -f ]` resolves the link before it answers, so a broken one fails here
+    # and a link to a real file still passes (hash-object follows it too, and
+    # hashes what it points at). What the filter drops — broken links, links to
+    # directories, mode-000 files, anything that is not a regular file, and a
+    # path deleted in the window since ls-files — reaches the fingerprint by
+    # name through the porcelain status above and by contents not at all. That
+    # is a blind spot the size of "a cycle whose only work was re-pointing a
+    # broken symlink", and the alternative is no untracked contents at all.
+    #
+    # Builtins only, so this stays one subshell rather than one fork per file.
+    # Measured on this repo: ~3ms with no untracked files, ~30ms with 500 of
+    # them, against a hook that runs once per reviewer stop.
     git -C "$dir" ls-files --others --exclude-standard -z -- ':(exclude).claude/notes' 2>/dev/null \
+      | { while IFS= read -r -d '' f; do
+            [ -f "$dir/$f" ] && [ -r "$dir/$f" ] && printf '%s\0' "$f"
+          done; } \
       | xargs -0 -r git -C "$dir" hash-object -- 2>/dev/null
   } | git -C "$dir" hash-object --stdin 2>/dev/null || return 0
 }
