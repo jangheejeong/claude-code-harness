@@ -46,6 +46,63 @@ STATE_FILE="${CLAUDE_PROJECT_DIR:-.}/.claude/notes/loop-state.json"
 
 warn() { echo "[record-verdict] WARNING: $*" >&2; }
 
+# A reviewer ran and its verdict did not reach the state file. That used to end
+# here, as one line on stderr — which the user sees only in transcript mode, and
+# which nothing downstream can read. Since consume-once, the previous verdict is
+# already spent by then, so the next Stop finds nothing to react to and the turn
+# simply ends: the loop stops being enforced and says nothing about it.
+#
+# The mark is how that reaches enforce-loop.sh, which announces it once and
+# clears it. It carries nothing else: last_verdict and attempt are what this run
+# failed to determine, and inventing either is the failure it is reporting.
+#
+# Every caller is a path that has already decided not to record. Nothing here
+# may fail loudly either — the hook still owes SubagentStop an exit 0 (D1).
+mark_record_failure() {  # <one-line reason>
+  # No python3, no JSON writer, and jq cannot edit a file in place either. That
+  # host keeps the stderr warning it always had; every other host gets the mark.
+  command -v python3 >/dev/null 2>&1 || return 0
+  mkdir -p "${STATE_FILE%/*}" 2>/dev/null || true
+  python3 - "$STATE_FILE" "$1" <<'PY' 2>/dev/null || true
+import json, os, sys
+
+path, reason = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f:
+        state = json.load(f)
+    if not isinstance(state, dict):
+        state = {}
+except FileNotFoundError:
+    state = {}
+except Exception:
+    # Unreadable is not the same as missing: a state file that is there but
+    # corrupt still holds a budget somebody may yet repair by hand, and
+    # replacing it with a mark would throw that away to report a smaller
+    # problem. enforce-loop.sh already warns loudly about a file it cannot read.
+    raise SystemExit(0)
+
+state["record_failed"] = True
+# enforce-loop.sh's python3 branch reads the state file one field per line, so a
+# newline in here would push every later field down one and have it judge a
+# budget the file never held.
+state["record_failed_reason"] = reason.replace("\n", " ").replace("\r", " ")
+
+tmp = "%s.%d.tmp" % (path, os.getpid())  # a name no other writer can be holding
+with open(tmp, "w") as f:
+    json.dump(state, f)
+    f.write("\n")
+os.replace(tmp, path)  # a reader sees the old file or the new one, never half of one
+PY
+}
+
+# Every path that gives up on a reviewer's verdict goes through here, so that
+# "warned" and "marked" cannot drift apart.
+give_up() {  # <one-line reason>
+  warn "$1"
+  mark_record_failure "$1"
+  exit 0
+}
+
 INPUT=$(cat 2>/dev/null) || INPUT=""
 
 # --- JSON extraction: jq -> python3 -> warn + exit 0 (as in announce-agent.sh) ---
@@ -95,8 +152,7 @@ esac
 # Past this point python3 is not optional: the verdict parser is run_phase.py,
 # and reimplementing its placement rule in bash would let the two drift.
 if ! command -v python3 >/dev/null 2>&1; then
-  warn "python3 missing — cannot parse the reviewer verdict"
-  exit 0
+  give_up "python3 missing — cannot parse the reviewer verdict"
 fi
 
 # The transcript is JSON Lines. The reviewer's conclusion is the text of its
@@ -187,6 +243,11 @@ except (TypeError, ValueError):
     attempt = 0
 
 state["last_verdict"] = verdict
+# Whatever an earlier run could not read, this one could. Leaving the mark would
+# make a parser that broke once announce itself in every session after the one
+# it broke in.
+state.pop("record_failed", None)
+state.pop("record_failed_reason", None)
 # A new verdict has not been acted on yet. enforce-loop.sh flips this to true
 # when it spends the verdict on one re-dispatch, which is what keeps a loop the
 # user walked away from from blocking the end of every future turn. Do not drop
@@ -237,19 +298,17 @@ PY
 # read, and silently reading the wrong file is the failure this hook exists to
 # remove.
 if [ -z "$TRANSCRIPT" ]; then
-  warn "payload carried no agent_transcript_path — verdict not recorded"
-  exit 0
+  give_up "payload carried no agent_transcript_path — verdict not recorded"
 fi
 if [ ! -f "$TRANSCRIPT" ]; then
-  warn "no readable agent transcript ('${TRANSCRIPT}') — verdict not recorded"
-  exit 0
+  give_up "no readable agent transcript ('${TRANSCRIPT}') — verdict not recorded"
 fi
 
-ANSWER=$(mktemp "${TMPDIR:-/tmp}/record-verdict-XXXXXX") || exit 0
+ANSWER=$(mktemp "${TMPDIR:-/tmp}/record-verdict-XXXXXX") \
+  || give_up "could not stage the reviewer's answer in ${TMPDIR:-/tmp}"
 trap 'rm -f "$ANSWER"' EXIT
 final_assistant_text "$TRANSCRIPT" > "$ANSWER" 2>/dev/null || {
-  warn "could not read the agent transcript $TRANSCRIPT"
-  exit 0
+  give_up "could not read the agent transcript $TRANSCRIPT"
 }
 
 # run_phase.py owns the placement rule. Exactly three exit codes carry a verdict
@@ -269,8 +328,7 @@ VERDICT=$(python3 "$RUN_PHASE" --parse-verdict "$ANSWER") || PARSE_RC=$?
 case "$PARSE_RC" in
   0 | 4 | 5) ;;
   *)
-    warn "run_phase.py exited $PARSE_RC without a verdict — nothing recorded"
-    exit 0
+    give_up "run_phase.py exited $PARSE_RC without a verdict — nothing recorded"
     ;;
 esac
 
@@ -280,8 +338,7 @@ esac
 case "$VERDICT" in
   APPROVE | CHANGES | BLOCK | UNKNOWN) ;;
   *)
-    warn "run_phase.py printed no recognisable verdict ('${VERDICT}') — nothing recorded"
-    exit 0
+    give_up "run_phase.py printed no recognisable verdict ('${VERDICT}') — nothing recorded"
     ;;
 esac
 
@@ -289,6 +346,6 @@ esac
 # that a thin PATH cannot drown out this hook's one warning, and this line sits
 # under the same rule. STATE_FILE always carries a directory component.
 mkdir -p "${STATE_FILE%/*}" 2>/dev/null || true
-record_state "$VERDICT" "$(diff_fingerprint)" || warn "could not write $STATE_FILE"
+record_state "$VERDICT" "$(diff_fingerprint)" || give_up "could not write $STATE_FILE"
 
 exit 0
