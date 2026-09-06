@@ -19,7 +19,9 @@ One `/orchestrator` call automates plan → code → review → PR
 
 ## What This Is
 
-> A bundle of procedures that stops the two failure modes Claude Code commonly shows out of the box — **jumping straight into code without a plan** + **running dangerous commands unguarded**.
+> A bundle of procedures that stops three failure modes Claude Code commonly shows out of the box — **jumping straight into code without a plan**, **running dangerous commands unguarded**, and **nobody counting how many times the fix-review-fix loop has gone round**.
+>
+> The third one is what makes this harness unusual. Writing "auto-fix loop, max 3 attempts" into a document does not make it so — with nothing keeping count, that is a wish rather than a rule. Here the reviewer's verdict lands on disk, and at the end of every turn a hook reads that file and decides **on the model's behalf** whether another round happens. It stops when the budget is spent, and it stops with attempts to spare when the coder's round reached no file at all.
 >
 > Activated by copying the `.claude/` tree into your project root.
 
@@ -98,6 +100,10 @@ Before merge, `reviewer` (Fable) applies 4 lenses — spec / security / correctn
 
 ### 5. Enforcement via hooks
 Instructions can slip the model's mind. PreToolUse hooks deny at the shell level. Exit code 2 + reason on stderr → the block reason is shown to Claude. Hook blocking works even in `--dangerously-skip-permissions` mode.
+
+**The retry budget is enforced the same way.** Where the destructive-command guard says "this tool call does not happen", this one says "this turn does not end". When the reviewer returns `BLOCK`, `record-verdict.sh` writes the verdict and the counter to `.claude/notes/loop-state.json` on `SubagentStop`; when the turn tries to end, `enforce-loop.sh` reads that file and exits 2 to hand the turn back. The counter lives in a **file** rather than in context because a number held in context does not survive one compaction.
+
+There are three reasons it stops, and all three exit 0 to release the turn while saying plainly on stdout that this is not success — the three attempts are spent, the working tree fingerprints identically to the previous cycle (no progress), or the reviewer's verdict never reached disk. That last one is not passed over quietly: treating an unread verdict as a pass leaves enforcement switched on and doing nothing.
 
 ### 6. Response format is enforced too — conclusion first, evidence after
 Free-form LLM prose buries the conclusion mid-text and never separates scope (made by this work vs. pre-existing). A [BLUF (Bottom Line Up Front)](https://en.wikipedia.org/wiki/BLUF_(communication)) template is pinned in `CLAUDE.md` — making 4 sections mandatory: **conclusion → evidence (file:line) → scope·severity tags → decision needed (with one recommended option)**. Header labels are spelled out in Korean (English abbreviations like `TL;DR / Decision needed` are banned — they hurt readability); only the tag vocabulary (`[NEW]/[EXISTING]/[BLOCK]/[CHANGES]/[NIT]`) is shared with the `reviewer` and `tester` subagents — so there's no vocabulary switch between main-session reports and review results.
