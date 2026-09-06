@@ -252,14 +252,23 @@ $ cd ~/your-project && claude
 
 **BLOCK verdict.** `reviewer` 가 BLOCK (또는 REQUEST CHANGES) 을 내고 자동 fix 루프 3회가 풀지 못하면 흐름이 멈춘다.
 
-이 3회는 모델이 알아서 세는 숫자가 아니라 hook 두 개가 디스크에 적어가며 강제한다. 리뷰어가 끝날 때마다 `record-verdict.sh` 가 판정과 시도 횟수를 `.claude/notes/loop-state.json` 에 기록하고, 매 턴 끝에 `enforce-loop.sh` 가 그 파일을 읽는다. 예산이 남아 있으면 exit 2 로 **턴을 끝내지 못하게 막고** 재투입을 지시한다 — 새 BLOCK 이 기록된 뒤 오는 턴은 그 위에서 조용히 마무리될 수 없다. 예산을 다 쓰면 (`attempt` 3) 턴을 끝내되 이렇게 출력한다:
+이 3회는 모델이 알아서 세는 숫자가 아니라 hook 두 개가 디스크에 적어가며 강제한다. 리뷰어가 끝날 때마다 `record-verdict.sh` 가 판정과 시도 횟수, 그리고 그 순간의 작업 트리 지문을 `.claude/notes/loop-state.json` 에 기록하고, 매 턴 끝에 `enforce-loop.sh` 가 그 파일을 읽는다. 예산이 남아 있고 직전 사이클 이후로 작업 트리가 움직였으면 exit 2 로 **턴을 끝내지 못하게 막고** 재투입을 지시한다 — 새 BLOCK 이 기록된 뒤 오는 턴은 그 위에서 조용히 마무리될 수 없다. 예산을 다 쓰면 (`attempt` 3) 턴을 끝내되 이렇게 출력한다:
 
 ```text
 [enforce-loop] 자동 수정 루프 3/3 소진 — 마지막 리뷰 판정은 BLOCK 입니다.
 성공이 아닙니다. 사람 개입이 필요합니다: 리뷰 findings 를 직접 확인하고 범위를 다시 정하세요.
 ```
 
-즉 소진 시점의 종료는 **통과가 아니라 정지**다. 여기서부터는 hook 이 재투입을 밀어붙이지 않고 (`/review` 도 에스컬레이션을 지시한다), 사람 차례가 된다.
+예산이 남아 있는데도 멈추는 경우가 하나 더 있다. 한 사이클을 돌고 왔는데 작업 트리 지문이 직전과 똑같으면 — 코더가 파일에 아무것도 남기지 못했다는 뜻이다 — 남은 예산을 쓰지 않고 거기서 멈춘다:
+
+```text
+[enforce-loop] 무진전 중단 — 직전 사이클과 작업 트리가 동일합니다 (attempt 2/3, 판정 BLOCK).
+성공이 아닙니다. 사람 개입이 필요합니다: 같은 코드에 같은 리뷰가 반복될 뿐이니, findings 를 직접 확인하고 범위를 다시 정하세요.
+```
+
+즉 소진이든 무진전이든 그 시점의 종료는 **통과가 아니라 정지**다. 여기서부터는 hook 이 재투입을 밀어붙이지 않고 (`/review` 도 에스컬레이션을 지시한다), 사람 차례가 된다.
+
+다만 무진전 감지는 **그물이 아니라 하한선**이다. 지문은 커밋과 추적 중인 변경 내용, 파일 이름 목록만 보므로 테스트 파일 하나만 추가한 사이클은 여기 안 걸린다. "루프가 안 움직인다" 는 것만 잡아주고, phase 가 괜찮은지는 여전히 리뷰어가 판단한다.
 
 3회 안에 풀리지 않는 BLOCK 은 보통 다음 셋 중 하나의 신호다:
 
@@ -515,10 +524,11 @@ cat .claude/notes/agent-activity.log
 
 ```json
 // .claude/notes/loop-state.json  (gitignore 됨)
-{"last_verdict": "BLOCK", "attempt": 2, "enforced": false}
+{"last_verdict": "BLOCK", "attempt": 2, "enforced": false,
+ "last_diff_sha": "8f3c…", "prev_diff_sha": "1a90…"}
 ```
 
-`APPROVE` 면 `attempt` 를 0 으로 리셋, `BLOCK` / `REQUEST CHANGES` 면 +1, 판정을 못 읽었으면 (`UNKNOWN`) 그대로 둔다. 카운터를 컨텍스트가 아니라 디스크에 두는 이유는 컨텍스트가 한 번 압축되면 그 안의 숫자는 사라지기 때문이다. 어떤 입력에도 **항상 exit 0** — `SubagentStop` 의 exit 2 는 "서브에이전트를 멈추지 못하게 한다" 는 뜻이라 read-only 인 리뷰어를 계속 돌릴 뿐이다.
+`APPROVE` 면 `attempt` 를 0 으로 리셋, `BLOCK` / `REQUEST CHANGES` 면 +1, 판정을 못 읽었으면 (`UNKNOWN`) 그대로 둔다. `last_diff_sha` 는 이번 사이클의 작업 트리 지문이고 `prev_diff_sha` 는 직전 사이클의 것이다 — 아래 `enforce-loop.sh` 가 둘을 비교해 헛도는 루프를 끊는다. 판정을 **아예 기록하지 못하면** `record_failed` / `record_failed_reason` 을 대신 남겨서, 그 사이클이 조용히 사라지지 않게 한다. 카운터를 컨텍스트가 아니라 디스크에 두는 이유는 컨텍스트가 한 번 압축되면 그 안의 숫자는 사라지기 때문이다. 어떤 입력에도 **항상 exit 0** — `SubagentStop` 의 exit 2 는 "서브에이전트를 멈추지 못하게 한다" 는 뜻이라 read-only 인 리뷰어를 계속 돌릴 뿐이다.
 
 > ⚠️ **리뷰어 서브에이전트 이름은 `reviewer` 로 시작해야 한다.** 이 hook 은 `agent_type` 이 `reviewer` 또는 `reviewer-*` 일 때만 기록한다 (`reviewer-phase2` 같은 팀메이트 이름까지 걸리도록). `phase3-reviewer` 나 `review-gate` 로 띄우면 기록이 없고, 기록이 없으면 아래 루프 강제가 **조용히 꺼진다.**
 
@@ -527,12 +537,16 @@ cat .claude/notes/agent-activity.log
 메인 턴이 끝날 때마다 발화해서 위 파일을 읽고 자동 fix 루프 예산(3회) 을 판정한다.
 
 ```text
-파일 없음                          → exit 0 (평범한 대화 턴을 가로채지 않음)
-APPROVE / UNKNOWN / 이미 반응한 판정 → exit 0
-BLOCK·CHANGES + 예산 남음           → exit 2 — 턴을 끝내지 못하게 막고 stderr 로 재투입 지시
-BLOCK·CHANGES + attempt 3          → exit 0 + "성공이 아닙니다. 사람 개입이 필요합니다"
-상태 파일 손상 / jq·python3 부재     → exit 0 + stderr 경고 (세션을 hook 안에 가두지 않음)
+파일 없음                             → exit 0 (평범한 대화 턴을 가로채지 않음)
+APPROVE / UNKNOWN / 이미 반응한 판정    → exit 0
+BLOCK·CHANGES + 예산 남음 + 트리 변함   → exit 2 — 턴을 끝내지 못하게 막고 stderr 로 재투입 지시
+BLOCK·CHANGES + 예산 남음 + 트리 동일   → exit 0 + "무진전 중단" (남은 예산을 안 쓰고 사람에게 넘김)
+BLOCK·CHANGES + attempt 3             → exit 0 + "성공이 아닙니다. 사람 개입이 필요합니다"
+record_failed 표시가 있음              → exit 0 + 그 사실을 한 번 알리고 표시를 소비 (예산 분기보다 먼저)
+상태 파일 손상 / jq·python3 부재        → exit 0 + stderr 경고 (세션을 hook 안에 가두지 않음)
 ```
+
+exit 0 이 늘 통과라는 뜻은 아니다. 무진전 중단과 예산 소진은 **정지**이고, 그렇게 끝난 턴 다음에 사이클을 하나 더 돌리는 건 hook 이 막으려던 바로 그 동작이다.
 
 판정 하나는 반응 한 번만 산다 (`enforced` 플래그) — 사용자가 루프를 놔두고 떠나도 남은 BLOCK 이 이후 모든 턴을 붙잡지 않는다.
 

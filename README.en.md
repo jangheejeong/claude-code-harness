@@ -252,14 +252,27 @@ If revisions are needed, prefer natural language over editing `Plans.md` directl
 
 **BLOCK verdict.** When `reviewer` issues BLOCK (or REQUEST CHANGES) and the 3 rounds of the auto-fix loop can't resolve it, the flow stops.
 
-Those 3 rounds are not a number the model keeps in its head — two hooks keep it on disk. Every time the reviewer finishes, `record-verdict.sh` writes the verdict and the attempt count to `.claude/notes/loop-state.json`, and at the end of every turn `enforce-loop.sh` reads that file. While budget remains it exits 2, which **refuses to let the turn end** and puts the re-dispatch instruction on stderr — the turn that follows a freshly recorded BLOCK cannot quietly wrap up on it. Once the budget is spent (`attempt` 3) it lets the turn end and prints:
+Those 3 rounds are not a number the model keeps in its head — two hooks keep it on disk. Every time the reviewer finishes, `record-verdict.sh` writes the verdict, the attempt count, and a fingerprint of the working tree at that moment to `.claude/notes/loop-state.json`, and at the end of every turn `enforce-loop.sh` reads that file. While budget remains **and the working tree has moved since the last cycle**, it exits 2, which **refuses to let the turn end** and puts the re-dispatch instruction on stderr — the turn that follows a freshly recorded BLOCK cannot quietly wrap up on it. Once the budget is spent (`attempt` 3) it lets the turn end and prints:
 
 ```text
 [enforce-loop] 자동 수정 루프 3/3 소진 — 마지막 리뷰 판정은 BLOCK 입니다.
 성공이 아닙니다. 사람 개입이 필요합니다: 리뷰 findings 를 직접 확인하고 범위를 다시 정하세요.
 ```
 
-("The auto-fix loop is exhausted at 3/3; the last verdict was BLOCK. This is **not** success — a human needs to read the findings and re-scope.") So the turn ending here is a halt, not a pass: the hook stops pushing for another round (`/review` tells the model to escalate) and it is your turn.
+("The auto-fix loop is exhausted at 3/3; the last verdict was BLOCK. This is **not** success — a human needs to read the findings and re-scope.")
+
+There is one more way it stops, and it happens with budget still on the counter. If a cycle comes back with the working tree fingerprinting exactly as it did before — meaning nothing the coder did reached a file — the hook spends none of the remaining attempts and halts there:
+
+```text
+[enforce-loop] 무진전 중단 — 직전 사이클과 작업 트리가 동일합니다 (attempt 2/3, 판정 BLOCK).
+성공이 아닙니다. 사람 개입이 필요합니다: 같은 코드에 같은 리뷰가 반복될 뿐이니, findings 를 직접 확인하고 범위를 다시 정하세요.
+```
+
+("Stopped with no progress — the working tree is identical to the previous cycle (attempt 2/3, verdict BLOCK). This is **not** success — the same review would just land on the same code, so read the findings and re-scope.")
+
+So whether the budget ran out or the loop stopped moving, the turn ending there is a halt, not a pass: the hook stops pushing for another round (`/review` tells the model to escalate) and it is your turn.
+
+The no-progress check is a floor, though, not a net. The fingerprint only covers commits, tracked changes, and the list of file names, so a cycle that added nothing but a test file still moves it. It catches "the loop is not moving" and nothing more — whether the phase is actually fine is still the reviewer's call.
 
 A BLOCK that survives 3 rounds is usually a signal of one of three things:
 
@@ -515,10 +528,11 @@ When the reviewer finishes, this writes down its verdict. It parses the last ans
 
 ```json
 // .claude/notes/loop-state.json  (gitignored)
-{"last_verdict": "BLOCK", "attempt": 2, "enforced": false}
+{"last_verdict": "BLOCK", "attempt": 2, "enforced": false,
+ "last_diff_sha": "8f3c…", "prev_diff_sha": "1a90…"}
 ```
 
-`APPROVE` resets `attempt` to 0, `BLOCK` / `REQUEST CHANGES` increments it, and a verdict that could not be read (`UNKNOWN`) leaves it alone. The counter lives on disk rather than in context because one compaction is all it takes for a number in context to be gone. **Always exits 0**, whatever the input — `SubagentStop`'s exit 2 means "prevent the subagent from stopping", which would only keep the read-only reviewer running.
+`APPROVE` resets `attempt` to 0, `BLOCK` / `REQUEST CHANGES` increments it, and a verdict that could not be read (`UNKNOWN`) leaves it alone. `last_diff_sha` is this cycle's working-tree fingerprint and `prev_diff_sha` is the previous cycle's — `enforce-loop.sh` below compares the two to cut off a loop that is spinning in place. When a verdict cannot be recorded **at all**, `record_failed` / `record_failed_reason` go in instead, so that cycle does not disappear in silence. The counter lives on disk rather than in context because one compaction is all it takes for a number in context to be gone. **Always exits 0**, whatever the input — `SubagentStop`'s exit 2 means "prevent the subagent from stopping", which would only keep the read-only reviewer running.
 
 > ⚠️ **A reviewer subagent's name must start with `reviewer`.** This hook records only when `agent_type` is `reviewer` or `reviewer-*` (so teammate names like `reviewer-phase2` still count). Spawn it as `phase3-reviewer` or `review-gate` and nothing is recorded — and with nothing recorded, the enforcement below is **silently off**.
 
@@ -527,12 +541,16 @@ When the reviewer finishes, this writes down its verdict. It parses the last ans
 Fires at the end of every main turn, reads the file above, and judges the 3-round auto-fix budget.
 
 ```text
-no state file                          → exit 0 (never intercepts an ordinary chat turn)
-APPROVE / UNKNOWN / already acted on   → exit 0
-BLOCK·CHANGES + budget left            → exit 2 — the turn may not end; re-dispatch instruction on stderr
-BLOCK·CHANGES + attempt 3              → exit 0 + "this is not success, a human is needed"
-corrupt state / no jq and no python3   → exit 0 + warning on stderr (never traps the session in a hook)
+no state file                            → exit 0 (never intercepts an ordinary chat turn)
+APPROVE / UNKNOWN / already acted on     → exit 0
+BLOCK·CHANGES + budget left + tree moved → exit 2 — the turn may not end; re-dispatch instruction on stderr
+BLOCK·CHANGES + budget left + same tree  → exit 0 + "무진전 중단" (spends no more budget, hands over to you)
+BLOCK·CHANGES + attempt 3                → exit 0 + "this is not success, a human is needed"
+record_failed mark present               → exit 0 + announced once, then consumed (checked before the budget)
+corrupt state / no jq and no python3     → exit 0 + warning on stderr (never traps the session in a hook)
 ```
+
+Exit 0 does not always mean "passed". The no-progress stop and the exhausted budget are both **halts**, and running one more cycle after a turn that ended that way is precisely what the hook was trying to prevent.
 
 One verdict buys exactly one reaction (the `enforced` flag) — so a loop you walked away from does not hold up every future turn with its leftover BLOCK.
 
