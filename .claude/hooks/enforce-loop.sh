@@ -25,13 +25,15 @@ INPUT=$(cat 2>/dev/null) || INPUT=""
 [ -f "$STATE_FILE" ] || exit 0
 
 # --- payload + state read: jq -> python3 -> warn + exit 0 (as in announce-agent.sh) ---
-# Both branches produce the same four values, STATUS first, so that a malformed
-# input is reported identically whichever reader the host happens to have.
+# Both branches produce the same values in the same order, STATUS first, so that
+# a malformed input is reported identically whichever reader the host has.
 STATUS="ok"  # ok | bad-payload | bad-state
 STOP_ACTIVE="false"
 VERDICT=""
 ATTEMPT=0
 ENFORCED="false"
+LAST_DIFF=""
+PREV_DIFF=""
 if command -v jq >/dev/null 2>&1; then
   if ! printf '%s' "$INPUT" | jq -e 'type == "object"' >/dev/null 2>&1; then
     STATUS="bad-payload"
@@ -46,6 +48,13 @@ if command -v jq >/dev/null 2>&1; then
     VERDICT=$(jq -r '.last_verdict // ""' "$STATE_FILE")
     ATTEMPT=$(jq -r '.attempt // 0' "$STATE_FILE")
     ENFORCED=$(jq -r 'if .enforced == true then "true" else "false" end' "$STATE_FILE")
+    # tostring and the newline squash keep these two byte-identical to what the
+    # python3 branch below produces, because their *equality* decides whether
+    # the loop stops. A state file holding a number, or a hand-typed newline,
+    # must not make one reader see two equal fingerprints and the other two
+    # different ones.
+    LAST_DIFF=$(jq -r '(.last_diff_sha // "") | tostring | gsub("[\n\r]"; " ")' "$STATE_FILE")
+    PREV_DIFF=$(jq -r '(.prev_diff_sha // "") | tostring | gsub("[\n\r]"; " ")' "$STATE_FILE")
   fi
 elif command -v python3 >/dev/null 2>&1; then
   OUT=$(printf '%s' "$INPUT" | python3 -c '
@@ -82,9 +91,12 @@ print("true" if (payload or {}).get("stop_hook_active") is True else "false")
 print(one_line((state or {}).get("last_verdict") or ""))
 print(one_line((state or {}).get("attempt") or 0))
 print("true" if (state or {}).get("enforced") is True else "false")
+print(one_line((state or {}).get("last_diff_sha") or ""))
+print(one_line((state or {}).get("prev_diff_sha") or ""))
 ' "$STATE_FILE" 2>/dev/null) || OUT=""
   { IFS= read -r STATUS; IFS= read -r STOP_ACTIVE; IFS= read -r VERDICT
-    IFS= read -r ATTEMPT; IFS= read -r ENFORCED; } <<< "$OUT"
+    IFS= read -r ATTEMPT; IFS= read -r ENFORCED
+    IFS= read -r LAST_DIFF; IFS= read -r PREV_DIFF; } <<< "$OUT"
   [ -z "$STATUS" ] && STATUS="bad-payload"
 else
   warn "jq and python3 both missing — loop enforcement disabled"
@@ -193,6 +205,25 @@ if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
   mark_enforced "$VERDICT" "$ATTEMPT"  # this banner is the one reaction this verdict pays for
   echo "[enforce-loop] 자동 수정 루프 ${ATTEMPT}/${MAX_ATTEMPTS} 소진 — 마지막 리뷰 판정은 ${VERDICT} 입니다."
   echo "성공이 아닙니다. 사람 개입이 필요합니다: 리뷰 findings 를 직접 확인하고 범위를 다시 정하세요."
+  exit 0
+fi
+
+# Budget left, but the tree is the one the last cycle was reviewed on: whatever
+# the coder did between the two reviews, none of it reached a file. The
+# remaining attempts would buy identical cycles, so spend none of them.
+#
+# A floor, not a net. record-verdict.sh fingerprints file names and tracked
+# content, so a coder that only added a test file, or only edited an untracked
+# one, does not look stalled here. Nothing about this decides a phase is fine —
+# the judgement is still the reviewer's.
+#
+# Both fingerprints have to be present: an empty one means "not measured" (no
+# git, no repo, or the very first cycle of a loop), and reading two unknowns as
+# one unchanged tree would stop every loop on its first BLOCK.
+if [ -n "$LAST_DIFF" ] && [ "$LAST_DIFF" = "$PREV_DIFF" ]; then
+  mark_enforced "$VERDICT" "$ATTEMPT"  # stopping early is this verdict's one reaction
+  echo "[enforce-loop] 무진전 중단 — 직전 사이클과 작업 트리가 동일합니다 (attempt ${ATTEMPT}/${MAX_ATTEMPTS}, 판정 ${VERDICT})." >&2
+  echo "성공이 아닙니다. 사람 개입이 필요합니다: 같은 코드에 같은 리뷰가 반복될 뿐이니, findings 를 직접 확인하고 범위를 다시 정하세요."
   exit 0
 fi
 

@@ -2016,6 +2016,48 @@ else
   report 1 "$R" "outside a git repo -> no fingerprint, the verdict is still recorded, exit 0 (rc=$RC fp='$GOT_FP' verdict='$GOT_V')"
 fi
 
+# ---------- the two hooks : a stalled loop stops before the budget does ----------
+# The cases above seed fingerprints by hand. This one lets the hooks produce
+# their own, in a real git repo, in the order a session runs them: reviewer
+# stop, main turn end, reviewer stop, main turn end. Whether no-progress
+# detection works at all is only visible here — a fingerprint the recording
+# hook writes and the judging hook cannot compare would pass every case above.
+
+cycle() {  # <proj> -> "<exit-code> <stdout+stderr>" of one reviewer-then-Stop cycle
+  local proj="$1" out rc=0
+  record_block "$proj"
+  out=$(printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$proj" bash "$HOOKS_DIR/$E" 2>&1) || rc=$?
+  printf '%s %s' "$rc" "$out"
+}
+
+PROJ=$(new_git_proj)
+STALL1=$(cycle "$PROJ")
+STALL2=$(cycle "$PROJ")
+STALL_ATTEMPT=$(state_field "$PROJ/$STATE_REL" attempt)
+rm -rf "$PROJ"
+if [ "${STALL1%% *}" -eq 2 ] && printf '%s' "$STALL1" | grep -qF 'attempt 1/3' \
+   && [ "${STALL2%% *}" -eq 0 ] && printf '%s' "$STALL2" | grep -qF '무진전' \
+   && [ "$STALL_ATTEMPT" = "2" ]; then
+  report 0 "loop" "two cycles over an untouched tree: re-dispatch, then stop at 2/3"
+else
+  report 1 "loop" "two cycles over an untouched tree: re-dispatch, then stop at 2/3 (attempt=$STALL_ATTEMPT '$STALL1' :: '$STALL2')"
+fi
+
+# The same two cycles with one edit in between. This is the case that fails if
+# the fingerprint is too coarse — an over-eager stop would end a working loop on
+# its second attempt, which is worse than not having the feature.
+PROJ=$(new_git_proj)
+MOVED1=$(cycle "$PROJ")
+printf 'the coder did something\n' >> "$PROJ/tracked.txt"
+MOVED2=$(cycle "$PROJ")
+rm -rf "$PROJ"
+if [ "${MOVED1%% *}" -eq 2 ] && [ "${MOVED2%% *}" -eq 2 ] \
+   && printf '%s' "$MOVED2" | grep -qF 'attempt 2/3'; then
+  report 0 "loop" "one edit between the cycles: the loop keeps its budget and continues"
+else
+  report 1 "loop" "one edit between the cycles: the loop keeps its budget and continues ('$MOVED1' :: '$MOVED2')"
+fi
+
 # ---------- update.sh : propagation ----------
 # The hooks above only matter in this repo until update.sh carries them into the
 # projects that use the harness. update.sh clones over the network and copies
