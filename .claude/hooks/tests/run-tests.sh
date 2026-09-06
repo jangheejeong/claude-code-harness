@@ -1871,7 +1871,9 @@ fi
 drifting_lists() {  # <file> -> hook names introduced by more than one list
   local file="$1" found="" h n
   for h in $MANAGED; do
-    n=$(grep -c -- "$h" "$file")
+    # An assignment or a `for ... in` naming the hook. Prose that mentions one is
+    # left alone: it carries no names into the propagation loops.
+    n=$(grep -cE "^[[:space:]]*(local[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=[^#]*$h|^[[:space:]]*for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]][^#]*$h" "$file")
     [ "$n" -eq 1 ] || found="$found $h(x$n)"
   done
   printf '%s' "${found# }"
