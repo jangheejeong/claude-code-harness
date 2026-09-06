@@ -45,14 +45,51 @@ unregistered_hooks() {  # <settings-file> -> hook names, space separated
   printf '%s' "${missing# }"
 }
 
+# The entries the user has to add, lifted out of the shipped settings.json
+# instead of written here, so the snippet can never describe a set of hooks the
+# harness stopped shipping. Only the missing hooks are kept: whole groups would
+# re-register the ones the user already runs.
+registration_snippet() {  # <upstream-settings> <hook names...> -> JSON on stdout
+  local upstream="$1"
+  shift
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$upstream" "$@" <<'PY'
+import json, sys
+
+upstream, names = sys.argv[1], sys.argv[2:]
+with open(upstream) as f:
+    events = json.load(f).get("hooks", {})
+
+needed = {}
+for event, groups in events.items():
+    kept = []
+    for group in groups:
+        entries = [hook for hook in group.get("hooks", [])
+                   if any(name + ".sh" in hook.get("command", "") for name in names)]
+        if entries:
+            kept.append({**{k: v for k, v in group.items() if k != "hooks"},
+                         "hooks": entries})
+    if kept:
+        needed[event] = kept
+print(json.dumps(needed, indent=2))
+PY
+}
+
 registration_notice() {  # <upstream-settings> <backup-dir> <hook names...>
-  local upstream="$1" backup="$2" h
+  local upstream="$1" backup="$2" h snippet line
   shift 2
   echo "   ⚠️  .claude/settings.json kept (yours) — these hooks are installed but NOT registered:"
   for h in "$@"; do
     echo "       · $h.sh"
   done
   echo "       They do nothing until settings.json runs them."
+  if snippet=$(registration_snippet "$upstream" "$@"); then
+    echo "       Merge these keys into \"hooks\" in .claude/settings.json"
+    echo "       (append to an event array you already have, do not replace it):"
+    while IFS= read -r line; do
+      echo "         $line"
+    done <<< "$snippet"
+  fi
   echo "       Upstream reference: $backup/settings.json.upstream-latest"
 }
 
