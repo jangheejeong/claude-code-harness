@@ -813,8 +813,9 @@ survives_case() {  # <desc> <payload> [transcript-path-to-create]
 
 survives_case "garbage stdin -> exit 0, no state written" 'not json at all'
 survives_case "empty payload -> exit 0, no state written" '{}'
-survives_case "reviewer with a transcript path that does not exist -> exit 0" \
-  "$(subagent_stop_json reviewer /nonexistent/transcript.jsonl)"
+# A reviewer whose transcript cannot be read does write one thing — the failure
+# mark, so the next Stop can say so. That pair of cases lives further down, with
+# the rest of the marking behaviour ("mark_only_case").
 
 # `transcript_path` is the MAIN session's transcript, not the subagent's, and
 # its last assistant text is whatever the main session said — a verdict quoted
@@ -825,10 +826,13 @@ assistant_jsonl "$PROJ/main-session.jsonl" '메인 세션이 인용한 판정입
 ERR=$(printf '{"hook_event_name":"SubagentStop","agent_type":"reviewer","transcript_path":"%s"}' \
   "$PROJ/main-session.jsonl" | CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOKS_DIR/$R" 2>&1 >/dev/null)
 RC=$?
-if [ "$RC" -eq 0 ] && [ ! -f "$PROJ/$STATE_REL" ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
+# No verdict of any kind may appear here. The failure mark is the one write this
+# path is allowed, and the assertion is that it arrives alone.
+GOT_V=$(state_field "$PROJ/$STATE_REL" last_verdict)
+if [ "$RC" -eq 0 ] && [ -z "$GOT_V" ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
   report 0 "$R" "no agent_transcript_path -> the main transcript is not read, warning, exit 0"
 else
-  report 1 "$R" "no agent_transcript_path -> the main transcript is not read, warning, exit 0 (rc=$RC err='$ERR')"
+  report 1 "$R" "no agent_transcript_path -> the main transcript is not read, warning, exit 0 (rc=$RC verdict='$GOT_V' err='$ERR')"
 fi
 rm -rf "$PROJ"
 
@@ -1412,43 +1416,119 @@ orphan_hook() {  # [stub-run_phase.py body] -> dir holding a copy of the hook
   printf '%s' "$root"
 }
 
+# ...but "nothing" is not the same as silence. consume-once means the previous
+# verdict has already been spent, so a hook that cannot record leaves a turn that
+# simply ends, with one line on a stderr channel the user sees only in transcript
+# mode. The mark is how that reaches the next Stop; everything the recording
+# would have decided stays undecided.
+state_without_mark() {  # <state-file> -> canonical JSON of everything but the mark
+  python3 -c '
+import json, sys
+
+with open(sys.argv[1]) as f:
+    state = json.load(f)
+state.pop("record_failed", None)
+state.pop("record_failed_reason", None)
+print(json.dumps(state, sort_keys=True))
+' "$1" 2>/dev/null
+}
+
 PROJ=$(new_proj)
 ORPHAN=$(orphan_hook)
 assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
 ERR=$(printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
   | CLAUDE_PROJECT_DIR="$PROJ" bash "$ORPHAN/.claude/hooks/$R" 2>&1 >/dev/null)
 RC=$?
-STATE_AFTER=absent
-[ -e "$PROJ/$STATE_REL" ] && STATE_AFTER="present: $(cat "$PROJ/$STATE_REL" 2>/dev/null)"
+MARKED=$(state_field "$PROJ/$STATE_REL" record_failed)
+REASON=$(state_field "$PROJ/$STATE_REL" record_failed_reason)
+REST=$(state_without_mark "$PROJ/$STATE_REL")
 rm -rf "$ORPHAN" "$PROJ"
-if [ "$RC" -eq 0 ] && [ "$STATE_AFTER" = absent ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
-  report 0 "$R" "the verdict parser cannot run -> no loop-state.json, warning, exit 0"
+# `{}` is the whole point: the mark arrives alone. A last_verdict or an attempt
+# invented here would be a judgement the hook never read.
+if [ "$RC" -eq 0 ] && [ "$MARKED" = "True" ] && [ -n "$REASON" ] && [ "$REST" = "{}" ] \
+   && printf '%s' "$ERR" | grep -qi 'WARNING'; then
+  report 0 "$R" "the verdict parser cannot run -> the failure is marked and nothing else, exit 0"
 else
-  report 1 "$R" "the verdict parser cannot run -> no loop-state.json, warning, exit 0 (rc=$RC state=$STATE_AFTER err='$ERR')"
+  report 1 "$R" "the verdict parser cannot run -> the failure is marked and nothing else, exit 0 (rc=$RC marked=$MARKED reason='$REASON' rest=$REST err='$ERR')"
 fi
 
 # The same with a budget already in flight, which is when it matters: a review
 # mid-loop has two of its three attempts spent, and a hook that cannot read the
-# verdict has no business touching either field. Compared byte for byte — a
-# rewrite that happens to preserve the values still means the hook decided
-# something it had no basis to decide.
+# verdict has no business touching any of that. Compared as canonical JSON with
+# the mark removed — a rewrite that happens to preserve the values still means
+# the hook decided something it had no basis to decide.
 PROJ=$(new_proj)
 ORPHAN=$(orphan_hook)
 assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
-printf '{"last_verdict":"BLOCK","attempt":2}\n' > "$PROJ/$STATE_REL"
-cp "$PROJ/$STATE_REL" "$PROJ/state.before"
+printf '{"last_verdict":"BLOCK","attempt":2,"enforced":true,"last_diff_sha":"deadbeef"}\n' > "$PROJ/$STATE_REL"
+BEFORE=$(state_without_mark "$PROJ/$STATE_REL")
 ERR=$(printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
   | CLAUDE_PROJECT_DIR="$PROJ" bash "$ORPHAN/.claude/hooks/$R" 2>&1 >/dev/null)
 RC=$?
-SAME=0
-cmp -s "$PROJ/state.before" "$PROJ/$STATE_REL" || SAME=1
-STATE_AFTER=$(cat "$PROJ/$STATE_REL" 2>/dev/null)
+AFTER=$(state_without_mark "$PROJ/$STATE_REL")
+MARKED=$(state_field "$PROJ/$STATE_REL" record_failed)
 rm -rf "$ORPHAN" "$PROJ"
-if [ "$RC" -eq 0 ] && [ "$SAME" -eq 0 ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
-  report 0 "$R" "the verdict parser cannot run -> an in-flight loop-state.json is untouched"
+if [ "$RC" -eq 0 ] && [ "$AFTER" = "$BEFORE" ] && [ "$MARKED" = "True" ] \
+   && printf '%s' "$ERR" | grep -qi 'WARNING'; then
+  report 0 "$R" "the verdict parser cannot run -> an in-flight budget is untouched but marked"
 else
-  report 1 "$R" "the verdict parser cannot run -> an in-flight loop-state.json is untouched (rc=$RC state=$STATE_AFTER err='$ERR')"
+  report 1 "$R" "the verdict parser cannot run -> an in-flight budget is untouched but marked (rc=$RC before=$BEFORE after=$AFTER marked=$MARKED err='$ERR')"
 fi
+
+# Every other way a reviewer's verdict can fail to be recorded. Each of these
+# used to end in a warning on stderr and nothing else, which is the silence the
+# mark exists to break — and none of them may invent a verdict on the way.
+mark_only_case() {  # <desc> <payload-transcript-path>
+  local desc="$1" tpath="$2" proj rc=0 marked rest
+  proj=$(new_proj)
+  printf '%s' "$(subagent_stop_json reviewer "$tpath")" \
+    | CLAUDE_PROJECT_DIR="$proj" bash "$HOOKS_DIR/$R" >/dev/null 2>&1 || rc=$?
+  marked=$(state_field "$proj/$STATE_REL" record_failed)
+  rest=$(state_without_mark "$proj/$STATE_REL")
+  rm -rf "$proj"
+  if [ "$rc" -eq 0 ] && [ "$marked" = "True" ] && [ "$rest" = "{}" ]; then
+    report 0 "$R" "$desc"
+  else
+    report 1 "$R" "$desc (rc=$rc marked=$marked rest=$rest)"
+  fi
+}
+
+mark_only_case "a transcript path that does not exist -> the failure is marked" \
+  /nonexistent/transcript.jsonl
+mark_only_case "a payload with no agent_transcript_path -> the failure is marked" ''
+
+# A reviewer whose verdict was recorded is not a failure, and the mark has to go
+# with it: a parser that broke once and works now must not keep announcing the
+# time it broke.
+PROJ=$(new_proj)
+ORPHAN=$(orphan_hook)
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$ORPHAN/.claude/hooks/$R" >/dev/null 2>&1
+MARKED_BEFORE=$(state_field "$PROJ/$STATE_REL" record_failed)
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" >/dev/null
+MARKED_AFTER=$(state_field "$PROJ/$STATE_REL" record_failed)
+REASON_AFTER=$(state_field "$PROJ/$STATE_REL" record_failed_reason)
+GOT_V=$(state_field "$PROJ/$STATE_REL" last_verdict)
+rm -rf "$ORPHAN" "$PROJ"
+if [ "$MARKED_BEFORE" = "True" ] && [ -z "$MARKED_AFTER" ] && [ -z "$REASON_AFTER" ] \
+   && [ "$GOT_V" = "BLOCK" ]; then
+  report 0 "$R" "a recording that works again clears the mark the broken one left"
+else
+  report 1 "$R" "a recording that works again clears the mark the broken one left (before=$MARKED_BEFORE after=$MARKED_AFTER reason='$REASON_AFTER' verdict=$GOT_V)"
+fi
+
+# Nobody but a reviewer can mark anything. A coder stopping in a project that
+# never ran a review would otherwise create a state file out of nothing, and
+# enforce-loop.sh reads the existence of that file as "a loop is in flight".
+PROJ=$(new_proj)
+RC=$(record_run "$PROJ" "$(subagent_stop_json coder /nonexistent/transcript.jsonl)")
+if [ "$RC" -eq 0 ] && [ ! -f "$PROJ/$STATE_REL" ]; then
+  report 0 "$R" "a non-reviewer that could not be read marks nothing"
+else
+  report 1 "$R" "a non-reviewer that could not be read marks nothing (rc=$RC)"
+fi
+rm -rf "$PROJ"
 
 # The empty string is the one value last_verdict must never take, whatever the
 # parser did. It is not a harmless placeholder: record_state counts "" as a
@@ -1458,19 +1538,42 @@ fi
 # spot-checked — the exit code and the printed word fail independently.
 EMPTY_WRITES=""
 STATE_TOUCHED=""
-run_stubbed_parser() {  # <label> <hook-path> <proj> <state-before|-->
+UNMARKED=""
+state_verdict_shape() {  # <state-file> -> no-file | absent | empty | <the value>
+  python3 -c '
+import json, sys
+
+try:
+    with open(sys.argv[1]) as f:
+        state = json.load(f)
+except Exception:
+    print("no-file"); raise SystemExit(0)
+if not isinstance(state, dict) or "last_verdict" not in state:
+    print("absent")
+else:
+    print(state["last_verdict"] if str(state["last_verdict"]) else "empty")
+' "$1" 2>/dev/null
+}
+run_stubbed_parser() {  # <label> <hook-path> <proj> <state-before>
   # Every parser this is called with failed to produce a verdict, so both of the
   # hook's two guards are under test at once: the exit code and the word on
-  # stdout can fail independently, and neither may reach the state file.
+  # stdout can fail independently, and neither may reach the state file. The
+  # failure mark is the one thing that is allowed to appear, so it is compared
+  # out of the way and then required.
   local label="$1" hook="$2" proj="$3" before="$4" got after
   printf '%s' "$(subagent_stop_json reviewer "$proj/transcript.jsonl")" \
     | CLAUDE_PROJECT_DIR="$proj" bash "$hook" >/dev/null 2>&1
-  after=absent
-  [ -e "$proj/$STATE_REL" ] && after=$(cat "$proj/$STATE_REL" 2>/dev/null)
+  after=$(state_without_mark "$proj/$STATE_REL")
   [ "$after" = "$before" ] || STATE_TOUCHED="$STATE_TOUCHED|$label -> $after"
-  [ -f "$proj/$STATE_REL" ] || return 0
-  got=$(state_field "$proj/$STATE_REL" last_verdict)
-  [ -n "$got" ] || EMPTY_WRITES="$EMPTY_WRITES|$label"
+  [ "$(state_field "$proj/$STATE_REL" record_failed)" = "True" ] \
+    || UNMARKED="$UNMARKED|$label"
+  # state_field cannot tell an absent key from an empty one, and the difference
+  # is the whole invariant: absent (or the seeded value, left alone) means the
+  # hook decided nothing, while "" means it spent an attempt on a verdict it
+  # never read. What was or was not invented is the comparison above.
+  got=$(state_verdict_shape "$proj/$STATE_REL")
+  [ "$got" = "empty" ] && EMPTY_WRITES="$EMPTY_WRITES|$label -> last_verdict $got"
+  return 0
 }
 
 # Each parser below is a way for run_phase.py to come back with no verdict:
@@ -1482,10 +1585,10 @@ while IFS='|' read -r STUB_LABEL STUB_BODY; do
     PROJ=$(new_proj)
     assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
     SEED_LABEL="on a fresh project"
-    BEFORE=absent
+    BEFORE="{}"  # a fresh project: with the mark compared away, nothing is left
     if [ "$SEED" != "-" ]; then
       printf '%s\n' "$SEED" > "$PROJ/$STATE_REL"
-      BEFORE=$(cat "$PROJ/$STATE_REL")
+      BEFORE=$(state_without_mark "$PROJ/$STATE_REL")
       SEED_LABEL="mid-budget"
     fi
     if [ "$STUB_BODY" = "-" ]; then ORPHAN=$(orphan_hook); else ORPHAN=$(orphan_hook "$STUB_BODY"); fi
@@ -1507,9 +1610,15 @@ else
 fi
 
 if [ -z "$STATE_TOUCHED" ]; then
-  report 0 "$R" "no parser failure of any shape edits the state file"
+  report 0 "$R" "no parser failure of any shape edits anything but the mark"
 else
-  report 1 "$R" "no parser failure of any shape edits the state file ($STATE_TOUCHED)"
+  report 1 "$R" "no parser failure of any shape edits anything but the mark ($STATE_TOUCHED)"
+fi
+
+if [ -z "$UNMARKED" ]; then
+  report 0 "$R" "every shape of parser failure leaves the mark behind"
+else
+  report 1 "$R" "every shape of parser failure leaves the mark behind (unmarked: $UNMARKED)"
 fi
 
 # ---------- record-verdict.sh : it has to find its own parser ----------
