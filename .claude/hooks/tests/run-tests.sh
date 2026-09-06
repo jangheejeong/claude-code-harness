@@ -1984,6 +1984,26 @@ else
   report 1 "update.sh" "with no python3 the notice still names the hooks and the file to copy from (got '$NOTICE_NOPY')"
 fi
 
+# An unparseable upstream settings.json is a repo-owned accident and so unlikely,
+# but the notice is printed inside the final ✅ Done. block: a python traceback
+# between "NOT registered" and the reference path is the worst place a user could
+# read one. Only the parser is allowed to fail here, and it has to fail quietly.
+BROKEN_UPSTREAM="$LIB_SAFE_DIR/broken-settings.json"
+printf '%s\n' '{ "hooks": ' > "$BROKEN_UPSTREAM"
+BROKEN_OUT="$LIB_SAFE_DIR/broken-notice.out"
+BROKEN_ERR=$( ( cd "$LIB_SAFE_DIR" \
+  && HARNESS_UPDATE_LIB=1 . "$UPDATE_SH" \
+  && eval "registration_notice '$BROKEN_UPSTREAM' '$LIB_SAFE_DIR/backup' record-verdict enforce-loop" ) \
+  2>&1 >"$BROKEN_OUT" )  # stderr to the capture, stdout to the file — order matters
+BROKEN_NOTICE=$(cat "$BROKEN_OUT")
+if [ -z "$BROKEN_ERR" ] \
+   && printf '%s' "$BROKEN_NOTICE" | grep -qF 'record-verdict.sh' \
+   && printf '%s' "$BROKEN_NOTICE" | grep -qF 'settings.json.upstream-latest'; then
+  report 0 "update.sh" "an unreadable upstream file prints no traceback, just the hooks and the reference"
+else
+  report 1 "update.sh" "an unreadable upstream file prints no traceback, just the hooks and the reference (stderr '$BROKEN_ERR')"
+fi
+
 # Criterion 6 — a project with no settings.json still gets the shipped one, and
 # that file has to register every hook the same list propagates. This is the
 # other end of the same failure: a hook added to MANAGED_HOOKS but not to
