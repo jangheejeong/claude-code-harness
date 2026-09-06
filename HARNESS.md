@@ -59,7 +59,7 @@ claude
 ├── HARNESS.md                         이 문서
 │
 ├── .claude/
-│   ├── settings.json                  hook 4개 등록 (팀 공유용, 체크인)
+│   ├── settings.json                  hook 6개 등록 (팀 공유용, 체크인)
 │   ├── settings.local.json            개인 설정 (gitignore — 직접 생성)
 │   ├── worktrees/                     git worktree 격리 작업용
 │   ├── notes/                         subagent 출력 로그 저장소
@@ -80,12 +80,14 @@ claude
 │   │   ├── release/SKILL.md            /release    — 🔒 PR 생성 (자동호출 차단)
 │   │   └── setup/SKILL.md              /setup      — 신규 프로젝트 부트스트랩
 │   │
-│   └── hooks/                         ── 안전 + 편의 가드 4개 ──
+│   └── hooks/                         ── 안전 + 편의 + 루프 가드 6개 ──
 │       ├── block-destructive.sh        Pre  · rm -rf 시스템경로, push --force, reset --hard origin
 │       ├── protect-secrets.sh          Pre  · .env, .pem, credentials, .mcp.json 쓰기 차단
 │       ├── post-edit-lint.sh           Post · .py 자동 ruff format (low-nit 자동화)
 │       ├── announce-agent.sh           SubagentStart/Stop · agent 실행 알림 + 로그
-│       └── tests/run-tests.sh          hook 4개 회귀 테스트 suite
+│       ├── record-verdict.sh           SubagentStop · reviewer verdict 를 loop-state.json 에 기록
+│       ├── enforce-loop.sh             Stop · 기록된 verdict 로 자동 수정 루프 예산 판정
+│       └── tests/run-tests.sh          hook 회귀 테스트 suite
 │
 ├── scripts/harness/
 │   └── run_phase.py                    phase 작업을 별도 셸로 분리 (메인 컨텍스트 절약)
@@ -140,9 +142,9 @@ claude
 
 **`/release` 만 잠근 이유**: commit / push / PR 같은 사이드 이펙트. Claude 자동 발동 위험. `disable-model-invocation: true` 로 잠가서 사용자가 직접 타이핑해야만 작동 (`/orchestrator` 는 skill 을 호출하는 대신 같은 절차를 inline 으로 수행).
 
-### Layer 4 — Hook 4개
+### Layer 4 — Hook 6개
 
-Claude 의 도구 호출 직전/직후에 셸 스크립트가 끼어들어 검사. 모델 판단이 아니라 코드로 강제. 차단은 stderr 사유 + exit 2, 통과는 조용히 exit 0. 4개 모두 `.claude/settings.json` 에 등록되어 있고, `.claude/hooks/tests/run-tests.sh` 가 합성 JSON 으로 회귀 검증 (현재 75 케이스).
+Claude 의 도구 호출 직전/직후, 그리고 agent · 턴이 끝나는 시점에 셸 스크립트가 끼어들어 검사. 모델 판단이 아니라 코드로 강제. 차단은 stderr 사유 + exit 2, 통과는 조용히 exit 0. 6개 모두 `.claude/settings.json` 에 등록되어 있고, `.claude/hooks/tests/run-tests.sh` 가 합성 JSON 으로 회귀 검증.
 
 #### `block-destructive.sh` (PreToolUse · Bash 가드)
 
@@ -168,9 +170,43 @@ Claude 의 도구 호출 직전/직후에 셸 스크립트가 끼어들어 검�
 
 어느 agent 가 실행/종료 중인지 터미널 (`/dev/tty`) 에 한 줄 출력 + `.claude/notes/agent-activity.log` 에 기록. 사후에 어떤 agent 가 진짜 spawn 됐는지 검증 가능.
 
+#### `record-verdict.sh` (SubagentStop)
+
+리뷰어가 끝날 때 그 판정을 디스크에 적어두는 훅. 서브에이전트 트랜스크립트에서 마지막 답변을 꺼내 `run_phase.py --parse-verdict` 로 파싱하고, 결과를 `.claude/notes/loop-state.json` 에 `last_verdict` / `attempt` / `enforced` 세 필드로 기록한다. `APPROVE` 면 `attempt` 를 0 으로 되돌리고, `BLOCK` 이나 `REQUEST CHANGES` 면 1 올리고, 판정을 못 읽었으면(`UNKNOWN`) 그대로 둔다. 카운터를 컨텍스트가 아니라 파일에 두는 이유는 압축 한 번이면 컨텍스트 안의 숫자는 사라지기 때문이다.
+
+**어떤 입력에도 exit 0.** `SubagentStop` 의 exit 2 는 "서브에이전트를 멈추지 못하게 한다" 는 뜻이라, read-only 인 리뷰어를 계속 돌리는 것 외엔 아무 효과가 없다. 판정은 아래 `enforce-loop.sh` 가 한다.
+
+> ⚠️ **리뷰어 서브에이전트 이름은 `reviewer` 로 시작해야 한다.** 이 훅은 `agent_type` 이 `reviewer` 이거나 `reviewer-` 로 시작할 때만 기록한다 (`reviewer-phase2` 처럼 팀메이트 이름이 붙는 경우까지 걸리게 한 것). `phase3-reviewer` 나 `review-gate` 로 띄우면 기록이 없고, 기록이 없으면 아래 루프 강제가 **조용히 통째로 꺼진다.** 세션 안 어디에도 꺼졌다는 표시가 없으므로 이름 규칙을 지키는 쪽이 유일한 방어다.
+
+#### `enforce-loop.sh` (Stop)
+
+메인 턴이 끝날 때마다 발화해서 `loop-state.json` 을 읽고 자동 수정 루프 예산(3회) 을 판정한다. 파일이 없으면 — 즉 리뷰 루프가 안 돌고 있으면 — 아무것도 안 하고 바로 통과시킨다. 평범한 대화 턴을 가로채면 안 되기 때문이다.
+
+| 상태 | 훅의 반응 |
+|---|---|
+| 마지막 판정이 `BLOCK` / `REQUEST CHANGES`, 예산 남음 | **exit 2** — 턴을 끝내지 못하게 막고, stderr 로 "findings 들고 coder 재투입 후 리뷰어 재실행" 을 지시. 모델이 BLOCK 위에서 턴을 끝내는 선택 자체가 불가능해진다 |
+| 같은 판정, `attempt` 가 3 도달 | **exit 0** — 턴을 끝내되 "성공이 아닙니다. 사람 개입이 필요합니다" 를 출력. 세 번 더 돌려도 못 찾을 것을 기계에 맡기지 않는다 |
+| `APPROVE` / `UNKNOWN` / 이미 반응한 판정 | exit 0, 조용히 통과 |
+| 상태 파일 손상, 페이로드 불량, `jq`·`python3` 부재 | exit 0 + stderr 경고 — 세션을 훅 안에 가두지 않는다 |
+
+판정 하나는 반응 한 번만 산다 (`enforced` 플래그). 사용자가 루프를 놔두고 떠나도 남은 BLOCK 이 이후 모든 턴을 붙잡지 않는다.
+
+**하는 일의 범위**: 리뷰어 판정을 기록하고 재시도 상한을 강제할 뿐이다. tester 가 찾은 결함으로 도는 `/work` 안쪽 루프는 여기서 세지 않고, 코더가 4번째로 도는 것을 물리적으로 막지도 않는다 — 예산이 남았는데 멈추는 것을 막고, 예산이 다 되면 사람에게 넘긴다.
+
 ### Layer 5 — 부속 자산
 
-- **`scripts/harness/run_phase.py`** — `claude --agent <name> -p` 로 phase 작업을 별도 셸에 띄움. 출력은 `.claude/notes/phase-N-agent-*.log` 로. 메인엔 `[run_phase] status=OK log=...` 한 줄만.
+- **`scripts/harness/run_phase.py`** — `claude --agent <name> -p` 로 phase 작업을 별도 셸에 띄움. 출력은 `.claude/notes/phase-N-agent-*.log` 로. 메인엔 `[run_phase] status=... log=...` 한 줄만 — reviewer 를 돌린 경우 로그의 verdict 를 읽어 `status=BLOCK` / `status=CHANGES` 도 낸다 (`claude` CLI 는 리뷰어가 BLOCK 을 내도 exit 0 이라, 로그를 안 읽으면 BLOCK 이 성공으로 보고된다). `--parse-verdict <logfile>` 로 로그 하나의 판정만 따로 뽑을 수도 있다 (`claude` 미설치 환경에서도 동작).
+
+  | exit | 뜻 |
+  |---|---|
+  | `0` | 정상 종료 (verdict 가 `APPROVE` 이거나 태그 없음 = `UNKNOWN`) |
+  | `1` | 인자 오류 (argparse usage 에러 포함), 읽을 수 없는 verdict 로그 |
+  | `2` | `claude` CLI 가 PATH 에 없음 |
+  | `3` | agent 실행 실패 (non-zero 종료, 타임아웃, 로그를 읽을 수 없음) |
+  | `4` | reviewer verdict `REQUEST CHANGES` |
+  | `5` | reviewer verdict `BLOCK` |
+
+  verdict 태그는 **로그의 마지막 비어있지 않은 줄**에 있을 때만 채택한다. 리뷰어가 findings 안에서 태그를 인용만 하고 자기 판정을 빠뜨린 로그가 그 인용을 진짜 판정으로 읽히는 것을 막기 위해서다. 다른 자리에 있는 태그는 `UNKNOWN` 으로 읽고 stderr 에 경고를 낸다.
 - **`docs/harness/REQUIREMENTS.template.md`** — `/setup` 이 신규 서브프로젝트에 떨어뜨리는 시작점. 정체성/stack/run/test/컨벤션/non-goals/quality bar 8 섹션.
 - **`docs/harness/ADR.template.md`** — 비자명 결정(새 의존성, 새 패턴, 스코프 변경) 기록 양식.
 - **`docs/harness/DOC_SYNC_POLICY.md`** — 코드 변경 → 어떤 문서를 갱신할지 매핑 표.
@@ -232,7 +268,7 @@ Claude 의 도구 호출 직전/직후에 셸 스크립트가 끼어들어 검�
 |---|---|---|
 | 1 | `/plan` 직후 | Plans.md 검토 + Approval ✓ |
 | 2 | `/work N` 직후 (선택) | diff 한 번 보기 |
-| 3 | `/review` BLOCK / REQUEST CHANGES 시 | 자동 루프(최대 3회) 못 풀면 자연어로 방향 재지시 |
+| 3 | `/review` BLOCK / REQUEST CHANGES 시 | 자동 루프(3회, `enforce-loop.sh` 가 강제) 가 못 풀면 자연어로 방향 재지시 |
 | 4 | `/release` 호출 자체 | 자동 발동 안 됨, 직접 타이핑 |
 | 5 | PR 머지 | GitHub 에서 직접 |
 
@@ -356,6 +392,7 @@ Claude Code 가 컨텍스트 ~95% 차면 자동 압축. 메인 세션 / subagent
 | `git push --force` 가 차단됨 | 의도된 동작. fresh 브랜치로 push 또는 사용자가 직접 명령 실행 |
 | `.env` 쓰기 차단됨 | 의도된 동작. 직접 편집 |
 | `/orchestrator` 비용이 부담됨 | Phase 를 더 잘게 쪼개거나 (300-500 줄), 단계별로 `/plan → /work → /review` 수동 진행 |
+| BLOCK 이 났는데 루프가 안 돌고 턴이 그냥 끝남 | 리뷰어 서브에이전트 이름이 `reviewer` 로 시작하는지 확인 (`record-verdict.sh` 가 그 이름만 기록). `.claude/notes/loop-state.json` 이 갱신되는지, `.claude/settings.json` 에 `Stop` / `SubagentStop` 이 등록돼 있는지도 확인 |
 | 자연어로 "리뷰" 했더니 다른 reviewer agent 가 골라짐 | 같은 이름의 agent 정의가 여러 레벨 (project/user) 에 있으면 모호해짐. `@agent-reviewer` 로 명시 호출 |
 | `/review` 등이 같은 이름의 번들 skill 과 충돌 | `settings.json` 의 `skillOverrides` 로 충돌하는 번들 skill 을 끌 수 있음 |
 
