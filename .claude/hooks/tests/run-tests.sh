@@ -2362,16 +2362,36 @@ else
   report 1 "update.sh" "no hook name is introduced by a second list that could drift ($SECOND_COPIES)"
 fi
 
-# The check above has to bite on a real second list...
-SECOND_LIST_COPY="$LIB_SAFE_DIR/update-with-second-list.sh"
-{ cat "$UPDATE_SH"; echo 'LEGACY_HOOKS="block-destructive protect-secrets"'; } > "$SECOND_LIST_COPY"
-DRIFT_SEEN=$(drifting_lists "$SECOND_LIST_COPY")
-if printf '%s' "$DRIFT_SEEN" | grep -qF 'block-destructive' \
-   && printf '%s' "$DRIFT_SEEN" | grep -qF 'protect-secrets'; then
-  report 0 "update.sh" "a second literal list of hooks is caught and named"
-else
-  report 1 "update.sh" "a second literal list of hooks is caught and named (got '$DRIFT_SEEN')"
-fi
+# The check above has to bite on a real second list, in every shape one can be
+# written. A plain assignment was the only one it looked for, so a list that
+# arrived as an export, an append, or the header of a loop went straight past
+# the net that exists to catch exactly that.
+second_list_case() {  # <desc> <line to append to a copy of update.sh> <hook> <hook>
+  local desc="$1" line="$2" first="$3" second="$4" copy seen
+  copy="$LIB_SAFE_DIR/update-second-list-$RANDOM.sh"
+  { cat "$UPDATE_SH"; printf '%s\n' "$line"; } > "$copy"
+  seen=$(drifting_lists "$copy")
+  rm -f "$copy"
+  if printf '%s' "$seen" | grep -qF "$first" && printf '%s' "$seen" | grep -qF "$second"; then
+    report 0 "update.sh" "$desc"
+  else
+    report 1 "update.sh" "$desc (got '$seen')"
+  fi
+}
+
+second_list_case "a second literal list of hooks is caught and named" \
+  'LEGACY_HOOKS="block-destructive protect-secrets"' block-destructive protect-secrets
+second_list_case "a second list exported instead of assigned is caught too" \
+  'export LEGACY_HOOKS="block-destructive protect-secrets"' block-destructive protect-secrets
+# `+=` is the shape that drifts most quietly: it reads as adding to the one
+# list, and the names it adds are still a second copy of them.
+second_list_case "hooks appended to a list with += are caught too" \
+  'MANAGED_HOOKS+=" record-verdict enforce-loop"' record-verdict enforce-loop
+# The `for` branch has been in the pattern from the start with nothing holding
+# it there — a loop naming its own hooks is the second list that skips the
+# variable entirely.
+second_list_case "a loop that names hooks of its own is caught too" \
+  'for legacy in announce-agent post-edit-lint; do :; done' announce-agent post-edit-lint
 
 # ...and stay quiet on a comment. A line that only names a hook cannot drift out
 # of sync with anything, and failing the suite for it would read as "propagation
