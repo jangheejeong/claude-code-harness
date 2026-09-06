@@ -1135,9 +1135,12 @@ printf '{"last_verdict":"BLOCK","attempt":1,"enforced":false}\n' > "$PROJ/$STATE
 RACE_BIN=$(mktemp -d /tmp/hooktest-race-XXXXXX)
 cat > "$RACE_BIN/python3" <<EOF
 #!/bin/bash
-# mark_enforced is the only python3 call in the hook that reads its program from
-# stdin, so "\$1 is -" is exactly "the mark is about to be written".
-[ "\${1-}" = "-" ] && printf '{"last_verdict":"BLOCK","attempt":2,"enforced":false}\n' > "$PROJ/$STATE_REL"
+# The hook passes its edit mode as the first argument after the \`-\`, so
+# "mark-enforced" is exactly "the enforced mark is about to be written" — and
+# not any of the hook's other python3 calls, which read the file or clear a
+# different key. enforce-loop.sh carries a comment saying this seam depends on
+# that word.
+[ "\${2-}" = "mark-enforced" ] && printf '{"last_verdict":"BLOCK","attempt":2,"enforced":false}\n' > "$PROJ/$STATE_REL"
 exec "$REAL_PY" "\$@"
 EOF
 chmod +x "$RACE_BIN/python3"
@@ -1924,6 +1927,85 @@ if [ "$RC" -eq 0 ] && [ "$GOT_V" = "UNKNOWN" ] && [ "$GOT_A" = "0" ]; then
 else
   report 1 "loop" "a quoted tag with no judgement -> UNKNOWN, budget untouched, turn ends (rc=$RC got $GOT_V/$GOT_A)"
 fi
+
+# ---------- enforce-loop.sh : a recording that failed gets said out loud ----------
+# record-verdict.sh marks the state file when a reviewer's verdict never reached
+# it. This is the half that reaches a human: once, on the next turn, and then
+# never again. It is a fact, not a task — re-dispatching a coder would not fix a
+# parser — so it releases the turn.
+
+FAILED_MARK='{"record_failed":true,"record_failed_reason":"run_phase.py exited 3 without a verdict"}'
+
+enforce_case 0 "a marked recording failure -> exit 0, the turn is never held" \
+  "$FAILED_MARK" "$(stop_json)" - '기록되지'
+enforce_case 0 "a marked recording failure -> stdout carries the reason recorded" \
+  "$FAILED_MARK" "$(stop_json)" - 'run_phase.py exited 3 without a verdict'
+
+# Said once. Nothing ages the state file out, so a mark left by a session the
+# user walked away from would otherwise greet every message in every session
+# after it — the same rule the verdict itself follows.
+PROJ=$(new_proj)
+printf '%s\n' "$FAILED_MARK" > "$PROJ/$STATE_REL"
+OUT1=$(abandoned_turn "$PROJ" s1); RC1=$?
+OUT2=$(abandoned_turn "$PROJ" a-later-session); RC2=$?
+MARKED=$(state_field "$PROJ/$STATE_REL" record_failed)
+rm -rf "$PROJ"
+if [ "$RC1" -eq 0 ] && [ "$RC2" -eq 0 ] && printf '%s' "$OUT1" | grep -qF '기록되지' \
+   && [ -z "$OUT2" ] && [ -z "$MARKED" ]; then
+  report 0 "$E" "a recording failure is announced once and then consumed"
+else
+  report 1 "$E" "a recording failure is announced once and then consumed (rc=$RC1/$RC2 out1='$OUT1' out2='$OUT2' marked='$MARKED')"
+fi
+
+# A mark can land on top of a verdict nobody has answered yet: the reviewer of
+# cycle 2 failed to record while cycle 1's BLOCK was still armed. The
+# announcement takes this turn and spends only itself — the BLOCK stays armed and
+# the next turn re-dispatches on it, because a verdict nobody reacted to is
+# exactly what the consume-once mark exists to protect.
+PROJ=$(new_proj)
+printf '{"last_verdict":"BLOCK","attempt":1,"enforced":false,"record_failed":true,"record_failed_reason":"parser died"}\n' \
+  > "$PROJ/$STATE_REL"
+OUT1=$(abandoned_turn "$PROJ" s1); RC1=$?
+ENFORCED_AFTER=$(state_field "$PROJ/$STATE_REL" enforced)
+RC2=$(later_turn "$PROJ" s1)
+rm -rf "$PROJ"
+if [ "$RC1" -eq 0 ] && printf '%s' "$OUT1" | grep -qF '기록되지' \
+   && [ "$ENFORCED_AFTER" = "False" ] && [ "$RC2" -eq 2 ]; then
+  report 0 "$E" "announcing a failure does not spend the verdict underneath it"
+else
+  report 1 "$E" "announcing a failure does not spend the verdict underneath it (rc=$RC1/$RC2 enforced=$ENFORCED_AFTER out='$OUT1')"
+fi
+
+# End to end, with a parser that really cannot run: the reviewer stops, nothing
+# is recorded, and the next turn says so. The seeded cases above would all pass
+# on a mark the two hooks spell differently.
+PROJ=$(new_proj)
+ORPHAN=$(orphan_hook)
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$ORPHAN/.claude/hooks/$R" >/dev/null 2>&1
+OUT1=$(abandoned_turn "$PROJ" s1); RC1=$?
+OUT2=$(abandoned_turn "$PROJ" s1); RC2=$?
+rm -rf "$ORPHAN" "$PROJ"
+if [ "$RC1" -eq 0 ] && [ "$RC2" -eq 0 ] \
+   && printf '%s' "$OUT1" | grep -qF '기록되지' && [ -z "$OUT2" ]; then
+  report 0 "loop" "a reviewer whose verdict could not be recorded is reported on the next turn"
+else
+  report 1 "loop" "a reviewer whose verdict could not be recorded is reported on the next turn (rc=$RC1/$RC2 out1='$OUT1' out2='$OUT2')"
+fi
+
+# An unreadable state file cannot be un-marked, so it keeps the warning it had.
+# Announcing out of a file this hook could not parse would be inventing a fact.
+enforce_case 0 "a truncated state file is still just a warning -> exit 0" \
+  '{"record_failed":' "$(stop_json)" 'WARNING' -
+
+# Whichever reader the host has.
+FAILED_NOJQ=$(mktemp -d /tmp/hooktest-nojq-rf-XXXXXX)
+ln -s "$REAL_PY" "$FAILED_NOJQ/python3"
+ln -s "$(command -v cat)" "$FAILED_NOJQ/cat"
+enforce_case 0 "python3 fallback: a marked recording failure -> exit 0 + the reason" \
+  "$FAILED_MARK" "$(stop_json)" - 'run_phase.py exited 3 without a verdict' "$FAILED_NOJQ"
+rm -rf "$FAILED_NOJQ"
 
 # ---------- enforce-loop.sh : a loop that is not moving stops early ----------
 # The budget of 3 bounds how long a stalled loop runs, it does not notice that
