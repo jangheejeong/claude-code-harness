@@ -2167,6 +2167,25 @@ for NOT_A_STRING in '[]' '{}' 'true' '1.5'; do
     'attempt 1/3'
 done
 
+# The feature itself, pinned on both readers rather than one each: a string is
+# the only thing that is a fingerprint, so a string is the only thing that can
+# stop a loop — and it still must.
+fingerprint_parity_case 0 "equal string fingerprints still stop the loop on both readers" \
+  "$SAME_FP" '무진전'
+fingerprint_parity_case 2 "differing string fingerprints still exit 2 on both readers" \
+  "$MOVED_FP" 'attempt 1/3'
+
+# The three shapes that have always meant "not measured" — no git, no repo, or
+# the first cycle of a loop — and have to keep meaning it now that the rule is
+# written as a type. Reading any of them as a fingerprint would stop every loop
+# on its first BLOCK.
+fingerprint_parity_case 2 "null fingerprints are no fingerprint on both readers" \
+  '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":null,"prev_diff_sha":null}' 'attempt 1/3'
+fingerprint_parity_case 2 "empty-string fingerprints are no fingerprint on both readers" \
+  '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":"","prev_diff_sha":""}' 'attempt 1/3'
+fingerprint_parity_case 2 "absent fingerprint keys are no fingerprint on both readers" \
+  '{"last_verdict":"BLOCK","attempt":1}' 'attempt 1/3'
+
 rm -rf "$FP_NOJQ"
 
 # One verdict still buys one reaction. Stopping early is a reaction, so an
