@@ -2383,6 +2383,37 @@ else
   report 1 "$R" "editing an untracked file moves the fingerprint, not just creating it (last='$FP4B' before='$FP4')"
 fi
 
+# ...and one path the hook cannot open must not take the rest of the batch with
+# it. `git hash-object` die()s on the first argument it cannot read and never
+# reaches the ones after it, so a single dangling symlink can drop every other
+# untracked file's blob id. The `?? path` lines above do not move when a file's
+# *contents* change, so what is left is a fingerprint that cannot move — the
+# false "무진전 중단" the untracked hashing was added to prevent, back through a
+# different door and invisible to every case above.
+#
+# Both orderings, because only one of them bites: a broken link that sorts last
+# is hashed after the real files and their ids are already on stdout, so that
+# arrangement passes with no filter at all. It is here as the guard that the
+# filter does not break the ordering that already worked.
+for BROKEN in aaa_broken zzz_broken; do
+  # Its own project dir: the chain above is still mid-scenario and $PROJ has to
+  # survive into the commit case below.
+  BPROJ=$(new_git_proj)
+  ln -s /nonexistent/target "$BPROJ/$BROKEN"
+  printf 'first draft\n' > "$BPROJ/work.txt"
+  record_block "$BPROJ"
+  BROKEN1=$(state_field "$BPROJ/$STATE_REL" last_diff_sha)
+  printf 'a real second draft\n' > "$BPROJ/work.txt"
+  record_block "$BPROJ"
+  BROKEN2=$(state_field "$BPROJ/$STATE_REL" last_diff_sha)
+  rm -rf "$BPROJ"
+  if [ -n "$BROKEN1" ] && [ -n "$BROKEN2" ] && [ "$BROKEN1" != "$BROKEN2" ]; then
+    report 0 "$R" "a dangling symlink sorting as $BROKEN still lets an edit move the fingerprint"
+  else
+    report 1 "$R" "a dangling symlink sorting as $BROKEN still lets an edit move the fingerprint (first='$BROKEN1' second='$BROKEN2')"
+  fi
+done
+
 # A commit moves it too, which is the ordinary case: the coder committed its
 # green checkpoint between the two reviews.
 git -C "$PROJ" add -A >/dev/null 2>&1
