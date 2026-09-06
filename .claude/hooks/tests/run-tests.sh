@@ -1816,6 +1816,74 @@ else
   report 1 "loop" "a quoted tag with no judgement -> UNKNOWN, budget untouched, turn ends (rc=$RC got $GOT_V/$GOT_A)"
 fi
 
+# ---------- enforce-loop.sh : a loop that is not moving stops early ----------
+# The budget of 3 bounds how long a stalled loop runs, it does not notice that
+# it is stalled. Two cycles over an identical tree buy identical attempts, so
+# the remaining budget is worth nothing — and the reviewer has already said
+# twice what is wrong.
+
+SAME_FP='{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":"deadbeef","prev_diff_sha":"deadbeef"}'
+MOVED_FP='{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":"deadbeef","prev_diff_sha":"cafebabe"}'
+
+enforce_case 0 "no progress since the last cycle -> exit 0, budget left unspent" \
+  "$SAME_FP" "$(stop_json)" '무진전' -
+enforce_case 0 "no progress -> stderr counts the attempt it stopped at (1/3)" \
+  "$SAME_FP" "$(stop_json)" 'attempt 1/3' -
+# Same rule as the exhausted budget: exit 0 is "stop", not "passed", so the
+# stdout the user reads has to say a human is needed.
+enforce_case 0 "no progress -> stdout asks for a human, not a success" \
+  "$SAME_FP" "$(stop_json)" - '사람 개입'
+
+# The other half of the same branch, and the one that must not regress: a tree
+# that moved is a coder that did something, and the budget is there to be spent.
+enforce_case 2 "the tree moved since the last cycle -> exit 2, re-dispatch as before" \
+  "$MOVED_FP" "$(stop_json)" 'attempt 1/3' -
+
+# The first cycle of a loop has nothing behind it. Reading an absent or empty
+# previous fingerprint as "equal" would stop every loop on its first BLOCK,
+# which is the whole feature failing closed.
+enforce_case 2 "no fingerprints at all (first cycle) -> exit 2, not no-progress" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'attempt 1/3' -
+enforce_case 2 "a fingerprint with no previous one -> exit 2, not no-progress" \
+  '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":"deadbeef","prev_diff_sha":""}' \
+  "$(stop_json)" 'attempt 1/3' -
+# Both empty is the shape a project outside a git repo leaves behind. Two
+# unknowns are not the same tree.
+enforce_case 2 "two empty fingerprints -> exit 2, not no-progress" \
+  '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":"","prev_diff_sha":""}' \
+  "$(stop_json)" 'attempt 1/3' -
+
+# An exhausted budget keeps its own message: it is the more accurate one, and
+# nothing about no-progress changes what happens at 3/3.
+enforce_case 0 "no progress with the budget already spent -> the exhaustion banner still" \
+  '{"last_verdict":"BLOCK","attempt":3,"last_diff_sha":"deadbeef","prev_diff_sha":"deadbeef"}' \
+  "$(stop_json)" - '3/3'
+
+# Whichever reader the host has, the same two states get the same two answers.
+NOPROG_NOJQ=$(mktemp -d /tmp/hooktest-nojq-np-XXXXXX)
+ln -s "$REAL_PY" "$NOPROG_NOJQ/python3"
+ln -s "$(command -v cat)" "$NOPROG_NOJQ/cat"
+enforce_case 0 "python3 fallback: no progress -> exit 0" \
+  "$SAME_FP" "$(stop_json)" '무진전' - "$NOPROG_NOJQ"
+enforce_case 2 "python3 fallback: the tree moved -> exit 2" \
+  "$MOVED_FP" "$(stop_json)" 'attempt 1/3' - "$NOPROG_NOJQ"
+rm -rf "$NOPROG_NOJQ"
+
+# One verdict still buys one reaction. Stopping early is a reaction, so an
+# abandoned stalled loop has to go quiet after saying it once — the same rule
+# that keeps an abandoned BLOCK from blocking every future turn.
+PROJ=$(new_proj)
+printf '%s\n' "$SAME_FP" > "$PROJ/$STATE_REL"
+OUT1=$(abandoned_turn "$PROJ" s1); RC1=$?
+OUT2=$(abandoned_turn "$PROJ" a-later-session); RC2=$?
+rm -rf "$PROJ"
+if [ "$RC1" -eq 0 ] && [ "$RC2" -eq 0 ] \
+   && printf '%s' "$OUT1" | grep -qF '사람 개입' && [ -z "$OUT2" ]; then
+  report 0 "$E" "a stalled loop says so once, then goes quiet"
+else
+  report 1 "$E" "a stalled loop says so once, then goes quiet (rc=$RC1/$RC2 out1='$OUT1' out2='$OUT2')"
+fi
+
 # ---------- record-verdict.sh : the diff fingerprint ----------
 # A loop can burn its whole budget without moving: the coder re-reads the same
 # files, the reviewer re-files the same findings. The fingerprint is what lets
