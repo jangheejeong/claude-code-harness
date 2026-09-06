@@ -34,6 +34,28 @@ set -euo pipefail
 MANAGED_HOOKS="block-destructive protect-secrets announce-agent post-edit-lint record-verdict enforce-loop"
 HOOK_COUNT=$(set -- $MANAGED_HOOKS; echo $#)
 
+# Hooks the project's own settings.json never runs. A copied-but-unregistered
+# hook is worse than a missing one: it is on disk, it looks installed, and it
+# enforces nothing. Nothing in a session says so, so update.sh has to.
+unregistered_hooks() {  # <settings-file> -> hook names, space separated
+  local settings="$1" missing="" h
+  for h in $MANAGED_HOOKS; do
+    grep -q "$h\.sh" "$settings" 2>/dev/null || missing="$missing $h"
+  done
+  printf '%s' "${missing# }"
+}
+
+registration_notice() {  # <upstream-settings> <backup-dir> <hook names...>
+  local upstream="$1" backup="$2" h
+  shift 2
+  echo "   ⚠️  .claude/settings.json kept (yours) — these hooks are installed but NOT registered:"
+  for h in "$@"; do
+    echo "       · $h.sh"
+  done
+  echo "       They do nothing until settings.json runs them."
+  echo "       Upstream reference: $backup/settings.json.upstream-latest"
+}
+
 # Sourcing with HARNESS_UPDATE_LIB=1 stops here, so the test suite can call the
 # helpers above without cloning over the network or writing into a project.
 if [ "${HARNESS_UPDATE_LIB:-}" = "1" ]; then
@@ -215,16 +237,14 @@ done
 # hook events (esp. SubagentStart/SubagentStop, added later), print a notice.
 SETTINGS_NEW="$TMP/harness/.claude/settings.json"
 SETTINGS_USER=".claude/settings.json"
-SETTINGS_MISSING_EVENTS=""
+UNREGISTERED_HOOKS=""
 if [ -f "$SETTINGS_NEW" ]; then
   if [ ! -f "$SETTINGS_USER" ]; then
     cp "$SETTINGS_NEW" "$SETTINGS_USER"
     echo "  + .claude/settings.json installed (registers all $HOOK_COUNT hooks)"
   else
-    for ev in PreToolUse PostToolUse SubagentStart SubagentStop; do
-      grep -q "\"$ev\"" "$SETTINGS_USER" || SETTINGS_MISSING_EVENTS="$SETTINGS_MISSING_EVENTS $ev"
-    done
-    [ -n "$SETTINGS_MISSING_EVENTS" ] && cp "$SETTINGS_NEW" "$BACKUP/settings.json.upstream-latest"
+    UNREGISTERED_HOOKS=$(unregistered_hooks "$SETTINGS_USER")
+    [ -n "$UNREGISTERED_HOOKS" ] && cp "$SETTINGS_NEW" "$BACKUP/settings.json.upstream-latest"
   fi
 fi
 
@@ -331,10 +351,8 @@ case "$RV_RESULT" in
     echo "       Upstream saved aside: $RV_USER.upstream-latest — merge manually"
     ;;
 esac
-if [ -n "$SETTINGS_MISSING_EVENTS" ]; then
-  echo "   ⚠️  .claude/settings.json kept (yours), but it lacks hook entries for:$SETTINGS_MISSING_EVENTS"
-  echo "       All $HOOK_COUNT hooks are installed but fire only when registered in settings.json."
-  echo "       Upstream reference: $BACKUP/settings.json.upstream-latest"
+if [ -n "$UNREGISTERED_HOOKS" ]; then
+  registration_notice "$SETTINGS_NEW" "$BACKUP" $UNREGISTERED_HOOKS
 fi
 if [ -n "$STALE_EXAMPLES" ]; then
   echo "   ⚠️  examples no longer shipped upstream (kept locally):$STALE_EXAMPLES"

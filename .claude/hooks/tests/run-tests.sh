@@ -1847,11 +1847,15 @@ else
   report 1 "update.sh" "the managed hook list names every hook the repo ships (missing:$MISSING_FROM_LIST)"
 fi
 
-LOOP_READERS=$(grep -c 'for h in \$MANAGED_HOOKS' "$UPDATE_SH")
-if [ "$LOOP_READERS" -eq 2 ]; then
-  report 0 "update.sh" "both the diff-report and the copy loop read that one list"
+# Both places that touch an upstream hook file have to sit in the body of a loop
+# over that one list — reporting one set of hooks and copying another is how a
+# half-fix would look.
+LIST_LOOP_BODIES=$(grep -A1 'for h in \$MANAGED_HOOKS; do' "$UPDATE_SH")
+if printf '%s' "$LIST_LOOP_BODIES" | grep -qF 'report_diff "$TMP/harness/.claude/hooks/$h.sh"' \
+   && printf '%s' "$LIST_LOOP_BODIES" | grep -qF 'cp "$TMP/harness/.claude/hooks/$h.sh"'; then
+  report 0 "update.sh" "the diff-report and the copy loop both walk that one list"
 else
-  report 1 "update.sh" "both the diff-report and the copy loop read that one list (found $LOOP_READERS)"
+  report 1 "update.sh" "the diff-report and the copy loop both walk that one list"
 fi
 
 # Criterion 2 — one definition, no second copy. A hook name written anywhere
