@@ -813,8 +813,9 @@ survives_case() {  # <desc> <payload> [transcript-path-to-create]
 
 survives_case "garbage stdin -> exit 0, no state written" 'not json at all'
 survives_case "empty payload -> exit 0, no state written" '{}'
-survives_case "reviewer with a transcript path that does not exist -> exit 0" \
-  "$(subagent_stop_json reviewer /nonexistent/transcript.jsonl)"
+# A reviewer whose transcript cannot be read does write one thing — the failure
+# mark, so the next Stop can say so. That pair of cases lives further down, with
+# the rest of the marking behaviour ("mark_only_case").
 
 # `transcript_path` is the MAIN session's transcript, not the subagent's, and
 # its last assistant text is whatever the main session said — a verdict quoted
@@ -825,10 +826,13 @@ assistant_jsonl "$PROJ/main-session.jsonl" '메인 세션이 인용한 판정입
 ERR=$(printf '{"hook_event_name":"SubagentStop","agent_type":"reviewer","transcript_path":"%s"}' \
   "$PROJ/main-session.jsonl" | CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOKS_DIR/$R" 2>&1 >/dev/null)
 RC=$?
-if [ "$RC" -eq 0 ] && [ ! -f "$PROJ/$STATE_REL" ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
+# No verdict of any kind may appear here. The failure mark is the one write this
+# path is allowed, and the assertion is that it arrives alone.
+GOT_V=$(state_field "$PROJ/$STATE_REL" last_verdict)
+if [ "$RC" -eq 0 ] && [ -z "$GOT_V" ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
   report 0 "$R" "no agent_transcript_path -> the main transcript is not read, warning, exit 0"
 else
-  report 1 "$R" "no agent_transcript_path -> the main transcript is not read, warning, exit 0 (rc=$RC err='$ERR')"
+  report 1 "$R" "no agent_transcript_path -> the main transcript is not read, warning, exit 0 (rc=$RC verdict='$GOT_V' err='$ERR')"
 fi
 rm -rf "$PROJ"
 
@@ -948,6 +952,13 @@ enforce_case 2 "BLOCK at attempt 1 -> stderr names the verdict being acted on" \
 
 enforce_case 2 "BLOCK at attempt 1 -> stderr says to re-dispatch the coder" \
   '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'coder' -
+
+# ...and not only the coder. The findings decide who fixes them: the review that
+# produced this very case returned CHANGES whose entire fix was documentation,
+# and a model reading "re-dispatch the coder" literally puts a coder on a docs
+# pass.
+enforce_case 2 "BLOCK at attempt 1 -> stderr names the documenter as well" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'documenter' -
 
 # The reviewer's own wording, as it appears in the <verdict> tag. record-verdict
 # stores the normalized "CHANGES", but a state file written by hand or by an
@@ -1131,9 +1142,12 @@ printf '{"last_verdict":"BLOCK","attempt":1,"enforced":false}\n' > "$PROJ/$STATE
 RACE_BIN=$(mktemp -d /tmp/hooktest-race-XXXXXX)
 cat > "$RACE_BIN/python3" <<EOF
 #!/bin/bash
-# mark_enforced is the only python3 call in the hook that reads its program from
-# stdin, so "\$1 is -" is exactly "the mark is about to be written".
-[ "\${1-}" = "-" ] && printf '{"last_verdict":"BLOCK","attempt":2,"enforced":false}\n' > "$PROJ/$STATE_REL"
+# The hook passes its edit mode as the first argument after the \`-\`, so
+# "mark-enforced" is exactly "the enforced mark is about to be written" — and
+# not any of the hook's other python3 calls, which read the file or clear a
+# different key. enforce-loop.sh carries a comment saying this seam depends on
+# that word.
+[ "\${2-}" = "mark-enforced" ] && printf '{"last_verdict":"BLOCK","attempt":2,"enforced":false}\n' > "$PROJ/$STATE_REL"
 exec "$REAL_PY" "\$@"
 EOF
 chmod +x "$RACE_BIN/python3"
@@ -1412,43 +1426,119 @@ orphan_hook() {  # [stub-run_phase.py body] -> dir holding a copy of the hook
   printf '%s' "$root"
 }
 
+# ...but "nothing" is not the same as silence. consume-once means the previous
+# verdict has already been spent, so a hook that cannot record leaves a turn that
+# simply ends, with one line on a stderr channel the user sees only in transcript
+# mode. The mark is how that reaches the next Stop; everything the recording
+# would have decided stays undecided.
+state_without_mark() {  # <state-file> -> canonical JSON of everything but the mark
+  python3 -c '
+import json, sys
+
+with open(sys.argv[1]) as f:
+    state = json.load(f)
+state.pop("record_failed", None)
+state.pop("record_failed_reason", None)
+print(json.dumps(state, sort_keys=True))
+' "$1" 2>/dev/null
+}
+
 PROJ=$(new_proj)
 ORPHAN=$(orphan_hook)
 assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
 ERR=$(printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
   | CLAUDE_PROJECT_DIR="$PROJ" bash "$ORPHAN/.claude/hooks/$R" 2>&1 >/dev/null)
 RC=$?
-STATE_AFTER=absent
-[ -e "$PROJ/$STATE_REL" ] && STATE_AFTER="present: $(cat "$PROJ/$STATE_REL" 2>/dev/null)"
+MARKED=$(state_field "$PROJ/$STATE_REL" record_failed)
+REASON=$(state_field "$PROJ/$STATE_REL" record_failed_reason)
+REST=$(state_without_mark "$PROJ/$STATE_REL")
 rm -rf "$ORPHAN" "$PROJ"
-if [ "$RC" -eq 0 ] && [ "$STATE_AFTER" = absent ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
-  report 0 "$R" "the verdict parser cannot run -> no loop-state.json, warning, exit 0"
+# `{}` is the whole point: the mark arrives alone. A last_verdict or an attempt
+# invented here would be a judgement the hook never read.
+if [ "$RC" -eq 0 ] && [ "$MARKED" = "True" ] && [ -n "$REASON" ] && [ "$REST" = "{}" ] \
+   && printf '%s' "$ERR" | grep -qi 'WARNING'; then
+  report 0 "$R" "the verdict parser cannot run -> the failure is marked and nothing else, exit 0"
 else
-  report 1 "$R" "the verdict parser cannot run -> no loop-state.json, warning, exit 0 (rc=$RC state=$STATE_AFTER err='$ERR')"
+  report 1 "$R" "the verdict parser cannot run -> the failure is marked and nothing else, exit 0 (rc=$RC marked=$MARKED reason='$REASON' rest=$REST err='$ERR')"
 fi
 
 # The same with a budget already in flight, which is when it matters: a review
 # mid-loop has two of its three attempts spent, and a hook that cannot read the
-# verdict has no business touching either field. Compared byte for byte — a
-# rewrite that happens to preserve the values still means the hook decided
-# something it had no basis to decide.
+# verdict has no business touching any of that. Compared as canonical JSON with
+# the mark removed — a rewrite that happens to preserve the values still means
+# the hook decided something it had no basis to decide.
 PROJ=$(new_proj)
 ORPHAN=$(orphan_hook)
 assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
-printf '{"last_verdict":"BLOCK","attempt":2}\n' > "$PROJ/$STATE_REL"
-cp "$PROJ/$STATE_REL" "$PROJ/state.before"
+printf '{"last_verdict":"BLOCK","attempt":2,"enforced":true,"last_diff_sha":"deadbeef"}\n' > "$PROJ/$STATE_REL"
+BEFORE=$(state_without_mark "$PROJ/$STATE_REL")
 ERR=$(printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
   | CLAUDE_PROJECT_DIR="$PROJ" bash "$ORPHAN/.claude/hooks/$R" 2>&1 >/dev/null)
 RC=$?
-SAME=0
-cmp -s "$PROJ/state.before" "$PROJ/$STATE_REL" || SAME=1
-STATE_AFTER=$(cat "$PROJ/$STATE_REL" 2>/dev/null)
+AFTER=$(state_without_mark "$PROJ/$STATE_REL")
+MARKED=$(state_field "$PROJ/$STATE_REL" record_failed)
 rm -rf "$ORPHAN" "$PROJ"
-if [ "$RC" -eq 0 ] && [ "$SAME" -eq 0 ] && printf '%s' "$ERR" | grep -qi 'WARNING'; then
-  report 0 "$R" "the verdict parser cannot run -> an in-flight loop-state.json is untouched"
+if [ "$RC" -eq 0 ] && [ "$AFTER" = "$BEFORE" ] && [ "$MARKED" = "True" ] \
+   && printf '%s' "$ERR" | grep -qi 'WARNING'; then
+  report 0 "$R" "the verdict parser cannot run -> an in-flight budget is untouched but marked"
 else
-  report 1 "$R" "the verdict parser cannot run -> an in-flight loop-state.json is untouched (rc=$RC state=$STATE_AFTER err='$ERR')"
+  report 1 "$R" "the verdict parser cannot run -> an in-flight budget is untouched but marked (rc=$RC before=$BEFORE after=$AFTER marked=$MARKED err='$ERR')"
 fi
+
+# Every other way a reviewer's verdict can fail to be recorded. Each of these
+# used to end in a warning on stderr and nothing else, which is the silence the
+# mark exists to break — and none of them may invent a verdict on the way.
+mark_only_case() {  # <desc> <payload-transcript-path>
+  local desc="$1" tpath="$2" proj rc=0 marked rest
+  proj=$(new_proj)
+  printf '%s' "$(subagent_stop_json reviewer "$tpath")" \
+    | CLAUDE_PROJECT_DIR="$proj" bash "$HOOKS_DIR/$R" >/dev/null 2>&1 || rc=$?
+  marked=$(state_field "$proj/$STATE_REL" record_failed)
+  rest=$(state_without_mark "$proj/$STATE_REL")
+  rm -rf "$proj"
+  if [ "$rc" -eq 0 ] && [ "$marked" = "True" ] && [ "$rest" = "{}" ]; then
+    report 0 "$R" "$desc"
+  else
+    report 1 "$R" "$desc (rc=$rc marked=$marked rest=$rest)"
+  fi
+}
+
+mark_only_case "a transcript path that does not exist -> the failure is marked" \
+  /nonexistent/transcript.jsonl
+mark_only_case "a payload with no agent_transcript_path -> the failure is marked" ''
+
+# A reviewer whose verdict was recorded is not a failure, and the mark has to go
+# with it: a parser that broke once and works now must not keep announcing the
+# time it broke.
+PROJ=$(new_proj)
+ORPHAN=$(orphan_hook)
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$ORPHAN/.claude/hooks/$R" >/dev/null 2>&1
+MARKED_BEFORE=$(state_field "$PROJ/$STATE_REL" record_failed)
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" >/dev/null
+MARKED_AFTER=$(state_field "$PROJ/$STATE_REL" record_failed)
+REASON_AFTER=$(state_field "$PROJ/$STATE_REL" record_failed_reason)
+GOT_V=$(state_field "$PROJ/$STATE_REL" last_verdict)
+rm -rf "$ORPHAN" "$PROJ"
+if [ "$MARKED_BEFORE" = "True" ] && [ -z "$MARKED_AFTER" ] && [ -z "$REASON_AFTER" ] \
+   && [ "$GOT_V" = "BLOCK" ]; then
+  report 0 "$R" "a recording that works again clears the mark the broken one left"
+else
+  report 1 "$R" "a recording that works again clears the mark the broken one left (before=$MARKED_BEFORE after=$MARKED_AFTER reason='$REASON_AFTER' verdict=$GOT_V)"
+fi
+
+# Nobody but a reviewer can mark anything. A coder stopping in a project that
+# never ran a review would otherwise create a state file out of nothing, and
+# enforce-loop.sh reads the existence of that file as "a loop is in flight".
+PROJ=$(new_proj)
+RC=$(record_run "$PROJ" "$(subagent_stop_json coder /nonexistent/transcript.jsonl)")
+if [ "$RC" -eq 0 ] && [ ! -f "$PROJ/$STATE_REL" ]; then
+  report 0 "$R" "a non-reviewer that could not be read marks nothing"
+else
+  report 1 "$R" "a non-reviewer that could not be read marks nothing (rc=$RC)"
+fi
+rm -rf "$PROJ"
 
 # The empty string is the one value last_verdict must never take, whatever the
 # parser did. It is not a harmless placeholder: record_state counts "" as a
@@ -1458,19 +1548,42 @@ fi
 # spot-checked — the exit code and the printed word fail independently.
 EMPTY_WRITES=""
 STATE_TOUCHED=""
-run_stubbed_parser() {  # <label> <hook-path> <proj> <state-before|-->
+UNMARKED=""
+state_verdict_shape() {  # <state-file> -> no-file | absent | empty | <the value>
+  python3 -c '
+import json, sys
+
+try:
+    with open(sys.argv[1]) as f:
+        state = json.load(f)
+except Exception:
+    print("no-file"); raise SystemExit(0)
+if not isinstance(state, dict) or "last_verdict" not in state:
+    print("absent")
+else:
+    print(state["last_verdict"] if str(state["last_verdict"]) else "empty")
+' "$1" 2>/dev/null
+}
+run_stubbed_parser() {  # <label> <hook-path> <proj> <state-before>
   # Every parser this is called with failed to produce a verdict, so both of the
   # hook's two guards are under test at once: the exit code and the word on
-  # stdout can fail independently, and neither may reach the state file.
+  # stdout can fail independently, and neither may reach the state file. The
+  # failure mark is the one thing that is allowed to appear, so it is compared
+  # out of the way and then required.
   local label="$1" hook="$2" proj="$3" before="$4" got after
   printf '%s' "$(subagent_stop_json reviewer "$proj/transcript.jsonl")" \
     | CLAUDE_PROJECT_DIR="$proj" bash "$hook" >/dev/null 2>&1
-  after=absent
-  [ -e "$proj/$STATE_REL" ] && after=$(cat "$proj/$STATE_REL" 2>/dev/null)
+  after=$(state_without_mark "$proj/$STATE_REL")
   [ "$after" = "$before" ] || STATE_TOUCHED="$STATE_TOUCHED|$label -> $after"
-  [ -f "$proj/$STATE_REL" ] || return 0
-  got=$(state_field "$proj/$STATE_REL" last_verdict)
-  [ -n "$got" ] || EMPTY_WRITES="$EMPTY_WRITES|$label"
+  [ "$(state_field "$proj/$STATE_REL" record_failed)" = "True" ] \
+    || UNMARKED="$UNMARKED|$label"
+  # state_field cannot tell an absent key from an empty one, and the difference
+  # is the whole invariant: absent (or the seeded value, left alone) means the
+  # hook decided nothing, while "" means it spent an attempt on a verdict it
+  # never read. What was or was not invented is the comparison above.
+  got=$(state_verdict_shape "$proj/$STATE_REL")
+  [ "$got" = "empty" ] && EMPTY_WRITES="$EMPTY_WRITES|$label -> last_verdict $got"
+  return 0
 }
 
 # Each parser below is a way for run_phase.py to come back with no verdict:
@@ -1482,10 +1595,10 @@ while IFS='|' read -r STUB_LABEL STUB_BODY; do
     PROJ=$(new_proj)
     assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
     SEED_LABEL="on a fresh project"
-    BEFORE=absent
+    BEFORE="{}"  # a fresh project: with the mark compared away, nothing is left
     if [ "$SEED" != "-" ]; then
       printf '%s\n' "$SEED" > "$PROJ/$STATE_REL"
-      BEFORE=$(cat "$PROJ/$STATE_REL")
+      BEFORE=$(state_without_mark "$PROJ/$STATE_REL")
       SEED_LABEL="mid-budget"
     fi
     if [ "$STUB_BODY" = "-" ]; then ORPHAN=$(orphan_hook); else ORPHAN=$(orphan_hook "$STUB_BODY"); fi
@@ -1507,9 +1620,15 @@ else
 fi
 
 if [ -z "$STATE_TOUCHED" ]; then
-  report 0 "$R" "no parser failure of any shape edits the state file"
+  report 0 "$R" "no parser failure of any shape edits anything but the mark"
 else
-  report 1 "$R" "no parser failure of any shape edits the state file ($STATE_TOUCHED)"
+  report 1 "$R" "no parser failure of any shape edits anything but the mark ($STATE_TOUCHED)"
+fi
+
+if [ -z "$UNMARKED" ]; then
+  report 0 "$R" "every shape of parser failure leaves the mark behind"
+else
+  report 1 "$R" "every shape of parser failure leaves the mark behind (unmarked: $UNMARKED)"
 fi
 
 # ---------- record-verdict.sh : it has to find its own parser ----------
@@ -1621,13 +1740,14 @@ enforce_case 2 "null attempt counts as none spent -> exit 2 at 0/3" \
 # A verdict this hook does not recognise is not a failed review, so it ends the
 # turn — and silently, because "the reviewer never judged" is the documented
 # Phase 1 fallback, not an anomaly worth a warning on every legacy run.
-enforce_quiet_case() {  # <expected-exit> <desc> <state>
-  local expected="$1" desc="$2" state="$3"
+enforce_quiet_case() {  # <expected-exit> <desc> <state> [PATH]
+  local expected="$1" desc="$2" state="$3" path="${4:-$PATH}"
   local proj out msg err rc=0 ok=0
   proj=$(new_proj)
   printf '%s\n' "$state" > "$proj/$STATE_REL"
   err=$(mktemp /tmp/hooktest-err-XXXXXX)
-  out=$(printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$proj" bash "$HOOKS_DIR/$E" 2>"$err") || rc=$?
+  out=$(printf '%s' "$(stop_json)" \
+    | env PATH="$path" CLAUDE_PROJECT_DIR="$proj" /bin/bash "$HOOKS_DIR/$E" 2>"$err") || rc=$?
   msg=$(cat "$err"); rm -f "$err"; rm -rf "$proj"
   [ "$rc" -eq "$expected" ] && [ -z "$msg" ] && [ -z "$out" ] || ok=1
   if [ "$ok" -eq 0 ]; then
@@ -1718,26 +1838,39 @@ enforce_case 0 "a newline in last_verdict -> exit 0 (python3 fallback, same answ
   "$SHIFTED_STATE" "$(stop_json)" - - "$EDGE_NOJQ"
 
 # The two readers disagree about what is true: jq's only falsy values are false
-# and null, python's also include 0, "", [] and {}. Both flags this hook reads
-# are booleans, so these values only arrive from a hand-edited state file or a
-# host that renders them differently — but "whether jq is installed changes
-# nothing else" is the contract, and an `enforced: 0` that looks spent to jq and
-# armed to python3 breaks it in the direction that switches enforcement off.
-# Both readers count JSON true and nothing else, so a mangled flag reads as unset
-# and the verdict stays armed. Phase 3 puts more keys in this file; they inherit
-# the same rule.
-for FALSY in 0 '""' '[]' '{}'; do
-  FALSY_STATE="{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"enforced\":$FALSY}"
-  enforce_case 2 "enforced: $FALSY is not true, so the verdict is still armed (jq)" \
-    "$FALSY_STATE" "$(stop_json)" 'attempt 1/3' -
-  enforce_case 2 "enforced: $FALSY is not true, so the verdict is still armed (python3 fallback)" \
-    "$FALSY_STATE" "$(stop_json)" 'attempt 1/3' - "$EDGE_NOJQ"
-done
+# and null, python's also include 0, "", [] and {}. Every flag this hook reads is
+# a boolean, so these values only arrive from a hand-edited state file or a host
+# that renders them differently — but "whether jq is installed changes nothing
+# else" is the contract, and an `enforced: 0` that looks spent to jq and armed to
+# python3 breaks it in the direction that switches enforcement off.
+#
+# The table has to hold values from BOTH sides of the disagreement. With only
+# 0, "", [] and {} in it, the python3 half asserted nothing: python already calls
+# those falsy, so the hook's `is True` could be written as a bare truth test and
+# every case still passed. 1 and "true" are where the two readers actually part
+# company — truthy to python, not `true` to jq — and they are what makes the
+# python3 column bite.
+for NOT_TRUE in 0 '""' '[]' '{}' 1 '"true"'; do
+  ARMED_STATE="{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"enforced\":$NOT_TRUE}"
+  enforce_case 2 "enforced: $NOT_TRUE is not true, so the verdict is still armed (jq)" \
+    "$ARMED_STATE" "$(stop_json)" 'attempt 1/3' -
+  enforce_case 2 "enforced: $NOT_TRUE is not true, so the verdict is still armed (python3 fallback)" \
+    "$ARMED_STATE" "$(stop_json)" 'attempt 1/3' - "$EDGE_NOJQ"
 
-enforce_case 2 "stop_hook_active: 0 is not true, so the budget still bites (jq)" \
-  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json 0)" 'attempt 1/3' -
-enforce_case 2 "stop_hook_active: 0 is not true, so the budget still bites (python3 fallback)" \
-  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json 0)" 'attempt 1/3' - "$EDGE_NOJQ"
+  enforce_case 2 "stop_hook_active: $NOT_TRUE is not true, so the budget still bites (jq)" \
+    '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json "$NOT_TRUE")" 'attempt 1/3' -
+  enforce_case 2 "stop_hook_active: $NOT_TRUE is not true, so the budget still bites (python3 fallback)" \
+    '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json "$NOT_TRUE")" 'attempt 1/3' - "$EDGE_NOJQ"
+
+  # The key Phase 3 added inherits the rule. Announcing on a mangled flag would
+  # be the same failure pointed the other way: a fact reported out of a file
+  # that never carried it.
+  MARK_STATE="{\"record_failed\":$NOT_TRUE,\"record_failed_reason\":\"nothing happened\"}"
+  enforce_quiet_case 0 "record_failed: $NOT_TRUE is not true, so nothing is announced (jq)" \
+    "$MARK_STATE"
+  enforce_quiet_case 0 "record_failed: $NOT_TRUE is not true, so nothing is announced (python3 fallback)" \
+    "$MARK_STATE" "$EDGE_NOJQ"
+done
 rm -rf "$EDGE_NOJQ"
 
 # The same shift in record-verdict.sh is worse: a newline in agent_type pushes
@@ -1816,6 +1949,688 @@ else
   report 1 "loop" "a quoted tag with no judgement -> UNKNOWN, budget untouched, turn ends (rc=$RC got $GOT_V/$GOT_A)"
 fi
 
+# ---------- enforce-loop.sh : a recording that failed gets said out loud ----------
+# record-verdict.sh marks the state file when a reviewer's verdict never reached
+# it. This is the half that reaches a human: once, on the next turn, and then
+# never again. It is a fact, not a task — re-dispatching a coder would not fix a
+# parser — so it releases the turn.
+
+FAILED_MARK='{"record_failed":true,"record_failed_reason":"run_phase.py exited 3 without a verdict"}'
+
+enforce_case 0 "a marked recording failure -> exit 0, the turn is never held" \
+  "$FAILED_MARK" "$(stop_json)" - '기록되지'
+enforce_case 0 "a marked recording failure -> stdout carries the reason recorded" \
+  "$FAILED_MARK" "$(stop_json)" - 'run_phase.py exited 3 without a verdict'
+
+# Said once. Nothing ages the state file out, so a mark left by a session the
+# user walked away from would otherwise greet every message in every session
+# after it — the same rule the verdict itself follows.
+PROJ=$(new_proj)
+printf '%s\n' "$FAILED_MARK" > "$PROJ/$STATE_REL"
+OUT1=$(abandoned_turn "$PROJ" s1); RC1=$?
+OUT2=$(abandoned_turn "$PROJ" a-later-session); RC2=$?
+MARKED=$(state_field "$PROJ/$STATE_REL" record_failed)
+rm -rf "$PROJ"
+if [ "$RC1" -eq 0 ] && [ "$RC2" -eq 0 ] && printf '%s' "$OUT1" | grep -qF '기록되지' \
+   && [ -z "$OUT2" ] && [ -z "$MARKED" ]; then
+  report 0 "$E" "a recording failure is announced once and then consumed"
+else
+  report 1 "$E" "a recording failure is announced once and then consumed (rc=$RC1/$RC2 out1='$OUT1' out2='$OUT2' marked='$MARKED')"
+fi
+
+# A mark can land on top of a verdict nobody has answered yet: the reviewer of
+# cycle 2 failed to record while cycle 1's BLOCK was still armed. The
+# announcement takes this turn and spends only itself — the BLOCK stays armed and
+# the next turn re-dispatches on it, because a verdict nobody reacted to is
+# exactly what the consume-once mark exists to protect.
+PROJ=$(new_proj)
+printf '{"last_verdict":"BLOCK","attempt":1,"enforced":false,"record_failed":true,"record_failed_reason":"parser died"}\n' \
+  > "$PROJ/$STATE_REL"
+OUT1=$(abandoned_turn "$PROJ" s1); RC1=$?
+ENFORCED_AFTER=$(state_field "$PROJ/$STATE_REL" enforced)
+RC2=$(later_turn "$PROJ" s1)
+rm -rf "$PROJ"
+if [ "$RC1" -eq 0 ] && printf '%s' "$OUT1" | grep -qF '기록되지' \
+   && [ "$ENFORCED_AFTER" = "False" ] && [ "$RC2" -eq 2 ]; then
+  report 0 "$E" "announcing a failure does not spend the verdict underneath it"
+else
+  report 1 "$E" "announcing a failure does not spend the verdict underneath it (rc=$RC1/$RC2 enforced=$ENFORCED_AFTER out='$OUT1')"
+fi
+
+# End to end, with a parser that really cannot run: the reviewer stops, nothing
+# is recorded, and the next turn says so. The seeded cases above would all pass
+# on a mark the two hooks spell differently.
+PROJ=$(new_proj)
+ORPHAN=$(orphan_hook)
+assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$ORPHAN/.claude/hooks/$R" >/dev/null 2>&1
+OUT1=$(abandoned_turn "$PROJ" s1); RC1=$?
+OUT2=$(abandoned_turn "$PROJ" s1); RC2=$?
+rm -rf "$ORPHAN" "$PROJ"
+if [ "$RC1" -eq 0 ] && [ "$RC2" -eq 0 ] \
+   && printf '%s' "$OUT1" | grep -qF '기록되지' && [ -z "$OUT2" ]; then
+  report 0 "loop" "a reviewer whose verdict could not be recorded is reported on the next turn"
+else
+  report 1 "loop" "a reviewer whose verdict could not be recorded is reported on the next turn (rc=$RC1/$RC2 out1='$OUT1' out2='$OUT2')"
+fi
+
+# The same interleaving as the verdict race, on the other mark: a reviewer can
+# fail to record while this hook is announcing the previous failure. Consuming
+# whatever is on disk would swallow a failure nobody has read, and that one is
+# gone for good — nothing re-announces it, because the reviewer that would have
+# re-marked it has already stopped.
+PROJ=$(new_proj)
+printf '{"record_failed":true,"record_failed_reason":"the first failure"}\n' > "$PROJ/$STATE_REL"
+CLEAR_BIN=$(mktemp -d /tmp/hooktest-clear-XXXXXX)
+cat > "$CLEAR_BIN/python3" <<EOF
+#!/bin/bash
+# Fires when the hook is about to clear the mark it announced, and not on its
+# other python3 calls: the edit mode is the first argument after the \`-\`.
+[ "\${2-}" = "clear-record-failure" ] && printf '{"record_failed":true,"record_failed_reason":"a second, later failure"}\n' > "$PROJ/$STATE_REL"
+exec "$REAL_PY" "\$@"
+EOF
+chmod +x "$CLEAR_BIN/python3"
+RC=0
+OUT=$(printf '%s' "$(stop_json)" \
+  | env PATH="$CLEAR_BIN:$PATH" CLAUDE_PROJECT_DIR="$PROJ" /bin/bash "$HOOKS_DIR/$E" 2>/dev/null) || RC=$?
+STILL_MARKED=$(state_field "$PROJ/$STATE_REL" record_failed)
+STILL_REASON=$(state_field "$PROJ/$STATE_REL" record_failed_reason)
+rm -rf "$PROJ" "$CLEAR_BIN"
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -qF 'the first failure' \
+   && [ "$STILL_MARKED" = "True" ] && [ "$STILL_REASON" = "a second, later failure" ]; then
+  report 0 "$E" "a failure that landed after the read is left unannounced, not consumed"
+else
+  report 1 "$E" "a failure that landed after the read is left unannounced, not consumed (rc=$RC marked=$STILL_MARKED reason='$STILL_REASON' out='$OUT')"
+fi
+
+# An unreadable state file cannot be un-marked, so it keeps the warning it had.
+# Announcing out of a file this hook could not parse would be inventing a fact.
+enforce_case 0 "a truncated state file is still just a warning -> exit 0" \
+  '{"record_failed":' "$(stop_json)" 'WARNING' -
+
+# Whichever reader the host has.
+FAILED_NOJQ=$(mktemp -d /tmp/hooktest-nojq-rf-XXXXXX)
+ln -s "$REAL_PY" "$FAILED_NOJQ/python3"
+ln -s "$(command -v cat)" "$FAILED_NOJQ/cat"
+enforce_case 0 "python3 fallback: a marked recording failure -> exit 0 + the reason" \
+  "$FAILED_MARK" "$(stop_json)" - 'run_phase.py exited 3 without a verdict' "$FAILED_NOJQ"
+rm -rf "$FAILED_NOJQ"
+
+# ---------- enforce-loop.sh : a record_failed_reason is a string or it is nothing ----------
+# This value crosses an engine boundary no other one does. On an ordinary host
+# jq renders it for the announcement and python3 compares it back when clearing
+# the mark, and the two only ever agreed by accident: `// "" | tostring`
+# promotes 0 to "0" where `or ""` collapses it to "". The compare-and-set then
+# does not recognise the reason its own hook just printed, the mark survives,
+# and the same two lines greet every turn from then on — the jq-only failure of
+# the previous round with the engines swapped. The fingerprint keys already
+# carry the cure (a string or nothing) and this is the last key without it.
+#
+# Only a hand-edited or corrupt file reaches these shapes; mark_record_failure
+# always writes a string. The rule is a type, so the table is written out rather
+# than the two shapes that happened to break.
+#
+# All three hosts, because each one pairs a different reader with a different
+# compare-and-set, and only the mixed pair has ever been wrong. The two
+# single-engine columns are here as the guard that fixing the mixed one does not
+# take them with it.
+reason_consumed_case() {  # <label> <json-value> [PATH]
+  local label="$1" value="$2" path="${3:-$PATH}"
+  local proj out1 out2 marked rc1=0 rc2=0 ok=0
+  proj=$(new_proj)
+  printf '{"record_failed":true,"record_failed_reason":%s}\n' "$value" > "$proj/$STATE_REL"
+  out1=$(printf '%s' "$(stop_json)" \
+    | env PATH="$path" CLAUDE_PROJECT_DIR="$proj" /bin/bash "$HOOKS_DIR/$E" 2>/dev/null) || rc1=$?
+  out2=$(printf '%s' "$(stop_json)" \
+    | env PATH="$path" CLAUDE_PROJECT_DIR="$proj" /bin/bash "$HOOKS_DIR/$E" 2>/dev/null) || rc2=$?
+  marked=$(state_field "$proj/$STATE_REL" record_failed)
+  rm -rf "$proj"
+  # Announced on the first turn, silent on the second, and the mark gone from
+  # disk — the same "one fact, one reaction" the verdict itself obeys.
+  { [ "$rc1" -eq 0 ] && [ "$rc2" -eq 0 ]; } || ok=1
+  printf '%s' "$out1" | grep -qF '기록되지' || ok=1
+  [ -z "$out2" ] || ok=1
+  [ -z "$marked" ] || ok=1
+  if [ "$ok" -eq 0 ]; then
+    report 0 "$E" "$label"
+  else
+    report 1 "$E" "$label (rc=$rc1/$rc2 out1='$out1' out2='$out2' marked='$marked')"
+  fi
+}
+
+# The jq-only host from the section below, built early so all three columns run
+# off the same table. Where the host has no jq there is no such column to run.
+REASON_JQ_ONLY=""
+if command -v jq >/dev/null 2>&1; then
+  REASON_JQ_ONLY=$(mktemp -d /tmp/hooktest-reason-jq-XXXXXX)
+  for BIN in jq cat mv rm mkdir git; do ln -s "$(command -v "$BIN")" "$REASON_JQ_ONLY/$BIN"; done
+fi
+REASON_PY_ONLY=$(mktemp -d /tmp/hooktest-reason-py-XXXXXX)
+ln -s "$REAL_PY" "$REASON_PY_ONLY/python3"
+ln -s "$(command -v cat)" "$REASON_PY_ONLY/cat"
+
+# `0`, `true`, `[]` and `{}` are where jq and python3 render differently today;
+# `3`, `false` and `null` are where they agree, and agreement nothing asserts is
+# agreement by luck. The two string rows are the feature: an ordinary reason
+# still works, and one carrying a newline still matches after the reader squashes
+# it — the announcement and the compare-and-set have to squash the same way or a
+# hand-written multi-line reason is announced forever too.
+for BAD_REASON in 0 true false '[]' '{}' 3 null '"parser died"' '"a\nb"'; do
+  reason_consumed_case "a record_failed_reason of $BAD_REASON is announced once, then consumed (jq)" \
+    "$BAD_REASON"
+  reason_consumed_case "a record_failed_reason of $BAD_REASON is announced once, then consumed (python3 fallback)" \
+    "$BAD_REASON" "$REASON_PY_ONLY"
+  [ -z "$REASON_JQ_ONLY" ] || reason_consumed_case \
+    "a record_failed_reason of $BAD_REASON is announced once, then consumed (jq-only host)" \
+    "$BAD_REASON" "$REASON_JQ_ONLY"
+done
+rm -rf "$REASON_PY_ONLY"
+[ -z "$REASON_JQ_ONLY" ] || rm -rf "$REASON_JQ_ONLY"
+
+# ---------- both hooks : a host that has jq and no python3 ----------
+# The suite has always tested the two extremes — both readers present, and
+# neither — and never this one, which is a real shape: a slim container, a PATH
+# trimmed for a hook, an image swapped under a project whose state file was
+# written elsewhere.
+#
+# It is the one host where "loud until a new verdict lands" is not a bounded
+# degradation. record-verdict.sh needs python3 to parse a verdict at all, so no
+# new verdict can ever land here to displace what is on disk.
+if ! command -v jq >/dev/null 2>&1; then
+  report 0 "$R" "jq without python3 -> warning, no state file (skipped: no jq on this host)"
+  report 0 "$E" "jq without python3 -> the announced mark is cleared, not repeated forever (skipped: no jq on this host)"
+else
+  JQ_ONLY=$(mktemp -d /tmp/hooktest-jqonly-XXXXXX)
+  # A plausible host, not a knife edge: everything either hook shells out to,
+  # minus the interpreter. A case that passes only because the PATH was too thin
+  # to reach the failure would be asserting nothing.
+  for BIN in jq cat mv rm mkdir git; do ln -s "$(command -v "$BIN")" "$JQ_ONLY/$BIN"; done
+
+  # record-verdict.sh can only say what it cannot do. It still owes the same two
+  # things it owes on the empty PATH: exit 0, and no state file invented out of
+  # a review it never read — enforce-loop.sh reads that file's existence as "a
+  # loop is in flight".
+  PROJ=$(new_proj)
+  assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+  ERR=$(printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
+    | env PATH="$JQ_ONLY" CLAUDE_PROJECT_DIR="$PROJ" /bin/bash "$HOOKS_DIR/$R" 2>&1 >/dev/null)
+  RC=$?
+  STATE_MADE=no; [ -f "$PROJ/$STATE_REL" ] && STATE_MADE=yes
+  rm -rf "$PROJ"
+  # A shell error beside the warning reads as a broken hook and trains the user
+  # to ignore the channel the warning lives on.
+  if [ "$RC" -eq 0 ] && [ "$STATE_MADE" = no ] && printf '%s' "$ERR" | grep -qi 'WARNING' \
+     && ! printf '%s' "$ERR" | grep -q 'command not found'; then
+    report 0 "$R" "jq without python3 -> warning, exit 0, no state file invented"
+  else
+    report 1 "$R" "jq without python3 -> warning, exit 0, no state file invented (rc=$RC state=$STATE_MADE err='$ERR')"
+  fi
+
+  # ...which means a mark written on some other host is the last word this one
+  # will ever hear. Announcing it on every turn from now until somebody edits
+  # the file by hand is not "one reaction to one fact", and the user cannot make
+  # it stop by working: the reviewer that would clear it cannot run here.
+  PROJ=$(new_proj)
+  printf '%s\n' "$FAILED_MARK" > "$PROJ/$STATE_REL"
+  jq_only_turn() {  # -> stdout of one Stop, stderr into $JQ_ERR
+    printf '%s' "$(stop_json)" \
+      | env PATH="$JQ_ONLY" CLAUDE_PROJECT_DIR="$PROJ" /bin/bash "$HOOKS_DIR/$E" 2>"$JQ_ERR"
+  }
+  JQ_ERR=$(mktemp /tmp/hooktest-jqonly-err-XXXXXX)
+  OUT1=$(jq_only_turn); RC1=$?
+  ERR1=$(cat "$JQ_ERR")
+  OUT2=$(jq_only_turn); RC2=$?
+  ERR2=$(cat "$JQ_ERR")
+  MARKED=$(state_field "$PROJ/$STATE_REL" record_failed)
+  rm -f "$JQ_ERR"; rm -rf "$PROJ"
+  if [ "$RC1" -eq 0 ] && [ "$RC2" -eq 0 ] && printf '%s' "$OUT1" | grep -qF '기록되지' \
+     && [ -z "$OUT2" ] && [ -z "$MARKED" ] && [ -z "$ERR1" ] && [ -z "$ERR2" ]; then
+    report 0 "$E" "jq without python3 -> the announced mark is cleared, not repeated forever"
+  else
+    report 1 "$E" "jq without python3 -> the announced mark is cleared, not repeated forever (rc=$RC1/$RC2 out1='$OUT1' out2='$OUT2' marked='$MARKED' err='$ERR1$ERR2')"
+  fi
+  rm -rf "$JQ_ONLY"
+fi
+
+# ---------- enforce-loop.sh : a loop that is not moving stops early ----------
+# The budget of 3 bounds how long a stalled loop runs, it does not notice that
+# it is stalled. Two cycles over an identical tree buy identical attempts, so
+# the remaining budget is worth nothing — and the reviewer has already said
+# twice what is wrong.
+
+SAME_FP='{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":"deadbeef","prev_diff_sha":"deadbeef"}'
+MOVED_FP='{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":"deadbeef","prev_diff_sha":"cafebabe"}'
+
+enforce_case 0 "no progress since the last cycle -> exit 0, budget left unspent" \
+  "$SAME_FP" "$(stop_json)" '무진전' -
+enforce_case 0 "no progress -> stderr counts the attempt it stopped at (1/3)" \
+  "$SAME_FP" "$(stop_json)" 'attempt 1/3' -
+# Same rule as the exhausted budget: exit 0 is "stop", not "passed", so the
+# stdout the user reads has to say a human is needed.
+enforce_case 0 "no progress -> stdout asks for a human, not a success" \
+  "$SAME_FP" "$(stop_json)" - '사람 개입'
+
+# The other half of the same branch, and the one that must not regress: a tree
+# that moved is a coder that did something, and the budget is there to be spent.
+enforce_case 2 "the tree moved since the last cycle -> exit 2, re-dispatch as before" \
+  "$MOVED_FP" "$(stop_json)" 'attempt 1/3' -
+
+# The first cycle of a loop has nothing behind it. Reading an absent or empty
+# previous fingerprint as "equal" would stop every loop on its first BLOCK,
+# which is the whole feature failing closed.
+enforce_case 2 "no fingerprints at all (first cycle) -> exit 2, not no-progress" \
+  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json)" 'attempt 1/3' -
+enforce_case 2 "a fingerprint with no previous one -> exit 2, not no-progress" \
+  '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":"deadbeef","prev_diff_sha":""}' \
+  "$(stop_json)" 'attempt 1/3' -
+# Both empty is the shape a project outside a git repo leaves behind. Two
+# unknowns are not the same tree.
+enforce_case 2 "two empty fingerprints -> exit 2, not no-progress" \
+  '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":"","prev_diff_sha":""}' \
+  "$(stop_json)" 'attempt 1/3' -
+
+# An exhausted budget keeps its own message: it is the more accurate one, and
+# nothing about no-progress changes what happens at 3/3.
+enforce_case 0 "no progress with the budget already spent -> the exhaustion banner still" \
+  '{"last_verdict":"BLOCK","attempt":3,"last_diff_sha":"deadbeef","prev_diff_sha":"deadbeef"}' \
+  "$(stop_json)" - '3/3'
+
+# Whichever reader the host has, the same two states get the same two answers.
+NOPROG_NOJQ=$(mktemp -d /tmp/hooktest-nojq-np-XXXXXX)
+ln -s "$REAL_PY" "$NOPROG_NOJQ/python3"
+ln -s "$(command -v cat)" "$NOPROG_NOJQ/cat"
+enforce_case 0 "python3 fallback: no progress -> exit 0" \
+  "$SAME_FP" "$(stop_json)" '무진전' - "$NOPROG_NOJQ"
+enforce_case 2 "python3 fallback: the tree moved -> exit 2" \
+  "$MOVED_FP" "$(stop_json)" 'attempt 1/3' - "$NOPROG_NOJQ"
+rm -rf "$NOPROG_NOJQ"
+
+# ---------- enforce-loop.sh : a fingerprint is a JSON string or it is nothing ----------
+# These two keys are the only values in the state file whose *equality* decides
+# an exit code, so the readers cannot merely be close — they have to answer the
+# same on every shape a file can hold. They have now drifted apart twice, so the
+# cases below pin the whole table rather than the shapes that happened to break.
+#
+# Each case runs the hook twice, once as the host has it and once with jq
+# hidden, and requires the same exit code and the same bytes on both streams.
+# The two runs get their own project dir on purpose: a run that reacts marks the
+# verdict spent, and a spent verdict answers differently, so sharing one dir
+# would let the first reader dictate the second reader's answer.
+FP_NOJQ=$(mktemp -d /tmp/hooktest-nojq-fp-XXXXXX)
+ln -s "$REAL_PY" "$FP_NOJQ/python3"
+ln -s "$(command -v cat)" "$FP_NOJQ/cat"
+
+fingerprint_parity_case() {  # <expected-exit> <desc> <state> [want-stderr|-]
+  local expected="$1" desc="$2" state="$3" want_err="${4:--}"
+  local jq_rc=0 py_rc=0 ok=0 proj
+  local jq_out jq_err py_out py_err
+  jq_out=$(mktemp /tmp/hooktest-fp-XXXXXX); jq_err=$(mktemp /tmp/hooktest-fp-XXXXXX)
+  py_out=$(mktemp /tmp/hooktest-fp-XXXXXX); py_err=$(mktemp /tmp/hooktest-fp-XXXXXX)
+
+  proj=$(new_proj); printf '%s\n' "$state" > "$proj/$STATE_REL"
+  printf '%s' "$(stop_json)" \
+    | env CLAUDE_PROJECT_DIR="$proj" /bin/bash "$HOOKS_DIR/$E" >"$jq_out" 2>"$jq_err" || jq_rc=$?
+  rm -rf "$proj"
+
+  proj=$(new_proj); printf '%s\n' "$state" > "$proj/$STATE_REL"
+  printf '%s' "$(stop_json)" \
+    | env PATH="$FP_NOJQ" CLAUDE_PROJECT_DIR="$proj" /bin/bash "$HOOKS_DIR/$E" >"$py_out" 2>"$py_err" || py_rc=$?
+  rm -rf "$proj"
+
+  [ "$jq_rc" -eq "$py_rc" ] || ok=1
+  cmp -s "$jq_out" "$py_out" || ok=1
+  cmp -s "$jq_err" "$py_err" || ok=1
+  [ "$jq_rc" -eq "$expected" ] || ok=1
+  [ "$want_err" = "-" ] || grep -qF "$want_err" "$jq_err" || ok=1
+  if [ "$ok" -eq 0 ]; then
+    report 0 "$E" "$desc"
+  else
+    report 1 "$E" "$desc (jq rc=$jq_rc err='$(cat "$jq_err")' | python3 rc=$py_rc err='$(cat "$py_err")')"
+  fi
+  rm -f "$jq_out" "$jq_err" "$py_out" "$py_err"
+}
+
+# record_state only ever writes a string here or leaves the key out, so a number
+# is a hand-edited or corrupt file — not a tree anybody measured. jq renders it
+# as "0" and finds two equal fingerprints, which stops a loop on a measurement
+# that never happened; that is enforcement switching itself off, the exact
+# failure this feature exists to prevent. Both readers have to read it as absent
+# and let the loop run.
+fingerprint_parity_case 2 "both fingerprints are the number 0 -> exit 2 on both readers" \
+  '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":0,"prev_diff_sha":0}' 'attempt 1/3'
+
+# 0 is only where the readers part company; the rest of the table is where they
+# agree on the wrong answer. true and 1.5 stop the loop under both readers today
+# — same measurement that never happened, no divergence to give it away. The
+# rule is a type, not a list of values, so the whole list is written down.
+for NOT_A_STRING in '[]' '{}' 'true' '1.5'; do
+  fingerprint_parity_case 2 "both fingerprints are $NOT_A_STRING -> exit 2 on both readers" \
+    "{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"last_diff_sha\":$NOT_A_STRING,\"prev_diff_sha\":$NOT_A_STRING}" \
+    'attempt 1/3'
+done
+
+# The feature itself, pinned on both readers rather than one each: a string is
+# the only thing that is a fingerprint, so a string is the only thing that can
+# stop a loop — and it still must.
+fingerprint_parity_case 0 "equal string fingerprints still stop the loop on both readers" \
+  "$SAME_FP" '무진전'
+fingerprint_parity_case 2 "differing string fingerprints still exit 2 on both readers" \
+  "$MOVED_FP" 'attempt 1/3'
+
+# The three shapes that have always meant "not measured" — no git, no repo, or
+# the first cycle of a loop — and have to keep meaning it now that the rule is
+# written as a type. Reading any of them as a fingerprint would stop every loop
+# on its first BLOCK.
+fingerprint_parity_case 2 "null fingerprints are no fingerprint on both readers" \
+  '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":null,"prev_diff_sha":null}' 'attempt 1/3'
+fingerprint_parity_case 2 "empty-string fingerprints are no fingerprint on both readers" \
+  '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":"","prev_diff_sha":""}' 'attempt 1/3'
+fingerprint_parity_case 2 "absent fingerprint keys are no fingerprint on both readers" \
+  '{"last_verdict":"BLOCK","attempt":1}' 'attempt 1/3'
+
+# The shapes the readers already agreed on, written down anyway. Agreement that
+# nothing asserts is agreement by luck: every one of these travels through a
+# different piece of each reader — jq's gsub against python's str.replace, jq -r
+# against print, one branch's JSON unescaping against the other's — and the pair
+# has now drifted twice with the suite still green.
+fingerprint_shape_case() {  # <expected-exit> <label> <json-value>: the same value in both keys
+  fingerprint_parity_case "$1" "both readers agree on $2" \
+    "{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"last_diff_sha\":$3,\"prev_diff_sha\":$3}"
+}
+
+# The whitespace three are the squash: a newline and a carriage return become a
+# space in both readers (the python3 branch separates its fields by newlines, so
+# one surviving inside a value would shift every later field down a line), while
+# a tab is left alone by both.
+fingerprint_shape_case 0 'a fingerprint containing a newline' '"a\nb"'
+fingerprint_shape_case 0 'a fingerprint containing a carriage return' '"a\rb"'
+fingerprint_shape_case 0 'a fingerprint containing a tab' '"a\tb"'
+fingerprint_shape_case 0 'a fingerprint containing unicode' '"지문-✅-트리"'
+fingerprint_shape_case 0 'a fingerprint containing an embedded double quote' '"a\"b"'
+fingerprint_shape_case 0 'a fingerprint containing an embedded backslash' '"a\\b"'
+FP_LONG=$(printf 'a%.0s' {1..4096})
+fingerprint_shape_case 0 'a 4096-character fingerprint' "\"$FP_LONG\""
+# The last row is the rule's other half: a non-zero number is not a string, so
+# it is no fingerprint at all — and the two readers have to agree on that too.
+fingerprint_shape_case 2 'a non-zero number being no fingerprint' '3'
+
+rm -rf "$FP_NOJQ"
+
+# One verdict still buys one reaction. Stopping early is a reaction, so an
+# abandoned stalled loop has to go quiet after saying it once — the same rule
+# that keeps an abandoned BLOCK from blocking every future turn.
+PROJ=$(new_proj)
+printf '%s\n' "$SAME_FP" > "$PROJ/$STATE_REL"
+OUT1=$(abandoned_turn "$PROJ" s1); RC1=$?
+OUT2=$(abandoned_turn "$PROJ" a-later-session); RC2=$?
+rm -rf "$PROJ"
+if [ "$RC1" -eq 0 ] && [ "$RC2" -eq 0 ] \
+   && printf '%s' "$OUT1" | grep -qF '사람 개입' && [ -z "$OUT2" ]; then
+  report 0 "$E" "a stalled loop says so once, then goes quiet"
+else
+  report 1 "$E" "a stalled loop says so once, then goes quiet (rc=$RC1/$RC2 out1='$OUT1' out2='$OUT2')"
+fi
+
+# ---------- record-verdict.sh : the diff fingerprint ----------
+# A loop can burn its whole budget without moving: the coder re-reads the same
+# files, the reviewer re-files the same findings. The fingerprint is what lets
+# the next hook see that, so it has to cover everything a coder could have
+# changed — a coder that has not committed yet has still moved, and HEAD alone
+# would call that cycle stalled.
+
+new_git_proj() {  # -> a fresh temp project dir that is also a git repo with one commit
+  local d
+  d=$(new_proj)
+  git -C "$d" init -q >/dev/null 2>&1
+  git -C "$d" config user.email harness@example.invalid
+  git -C "$d" config user.name harness-tests
+  printf 'one\n' > "$d/tracked.txt"
+  git -C "$d" add tracked.txt >/dev/null 2>&1
+  git -C "$d" commit -qm init --no-gpg-sign >/dev/null 2>&1
+  printf '%s' "$d"
+}
+
+record_block() {  # <proj>: one reviewer cycle that files a BLOCK
+  assistant_jsonl "$1/block.jsonl" '<verdict>BLOCK</verdict>'
+  record_run "$1" "$(subagent_stop_json reviewer "$1/block.jsonl")" >/dev/null
+}
+
+PROJ=$(new_git_proj)
+record_block "$PROJ"
+FP1=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+if [ -n "$FP1" ]; then
+  report 0 "$R" "recording in a git repo stores a diff fingerprint"
+else
+  report 1 "$R" "recording in a git repo stores a diff fingerprint (got '$FP1')"
+fi
+
+# Two cycles over an untouched tree have to land on the same fingerprint, and the
+# previous one has to survive the write — a value that is only ever overwritten
+# can never be compared with anything.
+record_block "$PROJ"
+FP2=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+PREV2=$(state_field "$PROJ/$STATE_REL" prev_diff_sha)
+if [ -n "$FP2" ] && [ "$FP2" = "$FP1" ] && [ "$PREV2" = "$FP1" ]; then
+  report 0 "$R" "an unchanged tree fingerprints the same, and the previous value is kept"
+else
+  report 1 "$R" "an unchanged tree fingerprints the same, and the previous value is kept (last='$FP2' prev='$PREV2' first='$FP1')"
+fi
+
+# Uncommitted work is work. This is the case `git rev-parse HEAD` alone gets
+# wrong: the coder edited a tracked file and has not committed, so HEAD is
+# unchanged and the cycle would read as stalled.
+printf 'two\n' > "$PROJ/tracked.txt"
+record_block "$PROJ"
+FP3=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+PREV3=$(state_field "$PROJ/$STATE_REL" prev_diff_sha)
+if [ -n "$FP3" ] && [ "$FP3" != "$FP2" ] && [ "$PREV3" = "$FP2" ]; then
+  report 0 "$R" "an uncommitted edit moves the fingerprint (HEAD alone would not)"
+else
+  report 1 "$R" "an uncommitted edit moves the fingerprint (last='$FP3' prev='$PREV3' before='$FP2')"
+fi
+
+# ...and so is a new file nobody has staged, which `git diff HEAD` cannot see
+# either. A coder whose whole cycle was "add the test file" has moved.
+printf 'brand new\n' > "$PROJ/untracked.txt"
+record_block "$PROJ"
+FP4=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+if [ -n "$FP4" ] && [ "$FP4" != "$FP3" ]; then
+  report 0 "$R" "an untracked new file moves the fingerprint"
+else
+  report 1 "$R" "an untracked new file moves the fingerprint (last='$FP4' before='$FP3')"
+fi
+
+# ...and so is the next edit to that same file. `?? path` is one line whatever
+# the file holds, so a fingerprint built out of names alone reads a coder
+# iterating on a module it never added as a coder that did nothing — and the
+# hook then says the tree is identical when it is not.
+printf 'a real second draft\n' > "$PROJ/untracked.txt"
+record_block "$PROJ"
+FP4B=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+if [ -n "$FP4B" ] && [ "$FP4B" != "$FP4" ]; then
+  report 0 "$R" "editing an untracked file moves the fingerprint, not just creating it"
+else
+  report 1 "$R" "editing an untracked file moves the fingerprint, not just creating it (last='$FP4B' before='$FP4')"
+fi
+
+# ...and one path the hook cannot open must not take the rest of the batch with
+# it. `git hash-object` die()s on the first argument it cannot read and never
+# reaches the ones after it, so a single dangling symlink can drop every other
+# untracked file's blob id. The `?? path` lines above do not move when a file's
+# *contents* change, so what is left is a fingerprint that cannot move — the
+# false "무진전 중단" the untracked hashing was added to prevent, back through a
+# different door and invisible to every case above.
+#
+# Both orderings, because only one of them bites: a broken link that sorts last
+# is hashed after the real files and their ids are already on stdout, so that
+# arrangement passes with no filter at all. It is here as the guard that the
+# filter does not break the ordering that already worked.
+for BROKEN in aaa_broken zzz_broken; do
+  # Its own project dir: the chain above is still mid-scenario and $PROJ has to
+  # survive into the commit case below.
+  BPROJ=$(new_git_proj)
+  ln -s /nonexistent/target "$BPROJ/$BROKEN"
+  printf 'first draft\n' > "$BPROJ/work.txt"
+  record_block "$BPROJ"
+  BROKEN1=$(state_field "$BPROJ/$STATE_REL" last_diff_sha)
+  printf 'a real second draft\n' > "$BPROJ/work.txt"
+  record_block "$BPROJ"
+  BROKEN2=$(state_field "$BPROJ/$STATE_REL" last_diff_sha)
+  rm -rf "$BPROJ"
+  if [ -n "$BROKEN1" ] && [ -n "$BROKEN2" ] && [ "$BROKEN1" != "$BROKEN2" ]; then
+    report 0 "$R" "a dangling symlink sorting as $BROKEN still lets an edit move the fingerprint"
+  else
+    report 1 "$R" "a dangling symlink sorting as $BROKEN still lets an edit move the fingerprint (first='$BROKEN1' second='$BROKEN2')"
+  fi
+done
+
+# A commit moves it too, which is the ordinary case: the coder committed its
+# green checkpoint between the two reviews.
+git -C "$PROJ" add -A >/dev/null 2>&1
+git -C "$PROJ" commit -qm work --no-gpg-sign >/dev/null 2>&1
+record_block "$PROJ"
+FP5=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+if [ -n "$FP5" ] && [ "$FP5" != "$FP4B" ]; then
+  report 0 "$R" "committing the same work still moves the fingerprint"
+else
+  report 1 "$R" "committing the same work still moves the fingerprint (last='$FP5' before='$FP4B')"
+fi
+rm -rf "$PROJ"
+
+# The hook's own writing does not count as the coder moving. .claude/notes/ is
+# where this hook and announce-agent.sh keep their files, and a project that
+# does not gitignore that directory would otherwise show a different tree on
+# every single cycle — the state file this run is about to write is itself part
+# of the difference. No-progress detection would be permanently off, silently.
+PROJ=$(new_git_proj)
+record_block "$PROJ"
+FP1=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+printf 'a later note\n' > "$PROJ/.claude/notes/agent-activity.log"
+record_block "$PROJ"
+FP2=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+if [ -n "$FP2" ] && [ "$FP2" = "$FP1" ]; then
+  report 0 "$R" "the harness's own .claude/notes/ churn does not move the fingerprint"
+else
+  report 1 "$R" "the harness's own .claude/notes/ churn does not move the fingerprint (last='$FP2' before='$FP1')"
+fi
+
+# ...while a sibling under .claude/ does. Untracked entries have to be listed one
+# by one for that: git collapses a wholly untracked directory to a single
+# `?? .claude/` line, and a second new file inside it would leave the fingerprint
+# unchanged — a coder writing hooks or skills would read as stalled.
+mkdir -p "$PROJ/.claude/hooks"
+printf 'first\n' > "$PROJ/.claude/hooks/one.sh"
+record_block "$PROJ"
+FP3=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+printf 'second\n' > "$PROJ/.claude/hooks/two.sh"
+record_block "$PROJ"
+FP4=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+if [ -n "$FP3" ] && [ "$FP3" != "$FP1" ] && [ -n "$FP4" ] && [ "$FP4" != "$FP3" ]; then
+  report 0 "$R" "a second new file under .claude/ still moves the fingerprint"
+else
+  report 1 "$R" "a second new file under .claude/ still moves the fingerprint (one='$FP3' two='$FP4' base='$FP1')"
+fi
+rm -rf "$PROJ"
+
+# The harness runs wherever the user starts it, and that is not always a git
+# repo. No fingerprint is the honest answer there; a crash, or a constant that
+# compares equal to itself, would both be worse.
+PROJ=$(new_proj)
+record_block "$PROJ"
+RC=$(record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/block.jsonl")")
+GOT_FP=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+GOT_V=$(state_field "$PROJ/$STATE_REL" last_verdict)
+rm -rf "$PROJ"
+if [ "$RC" -eq 0 ] && [ -z "$GOT_FP" ] && [ "$GOT_V" = "BLOCK" ]; then
+  report 0 "$R" "outside a git repo -> no fingerprint, the verdict is still recorded, exit 0"
+else
+  report 1 "$R" "outside a git repo -> no fingerprint, the verdict is still recorded, exit 0 (rc=$RC fp='$GOT_FP' verdict='$GOT_V')"
+fi
+
+# The readers hold one rule: a fingerprint is a JSON string or it is nothing
+# (enforce-loop.sh, both branches). The writer is the other end of that contract
+# — it carries last_diff_sha over into prev_diff_sha, and a stringifying carry
+# would take a hand-edited `3` or `true` and put it back on disk as the real
+# string "3" or "True": exactly the shape the readers were taught to reject,
+# written by the hook itself. `[]` and `{}` are already dropped by any sane
+# carry; they are here because the rule is a type, not a list of values.
+for CORRUPT in 3 true '[]' '{}'; do
+  PROJ=$(new_git_proj)
+  printf '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":%s}\n' "$CORRUPT" > "$PROJ/$STATE_REL"
+  record_block "$PROJ"
+  GOT_PREV=$(state_field "$PROJ/$STATE_REL" prev_diff_sha)
+  GOT_FP=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+  rm -rf "$PROJ"
+  # The new measurement still has to land: refusing to write anything would
+  # obey the type rule and lose the feature.
+  if [ -z "$GOT_PREV" ] && [ -n "$GOT_FP" ]; then
+    report 0 "$R" "a last_diff_sha of $CORRUPT is not carried over as a string"
+  else
+    report 1 "$R" "a last_diff_sha of $CORRUPT is not carried over as a string (prev='$GOT_PREV' last='$GOT_FP')"
+  fi
+done
+
+# ---------- the two hooks : a stalled loop stops before the budget does ----------
+# The cases above seed fingerprints by hand. This one lets the hooks produce
+# their own, in a real git repo, in the order a session runs them: reviewer
+# stop, main turn end, reviewer stop, main turn end. Whether no-progress
+# detection works at all is only visible here — a fingerprint the recording
+# hook writes and the judging hook cannot compare would pass every case above.
+
+cycle() {  # <proj> -> "<exit-code> <stdout+stderr>" of one reviewer-then-Stop cycle
+  local proj="$1" out rc=0
+  record_block "$proj"
+  out=$(printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$proj" bash "$HOOKS_DIR/$E" 2>&1) || rc=$?
+  printf '%s %s' "$rc" "$out"
+}
+
+PROJ=$(new_git_proj)
+STALL1=$(cycle "$PROJ")
+STALL2=$(cycle "$PROJ")
+STALL_ATTEMPT=$(state_field "$PROJ/$STATE_REL" attempt)
+rm -rf "$PROJ"
+if [ "${STALL1%% *}" -eq 2 ] && printf '%s' "$STALL1" | grep -qF 'attempt 1/3' \
+   && [ "${STALL2%% *}" -eq 0 ] && printf '%s' "$STALL2" | grep -qF '무진전' \
+   && [ "$STALL_ATTEMPT" = "2" ]; then
+  report 0 "loop" "two cycles over an untouched tree: re-dispatch, then stop at 2/3"
+else
+  report 1 "loop" "two cycles over an untouched tree: re-dispatch, then stop at 2/3 (attempt=$STALL_ATTEMPT '$STALL1' :: '$STALL2')"
+fi
+
+# The same two cycles with one edit in between. This is the case that fails if
+# the fingerprint is too coarse — an over-eager stop would end a working loop on
+# its second attempt, which is worse than not having the feature.
+PROJ=$(new_git_proj)
+MOVED1=$(cycle "$PROJ")
+printf 'the coder did something\n' >> "$PROJ/tracked.txt"
+MOVED2=$(cycle "$PROJ")
+rm -rf "$PROJ"
+if [ "${MOVED1%% *}" -eq 2 ] && [ "${MOVED2%% *}" -eq 2 ] \
+   && printf '%s' "$MOVED2" | grep -qF 'attempt 2/3'; then
+  report 0 "loop" "one edit between the cycles: the loop keeps its budget and continues"
+else
+  report 1 "loop" "one edit between the cycles: the loop keeps its budget and continues ('$MOVED1' :: '$MOVED2')"
+fi
+
+# The same two cycles again, with the edit landing in a file the coder never
+# added — the ordinary shape of a coder rolling a new module before its first
+# commit. A fingerprint made of untracked *names* cannot see that, and the hook
+# then stops a live loop at 2/3 while saying the tree is identical. Both halves
+# are wrong: the stop and the sentence.
+PROJ=$(new_git_proj)
+printf 'first draft\n' > "$PROJ/newmodule.py"
+NEWFILE1=$(cycle "$PROJ")
+printf 'a real second draft\n' > "$PROJ/newmodule.py"
+NEWFILE2=$(cycle "$PROJ")
+rm -rf "$PROJ"
+if [ "${NEWFILE1%% *}" -eq 2 ] && [ "${NEWFILE2%% *}" -eq 2 ] \
+   && printf '%s' "$NEWFILE2" | grep -qF 'attempt 2/3'; then
+  report 0 "loop" "an edit to a never-added file keeps the loop running, not stopped as stalled"
+else
+  report 1 "loop" "an edit to a never-added file keeps the loop running, not stopped as stalled ('$NEWFILE1' :: '$NEWFILE2')"
+fi
+
 # ---------- update.sh : propagation ----------
 # The hooks above only matter in this repo until update.sh carries them into the
 # projects that use the harness. update.sh clones over the network and copies
@@ -1843,7 +2658,10 @@ MANAGED=$(update_lib 'printf "%s" "$MANAGED_HOOKS"')
 # and a literal list here would pass right through it a second time.
 MISSING_FROM_LIST=""
 for F in "$REPO_ROOT"/.claude/hooks/*.sh; do
-  [ -f "$F" ] || continue  # tests/ lives here too, and whatever lands here later
+  # Not about tests/, which is a directory and does not match *.sh at all: this
+  # skips a directory that happens to be named something.sh, and the glob itself
+  # when the pattern matches nothing.
+  [ -f "$F" ] || continue
   H=$(basename "$F" .sh)
   printf '%s' " $MANAGED " | grep -qF " $H " || MISSING_FROM_LIST="$MISSING_FROM_LIST $H"
 done
@@ -1870,10 +2688,14 @@ fi
 # preference.
 drifting_lists() {  # <file> -> hook names introduced by more than one list
   local file="$1" found="" h n
+  # An assignment or a `for ... in` naming the hook. The assignment may be
+  # exported, declared or appended to — `+=` in particular reads as adding to the
+  # one list while actually writing a second copy of the names. Prose that
+  # mentions a hook is left alone: it carries no names into the propagation loops.
+  local assign='^[[:space:]]*((local|export|readonly|declare)[[:space:]]+(-[A-Za-z]+[[:space:]]+)*)?[A-Za-z_][A-Za-z0-9_]*\+?=[^#]*'
+  local loop='^[[:space:]]*for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]][^#]*'
   for h in $MANAGED; do
-    # An assignment or a `for ... in` naming the hook. Prose that mentions one is
-    # left alone: it carries no names into the propagation loops.
-    n=$(grep -cE "^[[:space:]]*(local[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=[^#]*$h|^[[:space:]]*for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]][^#]*$h" "$file")
+    n=$(grep -cE "$assign$h|$loop$h" "$file")
     [ "$n" -eq 1 ] || found="$found $h(x$n)"
   done
   printf '%s' "${found# }"
@@ -1886,16 +2708,36 @@ else
   report 1 "update.sh" "no hook name is introduced by a second list that could drift ($SECOND_COPIES)"
 fi
 
-# The check above has to bite on a real second list...
-SECOND_LIST_COPY="$LIB_SAFE_DIR/update-with-second-list.sh"
-{ cat "$UPDATE_SH"; echo 'LEGACY_HOOKS="block-destructive protect-secrets"'; } > "$SECOND_LIST_COPY"
-DRIFT_SEEN=$(drifting_lists "$SECOND_LIST_COPY")
-if printf '%s' "$DRIFT_SEEN" | grep -qF 'block-destructive' \
-   && printf '%s' "$DRIFT_SEEN" | grep -qF 'protect-secrets'; then
-  report 0 "update.sh" "a second literal list of hooks is caught and named"
-else
-  report 1 "update.sh" "a second literal list of hooks is caught and named (got '$DRIFT_SEEN')"
-fi
+# The check above has to bite on a real second list, in every shape one can be
+# written. A plain assignment was the only one it looked for, so a list that
+# arrived as an export, an append, or the header of a loop went straight past
+# the net that exists to catch exactly that.
+second_list_case() {  # <desc> <line to append to a copy of update.sh> <hook> <hook>
+  local desc="$1" line="$2" first="$3" second="$4" copy seen
+  copy="$LIB_SAFE_DIR/update-second-list-$RANDOM.sh"
+  { cat "$UPDATE_SH"; printf '%s\n' "$line"; } > "$copy"
+  seen=$(drifting_lists "$copy")
+  rm -f "$copy"
+  if printf '%s' "$seen" | grep -qF "$first" && printf '%s' "$seen" | grep -qF "$second"; then
+    report 0 "update.sh" "$desc"
+  else
+    report 1 "update.sh" "$desc (got '$seen')"
+  fi
+}
+
+second_list_case "a second literal list of hooks is caught and named" \
+  'LEGACY_HOOKS="block-destructive protect-secrets"' block-destructive protect-secrets
+second_list_case "a second list exported instead of assigned is caught too" \
+  'export LEGACY_HOOKS="block-destructive protect-secrets"' block-destructive protect-secrets
+# `+=` is the shape that drifts most quietly: it reads as adding to the one
+# list, and the names it adds are still a second copy of them.
+second_list_case "hooks appended to a list with += are caught too" \
+  'MANAGED_HOOKS+=" record-verdict enforce-loop"' record-verdict enforce-loop
+# The `for` branch has been in the pattern from the start with nothing holding
+# it there — a loop naming its own hooks is the second list that skips the
+# variable entirely.
+second_list_case "a loop that names hooks of its own is caught too" \
+  'for legacy in announce-agent post-edit-lint; do :; done' announce-agent post-edit-lint
 
 # ...and stay quiet on a comment. A line that only names a hook cannot drift out
 # of sync with anything, and failing the suite for it would read as "propagation
