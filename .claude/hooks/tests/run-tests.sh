@@ -2374,6 +2374,29 @@ else
   report 1 "$R" "outside a git repo -> no fingerprint, the verdict is still recorded, exit 0 (rc=$RC fp='$GOT_FP' verdict='$GOT_V')"
 fi
 
+# The readers hold one rule: a fingerprint is a JSON string or it is nothing
+# (enforce-loop.sh, both branches). The writer is the other end of that contract
+# — it carries last_diff_sha over into prev_diff_sha, and a stringifying carry
+# would take a hand-edited `3` or `true` and put it back on disk as the real
+# string "3" or "True": exactly the shape the readers were taught to reject,
+# written by the hook itself. `[]` and `{}` are already dropped by any sane
+# carry; they are here because the rule is a type, not a list of values.
+for CORRUPT in 3 true '[]' '{}'; do
+  PROJ=$(new_git_proj)
+  printf '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":%s}\n' "$CORRUPT" > "$PROJ/$STATE_REL"
+  record_block "$PROJ"
+  GOT_PREV=$(state_field "$PROJ/$STATE_REL" prev_diff_sha)
+  GOT_FP=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+  rm -rf "$PROJ"
+  # The new measurement still has to land: refusing to write anything would
+  # obey the type rule and lose the feature.
+  if [ -z "$GOT_PREV" ] && [ -n "$GOT_FP" ]; then
+    report 0 "$R" "a last_diff_sha of $CORRUPT is not carried over as a string"
+  else
+    report 1 "$R" "a last_diff_sha of $CORRUPT is not carried over as a string (prev='$GOT_PREV' last='$GOT_FP')"
+  fi
+done
+
 # ---------- the two hooks : a stalled loop stops before the budget does ----------
 # The cases above seed fingerprints by hand. This one lets the hooks produce
 # their own, in a real git repo, in the order a session runs them: reviewer
