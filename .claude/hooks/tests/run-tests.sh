@@ -1864,18 +1864,47 @@ else
   report 1 "update.sh" "the diff-report and the copy loop both walk that one list"
 fi
 
-# Criterion 2 — one definition, no second copy. A hook name written anywhere
-# else in the file is a list that can drift out of sync with this one, which is
-# the failure being fixed rather than a style preference.
-SECOND_COPIES=""
-for H in $MANAGED; do
-  N=$(grep -c -- "$H" "$UPDATE_SH")
-  [ "$N" -eq 1 ] || SECOND_COPIES="$SECOND_COPIES $H(x$N)"
-done
+# Criterion 2 — one definition, no second copy. What drifts out of sync with
+# MANAGED_HOOKS is a second *list*: an assignment or a loop that introduces hook
+# names of its own. That is the failure being fixed rather than a style
+# preference.
+drifting_lists() {  # <file> -> hook names introduced by more than one list
+  local file="$1" found="" h n
+  for h in $MANAGED; do
+    n=$(grep -c -- "$h" "$file")
+    [ "$n" -eq 1 ] || found="$found $h(x$n)"
+  done
+  printf '%s' "${found# }"
+}
+
+SECOND_COPIES=$(drifting_lists "$UPDATE_SH")
 if [ -z "$SECOND_COPIES" ]; then
-  report 0 "update.sh" "each hook name appears exactly once — no second list to drift"
+  report 0 "update.sh" "no hook name is introduced by a second list that could drift"
 else
-  report 1 "update.sh" "each hook name appears exactly once — no second list to drift ($SECOND_COPIES)"
+  report 1 "update.sh" "no hook name is introduced by a second list that could drift ($SECOND_COPIES)"
+fi
+
+# The check above has to bite on a real second list...
+SECOND_LIST_COPY="$LIB_SAFE_DIR/update-with-second-list.sh"
+{ cat "$UPDATE_SH"; echo 'LEGACY_HOOKS="block-destructive protect-secrets"'; } > "$SECOND_LIST_COPY"
+DRIFT_SEEN=$(drifting_lists "$SECOND_LIST_COPY")
+if printf '%s' "$DRIFT_SEEN" | grep -qF 'block-destructive' \
+   && printf '%s' "$DRIFT_SEEN" | grep -qF 'protect-secrets'; then
+  report 0 "update.sh" "a second literal list of hooks is caught and named"
+else
+  report 1 "update.sh" "a second literal list of hooks is caught and named (got '$DRIFT_SEEN')"
+fi
+
+# ...and stay quiet on a comment. A line that only names a hook cannot drift out
+# of sync with anything, and failing the suite for it would read as "propagation
+# broke" to whoever hits it — which is not what happened.
+COMMENTED_COPY="$LIB_SAFE_DIR/update-with-comment.sh"
+{ cat "$UPDATE_SH"; echo '# record-verdict.sh has to run before enforce-loop.sh reads the verdict.'; } > "$COMMENTED_COPY"
+COMMENT_DRIFT=$(drifting_lists "$COMMENTED_COPY")
+if [ -z "$COMMENT_DRIFT" ]; then
+  report 0 "update.sh" "a comment that merely names a hook is not a second list"
+else
+  report 1 "update.sh" "a comment that merely names a hook is not a second list ($COMMENT_DRIFT)"
 fi
 
 # Criterion 5 — "all 4 hooks" was true for years and then quietly was not. Any
