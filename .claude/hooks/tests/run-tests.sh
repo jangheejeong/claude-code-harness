@@ -2186,6 +2186,32 @@ fingerprint_parity_case 2 "empty-string fingerprints are no fingerprint on both 
 fingerprint_parity_case 2 "absent fingerprint keys are no fingerprint on both readers" \
   '{"last_verdict":"BLOCK","attempt":1}' 'attempt 1/3'
 
+# The shapes the readers already agreed on, written down anyway. Agreement that
+# nothing asserts is agreement by luck: every one of these travels through a
+# different piece of each reader — jq's gsub against python's str.replace, jq -r
+# against print, one branch's JSON unescaping against the other's — and the pair
+# has now drifted twice with the suite still green.
+fingerprint_shape_case() {  # <expected-exit> <label> <json-value>: the same value in both keys
+  fingerprint_parity_case "$1" "both readers agree on $2" \
+    "{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"last_diff_sha\":$3,\"prev_diff_sha\":$3}"
+}
+
+# The whitespace three are the squash: a newline and a carriage return become a
+# space in both readers (the python3 branch separates its fields by newlines, so
+# one surviving inside a value would shift every later field down a line), while
+# a tab is left alone by both.
+fingerprint_shape_case 0 'a fingerprint containing a newline' '"a\nb"'
+fingerprint_shape_case 0 'a fingerprint containing a carriage return' '"a\rb"'
+fingerprint_shape_case 0 'a fingerprint containing a tab' '"a\tb"'
+fingerprint_shape_case 0 'a fingerprint containing unicode' '"지문-✅-트리"'
+fingerprint_shape_case 0 'a fingerprint containing an embedded double quote' '"a\"b"'
+fingerprint_shape_case 0 'a fingerprint containing an embedded backslash' '"a\\b"'
+FP_LONG=$(printf 'a%.0s' {1..4096})
+fingerprint_shape_case 0 'a 4096-character fingerprint' "\"$FP_LONG\""
+# The last row is the rule's other half: a non-zero number is not a string, so
+# it is no fingerprint at all — and the two readers have to agree on that too.
+fingerprint_shape_case 2 'a non-zero number being no fingerprint' '3'
+
 rm -rf "$FP_NOJQ"
 
 # One verdict still buys one reaction. Stopping early is a reaction, so an
