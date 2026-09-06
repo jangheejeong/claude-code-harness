@@ -1816,6 +1816,103 @@ else
   report 1 "loop" "a quoted tag with no judgement -> UNKNOWN, budget untouched, turn ends (rc=$RC got $GOT_V/$GOT_A)"
 fi
 
+# ---------- record-verdict.sh : the diff fingerprint ----------
+# A loop can burn its whole budget without moving: the coder re-reads the same
+# files, the reviewer re-files the same findings. The fingerprint is what lets
+# the next hook see that, so it has to cover everything a coder could have
+# changed — a coder that has not committed yet has still moved, and HEAD alone
+# would call that cycle stalled.
+
+new_git_proj() {  # -> a fresh temp project dir that is also a git repo with one commit
+  local d
+  d=$(new_proj)
+  git -C "$d" init -q >/dev/null 2>&1
+  git -C "$d" config user.email harness@example.invalid
+  git -C "$d" config user.name harness-tests
+  printf 'one\n' > "$d/tracked.txt"
+  git -C "$d" add tracked.txt >/dev/null 2>&1
+  git -C "$d" commit -qm init --no-gpg-sign >/dev/null 2>&1
+  printf '%s' "$d"
+}
+
+record_block() {  # <proj>: one reviewer cycle that files a BLOCK
+  assistant_jsonl "$1/block.jsonl" '<verdict>BLOCK</verdict>'
+  record_run "$1" "$(subagent_stop_json reviewer "$1/block.jsonl")" >/dev/null
+}
+
+PROJ=$(new_git_proj)
+record_block "$PROJ"
+FP1=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+if [ -n "$FP1" ]; then
+  report 0 "$R" "recording in a git repo stores a diff fingerprint"
+else
+  report 1 "$R" "recording in a git repo stores a diff fingerprint (got '$FP1')"
+fi
+
+# Two cycles over an untouched tree have to land on the same fingerprint, and the
+# previous one has to survive the write — a value that is only ever overwritten
+# can never be compared with anything.
+record_block "$PROJ"
+FP2=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+PREV2=$(state_field "$PROJ/$STATE_REL" prev_diff_sha)
+if [ -n "$FP2" ] && [ "$FP2" = "$FP1" ] && [ "$PREV2" = "$FP1" ]; then
+  report 0 "$R" "an unchanged tree fingerprints the same, and the previous value is kept"
+else
+  report 1 "$R" "an unchanged tree fingerprints the same, and the previous value is kept (last='$FP2' prev='$PREV2' first='$FP1')"
+fi
+
+# Uncommitted work is work. This is the case `git rev-parse HEAD` alone gets
+# wrong: the coder edited a tracked file and has not committed, so HEAD is
+# unchanged and the cycle would read as stalled.
+printf 'two\n' > "$PROJ/tracked.txt"
+record_block "$PROJ"
+FP3=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+PREV3=$(state_field "$PROJ/$STATE_REL" prev_diff_sha)
+if [ -n "$FP3" ] && [ "$FP3" != "$FP2" ] && [ "$PREV3" = "$FP2" ]; then
+  report 0 "$R" "an uncommitted edit moves the fingerprint (HEAD alone would not)"
+else
+  report 1 "$R" "an uncommitted edit moves the fingerprint (last='$FP3' prev='$PREV3' before='$FP2')"
+fi
+
+# ...and so is a new file nobody has staged, which `git diff HEAD` cannot see
+# either. A coder whose whole cycle was "add the test file" has moved.
+printf 'brand new\n' > "$PROJ/untracked.txt"
+record_block "$PROJ"
+FP4=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+if [ -n "$FP4" ] && [ "$FP4" != "$FP3" ]; then
+  report 0 "$R" "an untracked new file moves the fingerprint"
+else
+  report 1 "$R" "an untracked new file moves the fingerprint (last='$FP4' before='$FP3')"
+fi
+
+# A commit moves it too, which is the ordinary case: the coder committed its
+# green checkpoint between the two reviews.
+git -C "$PROJ" add -A >/dev/null 2>&1
+git -C "$PROJ" commit -qm work --no-gpg-sign >/dev/null 2>&1
+record_block "$PROJ"
+FP5=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+if [ -n "$FP5" ] && [ "$FP5" != "$FP4" ]; then
+  report 0 "$R" "committing the same work still moves the fingerprint"
+else
+  report 1 "$R" "committing the same work still moves the fingerprint (last='$FP5' before='$FP4')"
+fi
+rm -rf "$PROJ"
+
+# The harness runs wherever the user starts it, and that is not always a git
+# repo. No fingerprint is the honest answer there; a crash, or a constant that
+# compares equal to itself, would both be worse.
+PROJ=$(new_proj)
+record_block "$PROJ"
+RC=$(record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/block.jsonl")")
+GOT_FP=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+GOT_V=$(state_field "$PROJ/$STATE_REL" last_verdict)
+rm -rf "$PROJ"
+if [ "$RC" -eq 0 ] && [ -z "$GOT_FP" ] && [ "$GOT_V" = "BLOCK" ]; then
+  report 0 "$R" "outside a git repo -> no fingerprint, the verdict is still recorded, exit 0"
+else
+  report 1 "$R" "outside a git repo -> no fingerprint, the verdict is still recorded, exit 0 (rc=$RC fp='$GOT_FP' verdict='$GOT_V')"
+fi
+
 # ---------- update.sh : propagation ----------
 # The hooks above only matter in this repo until update.sh carries them into the
 # projects that use the harness. update.sh clones over the network and copies
