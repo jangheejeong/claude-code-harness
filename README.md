@@ -6,7 +6,7 @@
 
 `/orchestrator` 한 번으로 계획 → 구현 → 리뷰 → PR 자동화
 
-`6 subagent` · `6 verb skill` · `4 hooks` · `phase runner`
+`6 subagent` · `6 verb skill` · `6 hooks` · `phase runner`
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1+-purple)](https://code.claude.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -32,6 +32,7 @@
 | **PreToolUse hooks** (2) | `.claude/hooks/*.sh` | `block-destructive.sh`, `protect-secrets.sh` |
 | **PostToolUse hook** (1) | `.claude/hooks/post-edit-lint.sh` | Edit/Write 후 자동 `ruff format` (또는 `black`) — low-nit policy 자동화 |
 | **Subagent hook** (1) | `.claude/hooks/announce-agent.sh` | SubagentStart/Stop 시 어느 agent 가 실행 중인지 터미널 출력 |
+| **Loop hooks** (2) | `.claude/hooks/record-verdict.sh`, `enforce-loop.sh` | reviewer verdict 를 `.claude/notes/loop-state.json` 에 기록 (SubagentStop) → 자동 수정 루프 예산 3회를 턴 끝에서 강제 (Stop) |
 | **Phase runner** | `scripts/harness/run_phase.py` | 긴 phase 작업 분리 |
 | **Doc templates** | `docs/harness/*.md` | `REQUIREMENTS` / `ADR` / `DOC_SYNC_POLICY` |
 
@@ -115,7 +116,7 @@ cd ~/your-project
 
 git clone https://github.com/jangheejeong/claude-code-harness.git .harness-tmp
 [ -f .claude/settings.json ] && cp .claude/settings.json .claude/settings.json.bak   # 기존 설정 백업 (cp -r 이 덮어씀)
-cp -r .harness-tmp/.claude ./      # agents + skills + hooks + settings.json (hook 4개 등록 포함)
+cp -r .harness-tmp/.claude ./      # agents + skills + hooks + settings.json (hook 6개 등록 포함)
 cp -r .harness-tmp/scripts ./
 cp -r .harness-tmp/docs ./
 cp .harness-tmp/CLAUDE.md.example ./CLAUDE.md   # 본인 프로젝트에 맞게 수정
@@ -125,7 +126,7 @@ rm -rf .harness-tmp
 chmod +x .claude/hooks/*.sh
 ```
 
-> `.claude/settings.json` 에 hook 4개가 이미 등록되어 있음 — 별도 설정 불필요. 공식 권장대로 `settings.json` 은 팀 공유용으로 체크인하고, 개인 설정은 `settings.local.json` (gitignore) 에. 기존 `settings.json` 이 있던 프로젝트라면 백업본 (`settings.json.bak`) 에 새 파일의 `hooks` 블록을 수동으로 합쳐서 복원.
+> `.claude/settings.json` 에 hook 6개가 이미 등록되어 있음 — 별도 설정 불필요. 공식 권장대로 `settings.json` 은 팀 공유용으로 체크인하고, 개인 설정은 `settings.local.json` (gitignore) 에. 기존 `settings.json` 이 있던 프로젝트라면 백업본 (`settings.json.bak`) 에 새 파일의 `hooks` 블록을 수동으로 합쳐서 복원.
 
 확인:
 
@@ -153,8 +154,8 @@ curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/mai
 동작:
 
 - 변경될 파일 목록 보여줌 (e.g., `~ .claude/agents/coder.md  (112 lines changed)`)
-- **사용자 파일은 보존**: `CLAUDE.md`, `.claude/settings*.json` (`settings.json` 은 없을 때만 신규 설치 — 본인 파일에 hook event 가 빠져 있으면 경고만 출력), `Plans.md`, `REQUIREMENTS.md`, `.claude/notes/`, `worktrees/`, `agent-memory/`
-- **managed 파일은 단순 덮어쓰기**: 5 generic agents (coder/tester/planner/explorer/documenter), 6 verb skills, 4 hooks (block-destructive / protect-secrets / post-edit-lint / announce-agent), `run_phase.py`, doc 템플릿, `HARNESS.md`, `examples/` (동일 이름만 덮어씀 — upstream 에서 사라진 로컬 파일은 삭제하지 않고 경고만)
+- **사용자 파일은 보존**: `CLAUDE.md`, `.claude/settings*.json` (`settings.json` 은 없을 때만 신규 설치 — 본인 파일에 등록 안 된 hook 이 있으면 그 이름들과 붙여넣을 JSON 스니펫을 출력), `Plans.md`, `REQUIREMENTS.md`, `.claude/notes/`, `worktrees/`, `agent-memory/`
+- **managed 파일은 단순 덮어쓰기**: 5 generic agents (coder/tester/planner/explorer/documenter), 6 verb skills, 6 hooks (block-destructive / protect-secrets / post-edit-lint / announce-agent / record-verdict / enforce-loop), `run_phase.py`, doc 템플릿, `HARNESS.md`, `examples/` (동일 이름만 덮어씀 — upstream 에서 사라진 로컬 파일은 삭제하지 않고 경고만)
 - **`reviewer.md` 는 3-way auto-merge**: 스택 커스텀 영역 (Django N+1, FastAPI async 등) 과 공용 영역 (Tag 의미, 4-lens 골격) 이 한 파일에 섞여있어서 `git merge-file` 로 합침
   - 로컬에 `reviewer.md` 가 없으면: upstream 을 신규 설치
   - 첫 실행: cache 없으므로 보존 + cache 시드 (`.claude/.harness-cache/upstream-prev/reviewer.md`)
@@ -249,7 +250,16 @@ $ cd ~/your-project && claude
 
 수정이 필요하면 `Plans.md` 를 직접 편집하기보단 자연어로 요청하는 게 좋다 — _"Phase 2 가 너무 크다, 둘로 쪼개줘"_, _"acceptance 가 모호하다, 구체적인 status code 로 바꿔"_, _"만료 nonce 처리 phase 가 빠졌다, 추가해"_ 식. `planner` 가 다시 짜고 사용자는 다시 검토. 직접 편집은 planner 가 본인이 안 쓴 변경을 모르게 만들어 이후 단계와 어긋난다.
 
-**BLOCK verdict.** `reviewer` 가 BLOCK (또는 REQUEST CHANGES) 을 내고 자동 fix 루프 (최대 3회) 가 풀지 못하면 흐름이 멈춘다.
+**BLOCK verdict.** `reviewer` 가 BLOCK (또는 REQUEST CHANGES) 을 내고 자동 fix 루프 3회가 풀지 못하면 흐름이 멈춘다.
+
+이 3회는 모델이 알아서 세는 숫자가 아니라 hook 두 개가 디스크에 적어가며 강제한다. 리뷰어가 끝날 때마다 `record-verdict.sh` 가 판정과 시도 횟수를 `.claude/notes/loop-state.json` 에 기록하고, 매 턴 끝에 `enforce-loop.sh` 가 그 파일을 읽는다. 예산이 남아 있으면 exit 2 로 **턴을 끝내지 못하게 막고** 재투입을 지시한다 — 새 BLOCK 이 기록된 뒤 오는 턴은 그 위에서 조용히 마무리될 수 없다. 예산을 다 쓰면 (`attempt` 3) 턴을 끝내되 이렇게 출력한다:
+
+```text
+[enforce-loop] 자동 수정 루프 3/3 소진 — 마지막 리뷰 판정은 BLOCK 입니다.
+성공이 아닙니다. 사람 개입이 필요합니다: 리뷰 findings 를 직접 확인하고 범위를 다시 정하세요.
+```
+
+즉 소진 시점의 종료는 **통과가 아니라 정지**다. 여기서부터는 hook 이 재투입을 밀어붙이지 않고 (`/review` 도 에스컬레이션을 지시한다), 사람 차례가 된다.
 
 3회 안에 풀리지 않는 BLOCK 은 보통 다음 셋 중 하나의 신호다:
 
@@ -366,13 +376,15 @@ $ cd ~/your-project && claude
 │   │   ├── review/                #   /review
 │   │   ├── release/               #   /release (locked)
 │   │   └── setup/                 #   /setup
-│   ├── settings.json              # hook 4개 등록 (팀 공유용, 체크인)
+│   ├── settings.json              # hook 6개 등록 (팀 공유용, 체크인)
 │   └── hooks/
 │       ├── block-destructive.sh   # Pre · 위험 셸 명령 차단
 │       ├── protect-secrets.sh     # Pre · 시크릿 파일 쓰기 거부
 │       ├── post-edit-lint.sh      # Post · .py 자동 ruff format (low-nit 자동화)
 │       ├── announce-agent.sh      # SubagentStart/Stop · agent 실행 알림
-│       └── tests/run-tests.sh     # hook 4개 회귀 테스트 suite
+│       ├── record-verdict.sh      # SubagentStop · reviewer verdict 기록
+│       ├── enforce-loop.sh        # Stop · 자동 fix 루프 예산 강제
+│       └── tests/run-tests.sh     # hook 회귀 테스트 suite
 │
 ├── scripts/harness/
 │   └── run_phase.py               # /orchestrator 가 호출, 긴 phase 출력 분리
@@ -419,11 +431,11 @@ $ cd ~/your-project && claude
 
 ## Safety + Polish Hooks — What They Do
 
-PreToolUse 는 차단 (exit `2` + stderr 사유), PostToolUse 는 후처리 (exit `0`, stdout 안내). stdin JSON 은 `jq` 로 파싱 (`python3` fallback — 둘 다 없으면 경고 출력 후 통과).
+PreToolUse 는 차단 (exit `2` + stderr 사유), PostToolUse 는 후처리 (exit `0`, stdout 안내), Stop 은 턴 종료 판정 (exit `2` 면 턴이 안 끝나고 계속). stdin JSON 은 `jq` 로 파싱 (`python3` fallback — 둘 다 없으면 경고 출력 후 통과).
 
 > **권한 모드 우회 불가**: hook 의 `deny` 는 사용자가 `--dangerously-skip-permissions` 또는 `bypassPermissions` 모드로 띄워도 작동. 즉 사용자가 권한 검사 끄고 띄워도 hook 차단은 그대로. 팀 정책 / 보안 가드용으로 신뢰 가능.
 
-> **회귀 테스트**: `bash .claude/hooks/tests/run-tests.sh` — hook 4개에 합성 JSON 을 흘려 deny (exit 2) / allow (exit 0) 를 단언하는 self-contained suite. 현재 75 케이스 (오탐 가드 포함) 전부 통과.
+> **회귀 테스트**: `bash .claude/hooks/tests/run-tests.sh` — hook 6개에 합성 JSON 을 흘려 exit code (2 = deny / 0 = allow) 와 상태 파일 결과를 단언하는 self-contained suite. 오탐 가드 포함.
 
 ### `block-destructive.sh` · matcher: `Bash`
 
@@ -482,7 +494,7 @@ exit:    항상 0 — 코더 차단 X (lint 실패는 reviewer 영역)
 
 #### 활성화 방법
 
-기본 제공되는 `.claude/settings.json` 에 `SubagentStart` / `SubagentStop` entry 가 이미 등록되어 있음 — 신규 설치면 추가 설정 불필요. 본인 `settings.json` 을 따로 유지 중이라면 `update.sh` 가 빠진 hook event 를 경고로 알려주고 upstream `settings.json` 을 백업 폴더에 참고용으로 저장해줌. 등록 후 Claude Code 재시작 → 다음 `/orchestrator` 부터 agent 시작/종료가 터미널에 한 줄씩 출력됨.
+기본 제공되는 `.claude/settings.json` 에 `SubagentStart` / `SubagentStop` / `Stop` entry 가 이미 등록되어 있음 — 신규 설치면 추가 설정 불필요. 본인 `settings.json` 을 따로 유지 중이라면 `update.sh` 가 등록 안 된 훅 이름과 붙여넣을 JSON 스니펫을 출력하고, upstream `settings.json` 을 백업 폴더에 참고용으로 저장해줌. 등록 후 Claude Code 재시작 → 다음 `/orchestrator` 부터 agent 시작/종료가 터미널에 한 줄씩 출력됨.
 
 #### 검증
 
@@ -496,6 +508,35 @@ cat .claude/notes/agent-activity.log
 ```
 
 이게 ground truth — skill 본문이 의도한 대로 진짜 agent 가 spawn 됐는지 **사후 검증** 가능.
+
+### `record-verdict.sh` · event: `SubagentStop`
+
+리뷰어가 끝나면 그 판정을 파일에 적어둔다. 서브에이전트 트랜스크립트의 마지막 답변을 `run_phase.py --parse-verdict` 로 파싱해서 이렇게 남긴다:
+
+```json
+// .claude/notes/loop-state.json  (gitignore 됨)
+{"last_verdict": "BLOCK", "attempt": 2, "enforced": false}
+```
+
+`APPROVE` 면 `attempt` 를 0 으로 리셋, `BLOCK` / `REQUEST CHANGES` 면 +1, 판정을 못 읽었으면 (`UNKNOWN`) 그대로 둔다. 카운터를 컨텍스트가 아니라 디스크에 두는 이유는 컨텍스트가 한 번 압축되면 그 안의 숫자는 사라지기 때문이다. 어떤 입력에도 **항상 exit 0** — `SubagentStop` 의 exit 2 는 "서브에이전트를 멈추지 못하게 한다" 는 뜻이라 read-only 인 리뷰어를 계속 돌릴 뿐이다.
+
+> ⚠️ **리뷰어 서브에이전트 이름은 `reviewer` 로 시작해야 한다.** 이 hook 은 `agent_type` 이 `reviewer` 또는 `reviewer-*` 일 때만 기록한다 (`reviewer-phase2` 같은 팀메이트 이름까지 걸리도록). `phase3-reviewer` 나 `review-gate` 로 띄우면 기록이 없고, 기록이 없으면 아래 루프 강제가 **조용히 꺼진다.**
+
+### `enforce-loop.sh` · event: `Stop`
+
+메인 턴이 끝날 때마다 발화해서 위 파일을 읽고 자동 fix 루프 예산(3회) 을 판정한다.
+
+```text
+파일 없음                          → exit 0 (평범한 대화 턴을 가로채지 않음)
+APPROVE / UNKNOWN / 이미 반응한 판정 → exit 0
+BLOCK·CHANGES + 예산 남음           → exit 2 — 턴을 끝내지 못하게 막고 stderr 로 재투입 지시
+BLOCK·CHANGES + attempt 3          → exit 0 + "성공이 아닙니다. 사람 개입이 필요합니다"
+상태 파일 손상 / jq·python3 부재     → exit 0 + stderr 경고 (세션을 hook 안에 가두지 않음)
+```
+
+판정 하나는 반응 한 번만 산다 (`enforced` 플래그) — 사용자가 루프를 놔두고 떠나도 남은 BLOCK 이 이후 모든 턴을 붙잡지 않는다.
+
+**범위**: 이 두 hook 이 하는 일은 리뷰어 판정을 기록하고 재시도 상한을 강제하는 것까지다. `tester` 발견으로 도는 `/work` 안쪽 루프는 여기서 세지 않는다.
 
 ---
 

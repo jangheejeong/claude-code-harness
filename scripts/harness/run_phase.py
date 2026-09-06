@@ -17,13 +17,17 @@ Usage:
         [--permission-mode acceptEdits] \
         [--allowed-tools "Bash Edit Read"]
 
-Requires: `claude` CLI v2.1+ on PATH.
+    python scripts/harness/run_phase.py --parse-verdict <reviewer-log>
+
+Requires: `claude` CLI v2.1+ on PATH (except for --parse-verdict, which is pure).
 
 Exit codes:
-  0  agent finished, see log
-  1  bad arguments
+  0  agent finished, see log (verdict APPROVE or UNKNOWN)
+  1  bad arguments (including any argparse usage error)
   2  claude CLI missing
-  3  agent run failed (non-zero exit or timeout)
+  3  agent run failed (non-zero exit, timeout, or unreadable log)
+  4  reviewer verdict REQUEST CHANGES
+  5  reviewer verdict BLOCK
 """
 
 from __future__ import annotations
@@ -31,46 +35,191 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import os
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NOTES_DIR = REPO_ROOT / ".claude" / "notes"
 
+# Both parsers print this: the pre-scan one knows a single option, and its
+# generated usage line would otherwise hide every real option from a caller
+# who has just mistyped one.
+USAGE = (
+    "run_phase.py --subproject DIR --phase N --agent AGENT [options]\n"
+    "       run_phase.py --parse-verdict LOGFILE"
+)
+
+VERDICT_TAG = re.compile(
+    r"<verdict>\s*(APPROVE|REQUEST\s+CHANGES|BLOCK)\s*</verdict>", re.IGNORECASE
+)
+# Same tag, but only where it is allowed to count: at the very end of the log
+# once trailing whitespace is stripped, i.e. on its last non-empty line.
+FINAL_VERDICT_TAG = re.compile(VERDICT_TAG.pattern + r"\Z", re.IGNORECASE)
+# The tag carries the reviewer's own wording; callers get the short form.
+VERDICT_ALIASES = {"REQUEST CHANGES": "CHANGES"}
+VERDICT_EXIT = {"APPROVE": 0, "CHANGES": 4, "BLOCK": 5, "UNKNOWN": 0}
+
+
+class UsageErrorParser(argparse.ArgumentParser):
+    """An ArgumentParser whose usage errors exit 1 instead of argparse's 2.
+
+    D5 already spends 2 on "claude CLI missing", and the Phase 2 hooks branch
+    on `case $?` — leaving argparse's default would make an argument typo
+    indistinguishable from a missing CLI.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        print(f"ERROR: {message}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+def short_verdict(raw: str) -> str:
+    """Normalize a tag's own wording to the short form callers branch on."""
+    tag = " ".join(raw.split()).upper()
+    return VERDICT_ALIASES.get(tag, tag)
+
+
+def parse_verdict(text: str) -> str:
+    """Extract the reviewer's machine-readable verdict from its log.
+
+    Only a tag on the log's last non-empty line counts — do not relax this
+    back to "last tag anywhere". A reviewer that quotes the tag while writing
+    up a finding and then forgets to judge would otherwise have its quote read
+    as a real verdict, and in the loop hooks a stray APPROVE resets the retry
+    budget for free.
+
+    Tightening trades one silent failure for another: should the CLI ever
+    append anything after the tag, every verdict turns UNKNOWN and loop
+    enforcement switches off wholesale. So a misplaced tag says so on stderr,
+    while a log with no tag at all stays quiet — that one is the documented
+    backward-compatible path, not an anomaly.
+    """
+    final = FINAL_VERDICT_TAG.search(text.rstrip())
+    if final:
+        return short_verdict(final.group(1))
+    stray = VERDICT_TAG.findall(text)
+    if stray:
+        print(
+            f"WARNING: ignoring {len(stray)} <verdict> tag(s) "
+            f"(last: {short_verdict(stray[-1])}) — a verdict only counts on the "
+            "log's last non-empty line; reading the verdict as UNKNOWN",
+            file=sys.stderr,
+        )
+    return "UNKNOWN"
+
+
+def report_verdict(log_path: Path) -> int:
+    """Print the verdict of a reviewer log and map it to an exit code."""
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError as exc:
+        print(f"ERROR: cannot read verdict log {log_path}: {exc}", file=sys.stderr)
+        return 1
+    verdict = parse_verdict(text)
+    print(verdict)
+    return VERDICT_EXIT[verdict]
+
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser()
-    p.add_argument("--subproject", required=True,
-                   help="Top-level subproject dir, e.g. api-server")
+    p = UsageErrorParser(usage=USAGE)
+    p.add_argument(
+        "--subproject", required=True, help="Top-level subproject dir, e.g. api-server"
+    )
     p.add_argument("--phase", required=True, type=int)
-    p.add_argument("--agent", required=True,
-                   choices=["explorer", "planner", "coder", "tester",
-                            "reviewer", "documenter"])
-    p.add_argument("--plans-file", default=None,
-                   help="Default: <subproject>/Plans.md")
-    p.add_argument("--prompt", default="",
-                   help="Additional instructions appended to the agent prompt")
-    p.add_argument("--timeout", type=int, default=3600,
-                   help="Kill the agent run after N seconds (default: 3600)")
-    p.add_argument("--permission-mode", default="acceptEdits",
-                   help="Passed through to `claude --permission-mode` "
-                        "(default: acceptEdits — --print cannot answer prompts; "
-                        "the PreToolUse safety hooks remain the guardrail)")
-    p.add_argument("--allowed-tools", default=None,
-                   help="Passed through to `claude --allowedTools`, "
-                        "e.g. 'Bash Edit Read'")
+    p.add_argument(
+        "--agent",
+        required=True,
+        choices=["explorer", "planner", "coder", "tester", "reviewer", "documenter"],
+    )
+    p.add_argument("--plans-file", default=None, help="Default: <subproject>/Plans.md")
+    p.add_argument(
+        "--prompt",
+        default="",
+        help="Additional instructions appended to the agent prompt",
+    )
+    p.add_argument(
+        "--timeout",
+        type=int,
+        default=3600,
+        help="Kill the agent run after N seconds (default: 3600)",
+    )
+    p.add_argument(
+        "--permission-mode",
+        default="acceptEdits",
+        help="Passed through to `claude --permission-mode` "
+        "(default: acceptEdits — --print cannot answer prompts; "
+        "the PreToolUse safety hooks remain the guardrail)",
+    )
+    p.add_argument(
+        "--allowed-tools",
+        default=None,
+        help="Passed through to `claude --allowedTools`, e.g. 'Bash Edit Read'",
+    )
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument(
+        "--parse-verdict",
+        default=None,
+        metavar="LOGFILE",
+        help="Print the reviewer verdict found in LOGFILE and exit; "
+        "runs standalone, no other argument is read",
+    )
     return p.parse_args()
 
 
+def run_status(returncode: int, agent: str, log_path: Path) -> tuple[str, int]:
+    """Turn a finished agent run into a status label and this script's exit code.
+
+    The `claude` CLI exits 0 whatever the reviewer concluded, so without reading
+    the verdict out of the log a BLOCK would be reported as a clean success.
+    """
+    if returncode != 0:
+        return f"FAIL({returncode})", 3
+    if agent != "reviewer":
+        return "OK", 0
+
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError as exc:
+        # A verdict we could not read is not an approval: report the run as
+        # failed rather than letting an unreadable log pass as status=OK.
+        print(f"ERROR: cannot read agent log {log_path}: {exc}", file=sys.stderr)
+        return "FAIL(unreadable log)", 3
+
+    verdict = parse_verdict(text)
+    if verdict in ("CHANGES", "BLOCK"):
+        return verdict, VERDICT_EXIT[verdict]
+    return "OK", 0
+
+
+def verdict_log_arg(argv: list[str]) -> str | None:
+    """Peek for --parse-verdict ahead of the main parser.
+
+    The main parser marks --subproject/--phase/--agent required, which would
+    reject a standalone verdict lookup.
+    """
+    peek = UsageErrorParser(add_help=False, usage=USAGE)
+    peek.add_argument("--parse-verdict", default=None)
+    known, _ = peek.parse_known_args(argv)
+    return known.parse_verdict
+
+
 def main() -> int:
+    verdict_log = verdict_log_arg(sys.argv[1:])
+    if verdict_log is not None:
+        return report_verdict(Path(verdict_log))
+
     args = parse_args()
 
     if not shutil.which("claude"):
-        print("ERROR: `claude` CLI not on PATH. Install Claude Code v2.1+.",
-              file=sys.stderr)
+        print(
+            "ERROR: `claude` CLI not on PATH. Install Claude Code v2.1+.",
+            file=sys.stderr,
+        )
         return 2
 
     # Resolve everything to absolute paths up front: the prompt is consumed by a
@@ -84,11 +233,11 @@ def main() -> int:
         print(f"ERROR: subproject not found: {subproj}", file=sys.stderr)
         return 1
 
-    plans = (Path(args.plans_file).resolve() if args.plans_file
-             else subproj / "Plans.md")
+    plans = Path(args.plans_file).resolve() if args.plans_file else subproj / "Plans.md"
     if not plans.is_file():
-        print(f"ERROR: Plans.md not found at {plans}. Run /plan first.",
-              file=sys.stderr)
+        print(
+            f"ERROR: Plans.md not found at {plans}. Run /plan first.", file=sys.stderr
+        )
         return 1
 
     NOTES_DIR.mkdir(parents=True, exist_ok=True)
@@ -106,20 +255,25 @@ def main() -> int:
 
     cmd = [
         "claude",
-        "--agent", args.agent,
-        "--print",                    # non-interactive
-        "--output-format", "text",
+        "--agent",
+        args.agent,
+        "--print",  # non-interactive
+        "--output-format",
+        "text",
         # --print cannot answer permission prompts; acceptEdits (default) lets the
         # agent write files while the PreToolUse hooks still guard destructive ops.
-        "--permission-mode", args.permission_mode,
+        "--permission-mode",
+        args.permission_mode,
     ]
     if args.allowed_tools:
         cmd += ["--allowedTools", args.allowed_tools]
     cmd.append(prompt)
 
-    print(f"[run_phase] {args.agent} on Phase {args.phase} of "
-          f"{args.subproject}; log -> {log_path.relative_to(REPO_ROOT)}",
-          flush=True)
+    print(
+        f"[run_phase] {args.agent} on Phase {args.phase} of "
+        f"{args.subproject}; log -> {log_path.relative_to(REPO_ROOT)}",
+        flush=True,
+    )
 
     if args.dry_run:
         print("[run_phase] DRY RUN — would exec:", " ".join(cmd))
@@ -136,14 +290,18 @@ def main() -> int:
                 timeout=args.timeout,
             )
         except subprocess.TimeoutExpired:
-            print(f"[run_phase] status=FAIL(timeout after {args.timeout}s) "
-                  f"log={log_path.relative_to(REPO_ROOT)}", flush=True)
+            print(
+                f"[run_phase] status=FAIL(timeout after {args.timeout}s) "
+                f"log={log_path.relative_to(REPO_ROOT)}",
+                flush=True,
+            )
             return 3
 
-    status = "OK" if proc.returncode == 0 else f"FAIL({proc.returncode})"
-    print(f"[run_phase] status={status} log={log_path.relative_to(REPO_ROOT)}",
-          flush=True)
-    return 0 if proc.returncode == 0 else 3
+    status, exit_code = run_status(proc.returncode, args.agent, log_path)
+    print(
+        f"[run_phase] status={status} log={log_path.relative_to(REPO_ROOT)}", flush=True
+    )
+    return exit_code
 
 
 if __name__ == "__main__":

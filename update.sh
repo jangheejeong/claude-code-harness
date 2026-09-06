@@ -13,8 +13,8 @@
 # Overwrites (managed harness assets):
 #   - .claude/agents/{coder,tester,planner,explorer,documenter}.md
 #   - .claude/skills/*/SKILL.md
-#   - .claude/hooks/*.sh                (all 4: block-destructive, protect-secrets,
-#                                        announce-agent, post-edit-lint)
+#   - .claude/hooks/*.sh                (every hook in MANAGED_HOOKS below —
+#                                        named there and nowhere else)
 #   - scripts/harness/run_phase.py
 #   - docs/harness/*.md
 #   - HARNESS.md
@@ -25,6 +25,82 @@
 #   bash update.sh --branch <name>              # use non-default branch
 
 set -euo pipefail
+
+# Every hook update.sh propagates, named exactly once. This used to be two
+# separate literal lists — one for the diff report, one for the copy loop — and
+# a hook added to neither is installed nowhere while both lists still look
+# complete. That is how the loop-enforcement hooks below shipped in the harness
+# repo and reached no other project. One list, two readers.
+MANAGED_HOOKS="block-destructive protect-secrets announce-agent post-edit-lint record-verdict enforce-loop"
+HOOK_COUNT=$(set -- $MANAGED_HOOKS; echo $#)
+
+# Hooks the project's own settings.json never runs. A copied-but-unregistered
+# hook is worse than a missing one: it is on disk, it looks installed, and it
+# enforces nothing. Nothing in a session says so, so update.sh has to.
+unregistered_hooks() {  # <settings-file> -> hook names, space separated
+  local settings="$1" missing="" h
+  for h in $MANAGED_HOOKS; do
+    grep -q "$h\.sh" "$settings" 2>/dev/null || missing="$missing $h"
+  done
+  printf '%s' "${missing# }"
+}
+
+# The entries the user has to add, lifted out of the shipped settings.json
+# instead of written here, so the snippet can never describe a set of hooks the
+# harness stopped shipping. Only the missing hooks are kept: whole groups would
+# re-register the ones the user already runs.
+registration_snippet() {  # <upstream-settings> <hook names...> -> JSON on stdout
+  local upstream="$1"
+  shift
+  command -v python3 >/dev/null 2>&1 || return 1
+  # stderr is swallowed on purpose: this runs inside the ✅ Done. block, and a
+  # traceback between "NOT registered" and the reference path is the worst place
+  # to read one. A parse failure already degrades to the reference line below.
+  python3 - "$upstream" "$@" 2>/dev/null <<'PY'
+import json, sys
+
+upstream, names = sys.argv[1], sys.argv[2:]
+with open(upstream) as f:
+    events = json.load(f).get("hooks", {})
+
+needed = {}
+for event, groups in events.items():
+    kept = []
+    for group in groups:
+        entries = [hook for hook in group.get("hooks", [])
+                   if any(name + ".sh" in hook.get("command", "") for name in names)]
+        if entries:
+            kept.append({**{k: v for k, v in group.items() if k != "hooks"},
+                         "hooks": entries})
+    if kept:
+        needed[event] = kept
+print(json.dumps(needed, indent=2))
+PY
+}
+
+registration_notice() {  # <upstream-settings> <backup-dir> <hook names...>
+  local upstream="$1" backup="$2" h snippet line
+  shift 2
+  echo "   ⚠️  .claude/settings.json kept (yours) — these hooks are installed but NOT registered:"
+  for h in "$@"; do
+    echo "       · $h.sh"
+  done
+  echo "       They do nothing until settings.json runs them."
+  if snippet=$(registration_snippet "$upstream" "$@"); then
+    echo "       Merge these keys into \"hooks\" in .claude/settings.json"
+    echo "       (append to an event array you already have, do not replace it):"
+    while IFS= read -r line; do
+      echo "         $line"
+    done <<< "$snippet"
+  fi
+  echo "       Upstream reference: $backup/settings.json.upstream-latest"
+}
+
+# Sourcing with HARNESS_UPDATE_LIB=1 stops here, so the test suite can call the
+# helpers above without cloning over the network or writing into a project.
+if [ "${HARNESS_UPDATE_LIB:-}" = "1" ]; then
+  return 0
+fi
 
 REPO="https://github.com/jangheejeong/claude-code-harness.git"
 BRANCH="main"
@@ -80,14 +156,14 @@ for s in plan work review release setup orchestrator; do
   fi
 done
 
-# Hooks (all 4)
-for h in block-destructive protect-secrets announce-agent post-edit-lint; do
+# Hooks
+for h in $MANAGED_HOOKS; do
   report_diff "$TMP/harness/.claude/hooks/$h.sh" ".claude/hooks/$h.sh" ".claude/hooks/$h.sh"
 done
 
 # Settings — installed only when the project has none (hooks fire only when registered here)
 if [ -f "$TMP/harness/.claude/settings.json" ] && [ ! -f .claude/settings.json ]; then
-  echo "  + .claude/settings.json  (new file — registers the 4 hooks)"
+  echo "  + .claude/settings.json  (new file — registers all $HOOK_COUNT hooks)"
 fi
 
 # Phase runner
@@ -190,8 +266,8 @@ for s in plan work review release setup orchestrator; do
   fi
 done
 
-# Hooks (all 4)
-for h in block-destructive protect-secrets announce-agent post-edit-lint; do
+# Hooks
+for h in $MANAGED_HOOKS; do
   cp "$TMP/harness/.claude/hooks/$h.sh" ".claude/hooks/$h.sh"
   chmod +x ".claude/hooks/$h.sh"
 done
@@ -201,16 +277,14 @@ done
 # hook events (esp. SubagentStart/SubagentStop, added later), print a notice.
 SETTINGS_NEW="$TMP/harness/.claude/settings.json"
 SETTINGS_USER=".claude/settings.json"
-SETTINGS_MISSING_EVENTS=""
+UNREGISTERED_HOOKS=""
 if [ -f "$SETTINGS_NEW" ]; then
   if [ ! -f "$SETTINGS_USER" ]; then
     cp "$SETTINGS_NEW" "$SETTINGS_USER"
-    echo "  + .claude/settings.json installed (registers all 4 hooks)"
+    echo "  + .claude/settings.json installed (registers all $HOOK_COUNT hooks)"
   else
-    for ev in PreToolUse PostToolUse SubagentStart SubagentStop; do
-      grep -q "\"$ev\"" "$SETTINGS_USER" || SETTINGS_MISSING_EVENTS="$SETTINGS_MISSING_EVENTS $ev"
-    done
-    [ -n "$SETTINGS_MISSING_EVENTS" ] && cp "$SETTINGS_NEW" "$BACKUP/settings.json.upstream-latest"
+    UNREGISTERED_HOOKS=$(unregistered_hooks "$SETTINGS_USER")
+    [ -n "$UNREGISTERED_HOOKS" ] && cp "$SETTINGS_NEW" "$BACKUP/settings.json.upstream-latest"
   fi
 fi
 
@@ -317,10 +391,8 @@ case "$RV_RESULT" in
     echo "       Upstream saved aside: $RV_USER.upstream-latest — merge manually"
     ;;
 esac
-if [ -n "$SETTINGS_MISSING_EVENTS" ]; then
-  echo "   ⚠️  .claude/settings.json kept (yours), but it lacks hook entries for:$SETTINGS_MISSING_EVENTS"
-  echo "       The 4 hooks are installed but fire only when registered in settings.json."
-  echo "       Upstream reference: $BACKUP/settings.json.upstream-latest"
+if [ -n "$UNREGISTERED_HOOKS" ]; then
+  registration_notice "$SETTINGS_NEW" "$BACKUP" $UNREGISTERED_HOOKS
 fi
 if [ -n "$STALE_EXAMPLES" ]; then
   echo "   ⚠️  examples no longer shipped upstream (kept locally):$STALE_EXAMPLES"

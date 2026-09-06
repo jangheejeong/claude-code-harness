@@ -31,7 +31,9 @@ allowed-tools: Agent, Read, Edit, Write, Grep, Glob, Bash
    - Map every acceptance bullet to ≥1 test
    - Add edge case tests beyond the bullets (empty/null, boundary values, concurrency, error paths, time, encoding) — tester may commit them as `test(<scope>): edge cases — phase <n>`
    
-   If tester reports a TDD violation or production bug, spawn coder again with the finding. Loop max 3 iterations, then escalate to user.
+   If tester reports a TDD violation or production bug, spawn coder again with the finding. Cap this at 3 iterations, then escalate to the user.
+
+   This particular cap is on you to respect: `.claude/hooks/enforce-loop.sh` counts **reviewer** verdicts only, and a tester finding is not one. The enforced budget starts at `/review` — see `.claude/skills/review/SKILL.md`.
 
 5. **Stop**. Print:
    - Phase number completed
@@ -40,6 +42,11 @@ allowed-tools: Agent, Read, Edit, Write, Grep, Glob, Bash
    - Tester's edge cases added
    - Test run results
    - Suggested next step: `/review` (to gate) or `/work` again (next Phase) or pause
+
+## Subagent lifecycle (HARD)
+
+- **Close the previous subagent before spawning the next one. Idle is not stopped.** A coder that has reported and gone quiet still holds write access to the files it touched. On 2026-09-05 a finished coder was left open while the next one started, and both had the same two files open for writing; the earlier one happened to notice and stop itself, which is luck, not a rule.
+- **A reviewer subagent's name must start with `reviewer`** — `reviewer`, `reviewer-phase2`, and so on. `.claude/hooks/record-verdict.sh` records a verdict only for `reviewer` and `reviewer-*` names, so a reviewer spawned as `phase3-reviewer` or `review-gate` turns loop enforcement off for the whole phase, and nothing in the session says it is off.
 
 ## Don't
 

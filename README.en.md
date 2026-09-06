@@ -6,7 +6,7 @@
 
 One `/orchestrator` call automates plan → code → review → PR
 
-`6 subagents` · `6 verb skills` · `4 hooks` · `phase runner`
+`6 subagents` · `6 verb skills` · `6 hooks` · `phase runner`
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1+-purple)](https://code.claude.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -32,6 +32,7 @@ One `/orchestrator` call automates plan → code → review → PR
 | **PreToolUse hooks** (2) | `.claude/hooks/*.sh` | `block-destructive.sh`, `protect-secrets.sh` |
 | **PostToolUse hook** (1) | `.claude/hooks/post-edit-lint.sh` | Auto `ruff format` (or `black`) after Edit/Write — low-nit policy automation |
 | **Subagent hook** (1) | `.claude/hooks/announce-agent.sh` | Prints which agent is running to the terminal on SubagentStart/Stop |
+| **Loop hooks** (2) | `.claude/hooks/record-verdict.sh`, `enforce-loop.sh` | Record each reviewer verdict in `.claude/notes/loop-state.json` (SubagentStop) → enforce the 3-round auto-fix budget at the end of every turn (Stop) |
 | **Phase runner** | `scripts/harness/run_phase.py` | Offloads long phase work |
 | **Doc templates** | `docs/harness/*.md` | `REQUIREMENTS` / `ADR` / `DOC_SYNC_POLICY` |
 
@@ -115,7 +116,7 @@ cd ~/your-project
 
 git clone https://github.com/jangheejeong/claude-code-harness.git .harness-tmp
 [ -f .claude/settings.json ] && cp .claude/settings.json .claude/settings.json.bak   # back up existing settings (cp -r overwrites it)
-cp -r .harness-tmp/.claude ./      # agents + skills + hooks + settings.json (4 hooks pre-registered)
+cp -r .harness-tmp/.claude ./      # agents + skills + hooks + settings.json (6 hooks pre-registered)
 cp -r .harness-tmp/scripts ./
 cp -r .harness-tmp/docs ./
 cp .harness-tmp/CLAUDE.md.example ./CLAUDE.md   # edit for your project
@@ -125,7 +126,7 @@ rm -rf .harness-tmp
 chmod +x .claude/hooks/*.sh
 ```
 
-> `.claude/settings.json` already registers all 4 hooks — no extra setup needed. As officially recommended, `settings.json` is checked in for team sharing, and personal settings go in `settings.local.json` (gitignored). If your project already had a `settings.json`, restore from the backup (`settings.json.bak`) after manually merging in the new file's `hooks` block.
+> `.claude/settings.json` already registers all 6 hooks — no extra setup needed. As officially recommended, `settings.json` is checked in for team sharing, and personal settings go in `settings.local.json` (gitignored). If your project already had a `settings.json`, restore from the backup (`settings.json.bak`) after manually merging in the new file's `hooks` block.
 
 Verify:
 
@@ -153,8 +154,8 @@ curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/mai
 What it does:
 
 - Shows the list of files that would change (e.g., `~ .claude/agents/coder.md  (112 lines changed)`)
-- **User files are preserved**: `CLAUDE.md`, `.claude/settings*.json` (`settings.json` is installed fresh only when missing — if your own file lacks a hook event, you only get a warning), `Plans.md`, `REQUIREMENTS.md`, `.claude/notes/`, `worktrees/`, `agent-memory/`
-- **Managed files are simply overwritten**: 5 generic agents (coder/tester/planner/explorer/documenter), 6 verb skills, 4 hooks (block-destructive / protect-secrets / post-edit-lint / announce-agent), `run_phase.py`, doc templates, `HARNESS.md`, `examples/`
+- **User files are preserved**: `CLAUDE.md`, `.claude/settings*.json` (`settings.json` is installed fresh only when missing — if your own file leaves a hook unregistered, the run names it and prints a JSON snippet you can paste in), `Plans.md`, `REQUIREMENTS.md`, `.claude/notes/`, `worktrees/`, `agent-memory/`
+- **Managed files are simply overwritten**: 5 generic agents (coder/tester/planner/explorer/documenter), 6 verb skills, 6 hooks (block-destructive / protect-secrets / post-edit-lint / announce-agent / record-verdict / enforce-loop), `run_phase.py`, doc templates, `HARNESS.md`, `examples/`
 - **`reviewer.md` gets a 3-way auto-merge**: stack-custom sections (Django N+1, FastAPI async, etc.) and shared sections (tag semantics, 4-lens skeleton) live in one file, so it's merged with `git merge-file`
   - If there is no local `reviewer.md`: the upstream version is installed fresh
   - First run: no cache yet, so the file is preserved + the cache is seeded (`.claude/.harness-cache/upstream-prev/reviewer.md`)
@@ -249,7 +250,16 @@ There are exactly three places in the workflow where a human must decide; everyt
 
 If revisions are needed, prefer natural language over editing `Plans.md` directly — _"Phase 2 is too big, split it in two"_, _"the acceptance is vague, pin it to concrete status codes"_, _"the expired-nonce phase is missing, add it"_. `planner` rewrites and you review again. Direct edits leave the planner unaware of changes it didn't write, drifting out of sync with later stages.
 
-**BLOCK verdict.** When `reviewer` issues BLOCK (or REQUEST CHANGES) and the auto-fix loop (max 3) can't resolve it, the flow stops.
+**BLOCK verdict.** When `reviewer` issues BLOCK (or REQUEST CHANGES) and the 3 rounds of the auto-fix loop can't resolve it, the flow stops.
+
+Those 3 rounds are not a number the model keeps in its head — two hooks keep it on disk. Every time the reviewer finishes, `record-verdict.sh` writes the verdict and the attempt count to `.claude/notes/loop-state.json`, and at the end of every turn `enforce-loop.sh` reads that file. While budget remains it exits 2, which **refuses to let the turn end** and puts the re-dispatch instruction on stderr — the turn that follows a freshly recorded BLOCK cannot quietly wrap up on it. Once the budget is spent (`attempt` 3) it lets the turn end and prints:
+
+```text
+[enforce-loop] 자동 수정 루프 3/3 소진 — 마지막 리뷰 판정은 BLOCK 입니다.
+성공이 아닙니다. 사람 개입이 필요합니다: 리뷰 findings 를 직접 확인하고 범위를 다시 정하세요.
+```
+
+("The auto-fix loop is exhausted at 3/3; the last verdict was BLOCK. This is **not** success — a human needs to read the findings and re-scope.") So the turn ending here is a halt, not a pass: the hook stops pushing for another round (`/review` tells the model to escalate) and it is your turn.
 
 A BLOCK that survives 3 rounds is usually a signal of one of three things:
 
@@ -366,13 +376,15 @@ Temporary bypass.
 │   │   ├── review/                #   /review
 │   │   ├── release/               #   /release (locked)
 │   │   └── setup/                 #   /setup
-│   ├── settings.json              # registers the 4 hooks (team-shared, checked in)
+│   ├── settings.json              # registers the 6 hooks (team-shared, checked in)
 │   └── hooks/
 │       ├── block-destructive.sh   # Pre · blocks dangerous shell commands
 │       ├── protect-secrets.sh     # Pre · refuses secret-file writes
 │       ├── post-edit-lint.sh      # Post · auto ruff format for .py (low-nit automation)
 │       ├── announce-agent.sh      # SubagentStart/Stop · agent activity announcements
-│       └── tests/run-tests.sh     # regression test suite for all 4 hooks
+│       ├── record-verdict.sh      # SubagentStop · records the reviewer verdict
+│       ├── enforce-loop.sh        # Stop · enforces the auto-fix loop budget
+│       └── tests/run-tests.sh     # regression test suite for the hooks
 │
 ├── scripts/harness/
 │   └── run_phase.py               # called by /orchestrator, isolates long phase output
@@ -419,11 +431,11 @@ Tags combine two axes — **scope** (new vs existing) + **severity** (how blocki
 
 ## Safety + Polish Hooks — What They Do
 
-PreToolUse blocks (exit `2` + reason on stderr); PostToolUse post-processes (exit `0`, notice on stdout). stdin JSON is parsed with `jq` (`python3` fallback — if both are missing, a warning is printed and the call passes through).
+PreToolUse blocks (exit `2` + reason on stderr); PostToolUse post-processes (exit `0`, notice on stdout); Stop judges whether the turn may end (exit `2` means it may not, and the conversation continues). stdin JSON is parsed with `jq` (`python3` fallback — if both are missing, a warning is printed and the call passes through).
 
 > **No permission-mode bypass**: hook `deny` works even when the user launches with `--dangerously-skip-permissions` or `bypassPermissions` mode. That is, even with permission checks off, hook blocking still applies. Reliable as a team policy / security guard.
 
-> **Regression tests**: `bash .claude/hooks/tests/run-tests.sh` — a self-contained suite that pipes synthetic JSON into all 4 hooks and asserts deny (exit 2) / allow (exit 0). Currently 75 cases (including false-positive guards), all passing.
+> **Regression tests**: `bash .claude/hooks/tests/run-tests.sh` — a self-contained suite that pipes synthetic JSON into all 6 hooks and asserts the exit code (2 = deny / 0 = allow) and the resulting state file. False-positive guards included.
 
 ### `block-destructive.sh` · matcher: `Bash`
 
@@ -482,7 +494,7 @@ Writes directly to `/dev/tty` → always visible regardless of stdout/stderr cap
 
 #### How it's enabled
 
-The bundled `.claude/settings.json` already registers the `SubagentStart` / `SubagentStop` entries — no extra setup on a fresh install. If you maintain your own `settings.json`, `update.sh` warns you about missing hook events and saves the upstream `settings.json` into the backup folder for reference. After registering, restart Claude Code → from the next `/orchestrator` on, each agent start/stop prints one line in the terminal.
+The bundled `.claude/settings.json` already registers the `SubagentStart` / `SubagentStop` / `Stop` entries — no extra setup on a fresh install. If you maintain your own `settings.json`, `update.sh` prints the hooks that are not registered along with a JSON snippet to paste in, and saves the upstream `settings.json` into the backup folder for reference. After registering, restart Claude Code → from the next `/orchestrator` on, each agent start/stop prints one line in the terminal.
 
 #### Verification
 
@@ -496,6 +508,35 @@ cat .claude/notes/agent-activity.log
 ```
 
 This is the ground truth — you can **verify after the fact** that the agents the skill body intended were actually spawned.
+
+### `record-verdict.sh` · event: `SubagentStop`
+
+When the reviewer finishes, this writes down its verdict. It parses the last answer in the subagent's transcript with `run_phase.py --parse-verdict` and records:
+
+```json
+// .claude/notes/loop-state.json  (gitignored)
+{"last_verdict": "BLOCK", "attempt": 2, "enforced": false}
+```
+
+`APPROVE` resets `attempt` to 0, `BLOCK` / `REQUEST CHANGES` increments it, and a verdict that could not be read (`UNKNOWN`) leaves it alone. The counter lives on disk rather than in context because one compaction is all it takes for a number in context to be gone. **Always exits 0**, whatever the input — `SubagentStop`'s exit 2 means "prevent the subagent from stopping", which would only keep the read-only reviewer running.
+
+> ⚠️ **A reviewer subagent's name must start with `reviewer`.** This hook records only when `agent_type` is `reviewer` or `reviewer-*` (so teammate names like `reviewer-phase2` still count). Spawn it as `phase3-reviewer` or `review-gate` and nothing is recorded — and with nothing recorded, the enforcement below is **silently off**.
+
+### `enforce-loop.sh` · event: `Stop`
+
+Fires at the end of every main turn, reads the file above, and judges the 3-round auto-fix budget.
+
+```text
+no state file                          → exit 0 (never intercepts an ordinary chat turn)
+APPROVE / UNKNOWN / already acted on   → exit 0
+BLOCK·CHANGES + budget left            → exit 2 — the turn may not end; re-dispatch instruction on stderr
+BLOCK·CHANGES + attempt 3              → exit 0 + "this is not success, a human is needed"
+corrupt state / no jq and no python3   → exit 0 + warning on stderr (never traps the session in a hook)
+```
+
+One verdict buys exactly one reaction (the `enforced` flag) — so a loop you walked away from does not hold up every future turn with its leftover BLOCK.
+
+**Scope**: what these two hooks do is record reviewer verdicts and enforce a retry ceiling. The inner `/work` loop driven by `tester` findings is not counted here.
 
 ---
 
