@@ -59,8 +59,11 @@ warn() { echo "[record-verdict] WARNING: $*" >&2; }
 # Every caller is a path that has already decided not to record. Nothing here
 # may fail loudly either — the hook still owes SubagentStop an exit 0 (D1).
 mark_record_failure() {  # <one-line reason>
-  # No python3, no JSON writer, and jq cannot edit a file in place either. That
-  # host keeps the stderr warning it always had; every other host gets the mark.
+  # No python3, no JSON writer here: that host keeps the stderr warning it always
+  # had, and every other host gets the mark. enforce-loop.sh does carry a jq
+  # render-and-rename, but only for *clearing* — a mark it cannot clear repeats
+  # on every turn for good, while a mark that is never written leaves this host
+  # exactly as loud as it was before.
   command -v python3 >/dev/null 2>&1 || return 0
   mkdir -p "${STATE_FILE%/*}" 2>/dev/null || true
   python3 - "$STATE_FILE" "$1" <<'PY' 2>/dev/null || true

@@ -158,11 +158,36 @@ esac
 # between this hook's read and its mark) is the one that switches enforcement
 # off in a live loop.
 state_edit() {  # mark-enforced <verdict> <attempt> | clear-record-failure <reason>
-  # python3 is the only in-place JSON editor this hook has. Where it is missing
+  # python3 is the in-place JSON editor this hook prefers. Where it is missing
   # no mark is written and enforcement degrades to what it did before
   # consume-once existed: react on every turn until a new verdict lands. Loud
   # and wrong beats quiet and off.
-  command -v python3 >/dev/null 2>&1 || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    # ...except for this one mark, where that degradation has no end. A host
+    # with jq and no python3 cannot record a verdict at all — record-verdict.sh
+    # needs python3 to parse one — so nothing will ever land a newer verdict to
+    # displace a record_failed left there, and the announcement below would
+    # repeat on every turn for good. jq cannot edit in place, but it can render
+    # the whole file to a temp name that gets renamed over.
+    #
+    # Only this mode. mark-enforced's compare-and-set spans two values whose jq
+    # rendering would have to match python's on every shape a state file can
+    # hold, and that pair of renderings has already drifted apart twice in the
+    # fingerprint readers. Its degradation stays bounded on its own terms: a
+    # verdict re-blocks, it does not accumulate.
+    command -v jq >/dev/null 2>&1 || return 0
+    [ "$1" = "clear-record-failure" ] || return 0
+    local tmp="$STATE_FILE.$$.tmp"  # a name record-verdict.sh cannot be holding open
+    # The same compare-and-set the python3 branch below explains: clear only the
+    # failure this run announced, so one that landed after the read survives.
+    jq --arg reason "${2-}" '
+      if (.record_failed == true
+          and ((.record_failed_reason // "") | tostring) == $reason)
+      then del(.record_failed, .record_failed_reason)
+      else . end' "$STATE_FILE" > "$tmp" 2>/dev/null \
+      && mv "$tmp" "$STATE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    return 0
+  fi
   python3 - "$1" "$STATE_FILE" "${2-}" "${3-}" <<'PY' 2>/dev/null || true
 import json, os, sys
 
