@@ -494,7 +494,7 @@ Writes directly to `/dev/tty` → always visible regardless of stdout/stderr cap
 
 #### How it's enabled
 
-The bundled `.claude/settings.json` already registers the `SubagentStart` / `SubagentStop` / `Stop` entries — no extra setup on a fresh install. If you maintain your own `settings.json`, `update.sh` warns you about missing hook events and saves the upstream `settings.json` into the backup folder for reference. After registering, restart Claude Code → from the next `/orchestrator` on, each agent start/stop prints one line in the terminal.
+The bundled `.claude/settings.json` already registers the `SubagentStart` / `SubagentStop` / `Stop` entries — no extra setup on a fresh install. If you maintain your own `settings.json`, `update.sh` prints the hooks that are not registered along with a JSON snippet to paste in, and saves the upstream `settings.json` into the backup folder for reference. After registering, restart Claude Code → from the next `/orchestrator` on, each agent start/stop prints one line in the terminal.
 
 #### Verification
 

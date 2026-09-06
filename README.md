@@ -494,7 +494,7 @@ exit:    항상 0 — 코더 차단 X (lint 실패는 reviewer 영역)
 
 #### 활성화 방법
 
-기본 제공되는 `.claude/settings.json` 에 `SubagentStart` / `SubagentStop` / `Stop` entry 가 이미 등록되어 있음 — 신규 설치면 추가 설정 불필요. 본인 `settings.json` 을 따로 유지 중이라면 `update.sh` 가 빠진 hook event 를 경고로 알려주고 upstream `settings.json` 을 백업 폴더에 참고용으로 저장해줌. 등록 후 Claude Code 재시작 → 다음 `/orchestrator` 부터 agent 시작/종료가 터미널에 한 줄씩 출력됨.
+기본 제공되는 `.claude/settings.json` 에 `SubagentStart` / `SubagentStop` / `Stop` entry 가 이미 등록되어 있음 — 신규 설치면 추가 설정 불필요. 본인 `settings.json` 을 따로 유지 중이라면 `update.sh` 가 등록 안 된 훅 이름과 붙여넣을 JSON 스니펫을 출력하고, upstream `settings.json` 을 백업 폴더에 참고용으로 저장해줌. 등록 후 Claude Code 재시작 → 다음 `/orchestrator` 부터 agent 시작/종료가 터미널에 한 줄씩 출력됨.
 
 #### 검증
 
