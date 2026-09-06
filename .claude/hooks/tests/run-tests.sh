@@ -2050,6 +2050,71 @@ enforce_case 0 "python3 fallback: a marked recording failure -> exit 0 + the rea
   "$FAILED_MARK" "$(stop_json)" - 'run_phase.py exited 3 without a verdict' "$FAILED_NOJQ"
 rm -rf "$FAILED_NOJQ"
 
+# ---------- both hooks : a host that has jq and no python3 ----------
+# The suite has always tested the two extremes — both readers present, and
+# neither — and never this one, which is a real shape: a slim container, a PATH
+# trimmed for a hook, an image swapped under a project whose state file was
+# written elsewhere.
+#
+# It is the one host where "loud until a new verdict lands" is not a bounded
+# degradation. record-verdict.sh needs python3 to parse a verdict at all, so no
+# new verdict can ever land here to displace what is on disk.
+if ! command -v jq >/dev/null 2>&1; then
+  report 0 "$R" "jq without python3 -> warning, no state file (skipped: no jq on this host)"
+  report 0 "$E" "jq without python3 -> the announced mark is cleared, not repeated forever (skipped: no jq on this host)"
+else
+  JQ_ONLY=$(mktemp -d /tmp/hooktest-jqonly-XXXXXX)
+  # A plausible host, not a knife edge: everything either hook shells out to,
+  # minus the interpreter. A case that passes only because the PATH was too thin
+  # to reach the failure would be asserting nothing.
+  for BIN in jq cat mv rm mkdir git; do ln -s "$(command -v "$BIN")" "$JQ_ONLY/$BIN"; done
+
+  # record-verdict.sh can only say what it cannot do. It still owes the same two
+  # things it owes on the empty PATH: exit 0, and no state file invented out of
+  # a review it never read — enforce-loop.sh reads that file's existence as "a
+  # loop is in flight".
+  PROJ=$(new_proj)
+  assistant_jsonl "$PROJ/transcript.jsonl" '<verdict>BLOCK</verdict>'
+  ERR=$(printf '%s' "$(subagent_stop_json reviewer "$PROJ/transcript.jsonl")" \
+    | env PATH="$JQ_ONLY" CLAUDE_PROJECT_DIR="$PROJ" /bin/bash "$HOOKS_DIR/$R" 2>&1 >/dev/null)
+  RC=$?
+  STATE_MADE=no; [ -f "$PROJ/$STATE_REL" ] && STATE_MADE=yes
+  rm -rf "$PROJ"
+  # A shell error beside the warning reads as a broken hook and trains the user
+  # to ignore the channel the warning lives on.
+  if [ "$RC" -eq 0 ] && [ "$STATE_MADE" = no ] && printf '%s' "$ERR" | grep -qi 'WARNING' \
+     && ! printf '%s' "$ERR" | grep -q 'command not found'; then
+    report 0 "$R" "jq without python3 -> warning, exit 0, no state file invented"
+  else
+    report 1 "$R" "jq without python3 -> warning, exit 0, no state file invented (rc=$RC state=$STATE_MADE err='$ERR')"
+  fi
+
+  # ...which means a mark written on some other host is the last word this one
+  # will ever hear. Announcing it on every turn from now until somebody edits
+  # the file by hand is not "one reaction to one fact", and the user cannot make
+  # it stop by working: the reviewer that would clear it cannot run here.
+  PROJ=$(new_proj)
+  printf '%s\n' "$FAILED_MARK" > "$PROJ/$STATE_REL"
+  jq_only_turn() {  # -> stdout of one Stop, stderr into $JQ_ERR
+    printf '%s' "$(stop_json)" \
+      | env PATH="$JQ_ONLY" CLAUDE_PROJECT_DIR="$PROJ" /bin/bash "$HOOKS_DIR/$E" 2>"$JQ_ERR"
+  }
+  JQ_ERR=$(mktemp /tmp/hooktest-jqonly-err-XXXXXX)
+  OUT1=$(jq_only_turn); RC1=$?
+  ERR1=$(cat "$JQ_ERR")
+  OUT2=$(jq_only_turn); RC2=$?
+  ERR2=$(cat "$JQ_ERR")
+  MARKED=$(state_field "$PROJ/$STATE_REL" record_failed)
+  rm -f "$JQ_ERR"; rm -rf "$PROJ"
+  if [ "$RC1" -eq 0 ] && [ "$RC2" -eq 0 ] && printf '%s' "$OUT1" | grep -qF '기록되지' \
+     && [ -z "$OUT2" ] && [ -z "$MARKED" ] && [ -z "$ERR1" ] && [ -z "$ERR2" ]; then
+    report 0 "$E" "jq without python3 -> the announced mark is cleared, not repeated forever"
+  else
+    report 1 "$E" "jq without python3 -> the announced mark is cleared, not repeated forever (rc=$RC1/$RC2 out1='$OUT1' out2='$OUT2' marked='$MARKED' err='$ERR1$ERR2')"
+  fi
+  rm -rf "$JQ_ONLY"
+fi
+
 # ---------- enforce-loop.sh : a loop that is not moving stops early ----------
 # The budget of 3 bounds how long a stalled loop runs, it does not notice that
 # it is stalled. Two cycles over an identical tree buy identical attempts, so
