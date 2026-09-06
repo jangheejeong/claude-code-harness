@@ -37,10 +37,17 @@ PREV_DIFF=""
 RECORD_FAILED="false"
 RECORD_FAILED_REASON=""
 
-# One rendering rule for every string-valued key this hook reads out of the
-# state file, written down once because its copies have already drifted apart
-# three times in this phase alone. A value is a JSON string with newlines
-# squashed to spaces, or it is nothing.
+# One rendering rule for the three keys this phase put under it —
+# `last_diff_sha`, `prev_diff_sha`, `record_failed_reason` — written down once
+# because its copies have already drifted apart three times in this phase
+# alone. A value is a JSON string with newlines squashed to spaces, or it is
+# nothing.
+#
+# `last_verdict` and `attempt` are read below WITHOUT this rule and still
+# diverge between the two engines on `"BLOCK\n"`, `[]` and `{}`. That predates
+# this phase, so it is not fixed here — but do not read the rule above as
+# covering every key, because it does not, and the gap is in the two keys that
+# decide the budget.
 #
 # The type test, and not `//`: jq falls through only on null and false while the
 # python3 branch below also falls through on 0, [] and {} — and these values'

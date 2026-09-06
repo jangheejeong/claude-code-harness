@@ -272,7 +272,7 @@ There is one more way it stops, and it happens with budget still on the counter.
 
 So whether the budget ran out or the loop stopped moving, the turn ending there is a halt, not a pass: the hook stops pushing for another round (`/review` tells the model to escalate) and it is your turn.
 
-The no-progress check is a floor, though, not a net. The fingerprint covers commits, tracked changes, and the names *and contents* of files not yet added — so work done entirely inside a brand-new uncommitted file still registers. What it cannot do is judge the work: **any** file moving changes the fingerprint, so a cycle that added nothing but a test file still passes it. It catches "the loop is not moving" and nothing more — whether the phase is actually fine is still the reviewer's call.
+The no-progress check is a floor, though, not a net. The fingerprint covers commits, tracked changes, and the names *and contents* of files not yet added — so work done entirely inside a brand-new uncommitted file still registers. What it cannot do is judge the work: **any one of the files it watches** moving changes the fingerprint (`.claude/notes` and gitignored trees are deliberately excluded), so a cycle that added nothing but a test file still passes it. It catches "the loop is not moving" and nothing more — whether the phase is actually fine is still the reviewer's call.
 
 A BLOCK that survives 3 rounds is usually a signal of one of three things:
 
