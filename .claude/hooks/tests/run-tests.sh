@@ -1978,6 +1978,31 @@ else
   report 1 "update.sh" "with no python3 the notice still names the hooks and the file to copy from (got '$NOTICE_NOPY')"
 fi
 
+# Criterion 6 — a project with no settings.json still gets the shipped one, and
+# that file has to register every hook the same list propagates. This is the
+# other end of the same failure: a hook added to MANAGED_HOOKS but not to
+# settings.json would ship into fresh projects already inert.
+FRESH_PROJECT_SETTINGS="$LIB_SAFE_DIR/fresh-settings.json"
+cp "$REPO_ROOT/.claude/settings.json" "$FRESH_PROJECT_SETTINGS"
+FRESH_UNREG=$(update_lib "unregistered_hooks '$FRESH_PROJECT_SETTINGS'")
+if [ -z "$FRESH_UNREG" ]; then
+  report 0 "update.sh" "the settings.json a fresh project receives registers every propagated hook"
+else
+  report 1 "update.sh" "the settings.json a fresh project receives registers every propagated hook (inert:$FRESH_UNREG)"
+fi
+
+# ...and the run still installs it when the project has none. Nothing may make
+# the install conditional on the notice above: the notice is for projects that
+# keep their own file.
+if grep -q 'if \[ ! -f "\$SETTINGS_USER" \]; then' "$UPDATE_SH" \
+   && grep -q 'cp "\$SETTINGS_NEW" "\$SETTINGS_USER"' "$UPDATE_SH"; then
+  report 0 "update.sh" "a project with no settings.json still gets the shipped one installed"
+else
+  report 1 "update.sh" "a project with no settings.json still gets the shipped one installed"
+fi
+
+rm -rf "$LIB_SAFE_DIR"
+
 # ---------- summary ----------
 TOTAL=$((PASS + FAIL))
 echo
