@@ -196,13 +196,16 @@ PY
 #   - HEAD, for work the coder committed
 #   - the tracked diff against HEAD, for work it has not committed yet
 #   - the porcelain status, whose untracked entries `git diff HEAD` cannot see
-# Dropping any of the three would call a real cycle stalled — a coder that only
+#   - the contents of those untracked entries, which the status line does not
+#     carry: `?? path` is the same line whether the file holds a stub or a
+#     finished module, and a coder iterating on something it never added would
+#     otherwise read as a coder that did nothing
+# Dropping any of the four would call a real cycle stalled — a coder that only
 # wrote a test file and never committed is the ordinary mid-loop shape here.
 #
-# It stays a floor rather than a net: the names of untracked files count, their
-# contents do not, so an edit to a file that was never added reads as no change.
-# Hashing every untracked byte on every reviewer stop is not worth it, and the
-# real judgement is the reviewer's either way.
+# It stays a floor rather than a net: it sees files, not intent, so a cycle that
+# only reformatted a line still counts as movement. The real judgement is the
+# reviewer's either way.
 #
 # Empty is a valid answer: no git, no repo, no commits yet. Never a constant,
 # though — a placeholder would compare equal to itself and stop every loop.
@@ -221,6 +224,14 @@ diff_fingerprint() {  # -> hash of the repo's current state, or "" if unavailabl
     git -C "$dir" rev-parse HEAD 2>/dev/null
     git -C "$dir" status --porcelain -uall -- ':(exclude).claude/notes' 2>/dev/null
     git -C "$dir" diff HEAD -- ':(exclude).claude/notes' 2>/dev/null
+    # One blob id per untracked file, which is the only place their contents
+    # appear at all. `--exclude-standard` keeps gitignored trees (node_modules
+    # and friends) out, so what is hashed is what a coder could have written;
+    # ls-files lists regular files and symlinks only, so nothing here blocks on
+    # a fifo. Measured on this repo: ~3ms with no untracked files, ~30ms with
+    # 500 of them, against a hook that runs once per reviewer stop.
+    git -C "$dir" ls-files --others --exclude-standard -z -- ':(exclude).claude/notes' 2>/dev/null \
+      | xargs -0 -r git -C "$dir" hash-object -- 2>/dev/null
   } | git -C "$dir" hash-object --stdin 2>/dev/null || return 0
 }
 

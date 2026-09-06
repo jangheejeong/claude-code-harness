@@ -287,9 +287,10 @@ fi
 # the coder did between the two reviews, none of it reached a file. The
 # remaining attempts would buy identical cycles, so spend none of them.
 #
-# A floor, not a net. record-verdict.sh fingerprints file names and tracked
-# content, so a coder that only added a test file, or only edited an untracked
-# one, does not look stalled here. Nothing about this decides a phase is fine —
+# A floor, not a net. record-verdict.sh fingerprints HEAD plus tracked and
+# untracked content, so a coder that only added a test file, or only edited a
+# file it never added, does not look stalled here. Nothing about this decides a
+# phase is fine —
 # the judgement is still the reviewer's.
 #
 # Both fingerprints have to be present: an empty one means "not measured" (no
