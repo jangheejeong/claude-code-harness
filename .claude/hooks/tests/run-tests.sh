@@ -2157,6 +2157,16 @@ fingerprint_parity_case() {  # <expected-exit> <desc> <state> [want-stderr|-]
 fingerprint_parity_case 2 "both fingerprints are the number 0 -> exit 2 on both readers" \
   '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":0,"prev_diff_sha":0}' 'attempt 1/3'
 
+# 0 is only where the readers part company; the rest of the table is where they
+# agree on the wrong answer. true and 1.5 stop the loop under both readers today
+# — same measurement that never happened, no divergence to give it away. The
+# rule is a type, not a list of values, so the whole list is written down.
+for NOT_A_STRING in '[]' '{}' 'true' '1.5'; do
+  fingerprint_parity_case 2 "both fingerprints are $NOT_A_STRING -> exit 2 on both readers" \
+    "{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"last_diff_sha\":$NOT_A_STRING,\"prev_diff_sha\":$NOT_A_STRING}" \
+    'attempt 1/3'
+done
+
 rm -rf "$FP_NOJQ"
 
 # One verdict still buys one reaction. Stopping early is a reaction, so an
