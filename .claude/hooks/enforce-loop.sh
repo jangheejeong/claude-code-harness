@@ -335,6 +335,6 @@ fi
 mark_enforced "$VERDICT" "$ATTEMPT"  # this block is the one reaction this verdict pays for
 {
   echo "[enforce-loop] Reviewer verdict ${VERDICT} — the phase is not done (attempt ${ATTEMPT}/${MAX_ATTEMPTS})."
-  echo "Re-dispatch the coder in fix mode with the reviewer's findings, then re-run the reviewer."
+  echo "Re-dispatch whichever agent the findings call for — coder for code, documenter for docs — in fix mode, then re-run the reviewer."
 } >&2
 exit 2
