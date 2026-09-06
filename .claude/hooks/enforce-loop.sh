@@ -50,13 +50,20 @@ if command -v jq >/dev/null 2>&1; then
     VERDICT=$(jq -r '.last_verdict // ""' "$STATE_FILE")
     ATTEMPT=$(jq -r '.attempt // 0' "$STATE_FILE")
     ENFORCED=$(jq -r 'if .enforced == true then "true" else "false" end' "$STATE_FILE")
-    # tostring and the newline squash keep these two byte-identical to what the
-    # python3 branch below produces, because their *equality* decides whether
-    # the loop stops. A state file holding a number, or a hand-typed newline,
-    # must not make one reader see two equal fingerprints and the other two
-    # different ones.
-    LAST_DIFF=$(jq -r '(.last_diff_sha // "") | tostring | gsub("[\n\r]"; " ")' "$STATE_FILE")
-    PREV_DIFF=$(jq -r '(.prev_diff_sha // "") | tostring | gsub("[\n\r]"; " ")' "$STATE_FILE")
+    # A fingerprint is a JSON string or it is nothing. record_state only ever
+    # writes a string here or leaves the key out, so a number, a list or a
+    # boolean is a hand-edited or corrupt file — not a tree anybody measured.
+    # Reading it as absent keeps the loop running, and that is the deliberately
+    # safe direction: stopping a loop that should continue is enforcement
+    # switching itself off, which is the failure this hook exists to prevent.
+    #
+    # The type test, not `//`: jq falls through only on null and false while the
+    # python3 branch below also falls through on 0, [] and {}, and their
+    # *equality* decides whether the loop stops. Do not put `tostring` back —
+    # it is what made a `last_diff_sha: 0` stop the loop under jq and re-dispatch
+    # under python3. The newline squash stays, for the same byte-identity reason.
+    LAST_DIFF=$(jq -r 'if (.last_diff_sha | type) == "string" then .last_diff_sha | gsub("[\n\r]"; " ") else "" end' "$STATE_FILE")
+    PREV_DIFF=$(jq -r 'if (.prev_diff_sha | type) == "string" then .prev_diff_sha | gsub("[\n\r]"; " ") else "" end' "$STATE_FILE")
     RECORD_FAILED=$(jq -r 'if .record_failed == true then "true" else "false" end' "$STATE_FILE")
     RECORD_FAILED_REASON=$(jq -r '(.record_failed_reason // "") | tostring | gsub("[\n\r]"; " ")' "$STATE_FILE")
   fi
@@ -83,6 +90,18 @@ def one_line(value):
     return str(value).replace("\n", " ").replace("\r", " ")
 
 
+def fingerprint(value):
+    # A fingerprint is a JSON string or it is nothing — same rule as the jq
+    # branch above, and it has to stay the same rule: these two values are the
+    # only ones in the state file whose equality decides an exit code. `or ""`
+    # is what it must not go back to; that let 0, [] and {} through here while
+    # jq stringified them, so one reader stopped the loop on a tree nobody
+    # measured and the other re-dispatched. Absent means "not measured", which
+    # keeps the loop running — the safe direction, because a loop stopped early
+    # is enforcement silently switching off.
+    return one_line(value) if isinstance(value, str) else ""
+
+
 if payload is None:
     print("bad-payload")
 elif state is None:
@@ -95,8 +114,8 @@ print("true" if (payload or {}).get("stop_hook_active") is True else "false")
 print(one_line((state or {}).get("last_verdict") or ""))
 print(one_line((state or {}).get("attempt") or 0))
 print("true" if (state or {}).get("enforced") is True else "false")
-print(one_line((state or {}).get("last_diff_sha") or ""))
-print(one_line((state or {}).get("prev_diff_sha") or ""))
+print(fingerprint((state or {}).get("last_diff_sha")))
+print(fingerprint((state or {}).get("prev_diff_sha")))
 print("true" if (state or {}).get("record_failed") is True else "false")
 print(one_line((state or {}).get("record_failed_reason") or ""))
 ' "$STATE_FILE" 2>/dev/null) || OUT=""
