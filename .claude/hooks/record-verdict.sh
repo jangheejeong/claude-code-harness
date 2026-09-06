@@ -285,7 +285,13 @@ elif verdict == "UNKNOWN":
 else:
     state["attempt"] = attempt + 1
     if fingerprint:
-        state["prev_diff_sha"] = str(state.get("last_diff_sha") or "")
+        # The same rule the readers enforce (enforce-loop.sh, both branches): a
+        # fingerprint is a JSON string or it is nothing. Stringifying here would
+        # take a hand-edited `last_diff_sha: 3` and hand it back as the real
+        # string "3" — the value the readers reject, put into the shape they
+        # accept, by this hook. Change one side of this and change the other.
+        previous = state.get("last_diff_sha")
+        state["prev_diff_sha"] = previous if isinstance(previous, str) else ""
         state["last_diff_sha"] = fingerprint
     else:
         forget_progress()

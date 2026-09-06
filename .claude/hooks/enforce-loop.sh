@@ -50,9 +50,11 @@ if command -v jq >/dev/null 2>&1; then
     VERDICT=$(jq -r '.last_verdict // ""' "$STATE_FILE")
     ATTEMPT=$(jq -r '.attempt // 0' "$STATE_FILE")
     ENFORCED=$(jq -r 'if .enforced == true then "true" else "false" end' "$STATE_FILE")
-    # A fingerprint is a JSON string or it is nothing. record_state only ever
-    # writes a string here or leaves the key out, so a number, a list or a
-    # boolean is a hand-edited or corrupt file — not a tree anybody measured.
+    # A fingerprint is a JSON string or it is nothing. record-verdict.sh's
+    # record_state holds the other half of that rule — it only ever writes a
+    # string here or leaves the key out, and it refuses to stringify a corrupt
+    # one on the way — so a number, a list or a boolean is a hand-edited or
+    # corrupt file, not a tree anybody measured.
     # Reading it as absent keeps the loop running, and that is the deliberately
     # safe direction: stopping a loop that should continue is enforcement
     # switching itself off, which is the failure this hook exists to prevent.
