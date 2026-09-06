@@ -134,12 +134,46 @@ sys.stdout.write(last)
 PY
 }
 
-# Preserves keys this hook does not know about, so Phase 3 can add its own.
-record_state() {  # <verdict>
-  python3 - "$STATE_FILE" "$1" <<'PY'
+# One value that changes whenever anything a coder could have touched changed.
+# enforce-loop.sh compares two consecutive cycles' worth of these and stops a
+# loop that is not moving, so what this covers is what that can see:
+#   - HEAD, for work the coder committed
+#   - the tracked diff against HEAD, for work it has not committed yet
+#   - the porcelain status, whose untracked entries `git diff HEAD` cannot see
+# Dropping any of the three would call a real cycle stalled — a coder that only
+# wrote a test file and never committed is the ordinary mid-loop shape here.
+#
+# It stays a floor rather than a net: the names of untracked files count, their
+# contents do not, so an edit to a file that was never added reads as no change.
+# Hashing every untracked byte on every reviewer stop is not worth it, and the
+# real judgement is the reviewer's either way.
+#
+# Empty is a valid answer: no git, no repo, no commits yet. Never a constant,
+# though — a placeholder would compare equal to itself and stop every loop.
+diff_fingerprint() {  # -> hash of the repo's current state, or "" if unavailable
+  local dir="${CLAUDE_PROJECT_DIR:-.}"
+  command -v git >/dev/null 2>&1 || return 0
+  git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  # `.claude/notes/` is where this hook and announce-agent.sh do their own
+  # writing, and in a project that does not gitignore it every cycle would
+  # differ by the state file this very run is about to write — the fingerprint
+  # would never repeat and no-progress detection would be permanently off.
+  # `-uall` for the same reason in reverse: without it git collapses a wholly
+  # untracked directory to one `?? .claude/` line, and a second new file inside
+  # it would leave the fingerprint unchanged.
+  {
+    git -C "$dir" rev-parse HEAD 2>/dev/null
+    git -C "$dir" status --porcelain -uall -- ':(exclude).claude/notes' 2>/dev/null
+    git -C "$dir" diff HEAD -- ':(exclude).claude/notes' 2>/dev/null
+  } | git -C "$dir" hash-object --stdin 2>/dev/null || return 0
+}
+
+# Preserves keys this hook does not know about.
+record_state() {  # <verdict> <diff-fingerprint|"">
+  python3 - "$STATE_FILE" "$1" "$2" <<'PY'
 import json, os, sys
 
-path, verdict = sys.argv[1], sys.argv[2]
+path, verdict, fingerprint = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     with open(path) as f:
         state = json.load(f)
@@ -159,12 +193,30 @@ state["last_verdict"] = verdict
 # it as redundant bookkeeping: without it an abandoned BLOCK on disk is
 # indistinguishable from a live one.
 state["enforced"] = False
+
+def forget_progress():
+    # Whatever pair is on disk describes cycles that are no longer adjacent to
+    # the next one. Comparing across the gap would answer a question nobody
+    # asked, and the answer it would give is "stalled".
+    state.pop("prev_diff_sha", None)
+    state.pop("last_diff_sha", None)
+
+
 if verdict == "APPROVE":
     state["attempt"] = 0  # the loop ended: hand the budget back to the next phase
+    forget_progress()  # the budget goes back, and so does what it is measured against
 elif verdict == "UNKNOWN":
     state["attempt"] = attempt  # no judgement was made, so no attempt was spent
+    # ...and no cycle happened either, so the fingerprints stay as they are: the
+    # next judged cycle is compared against the last judged one, not against a
+    # review that never reached a verdict.
 else:
     state["attempt"] = attempt + 1
+    if fingerprint:
+        state["prev_diff_sha"] = str(state.get("last_diff_sha") or "")
+        state["last_diff_sha"] = fingerprint
+    else:
+        forget_progress()
 
 # open(path, "w") truncates first, and a Stop firing inside that window would
 # read a zero-byte file, warn and give up the turn. Rename instead: a reader
@@ -237,6 +289,6 @@ esac
 # that a thin PATH cannot drown out this hook's one warning, and this line sits
 # under the same rule. STATE_FILE always carries a directory component.
 mkdir -p "${STATE_FILE%/*}" 2>/dev/null || true
-record_state "$VERDICT" || warn "could not write $STATE_FILE"
+record_state "$VERDICT" "$(diff_fingerprint)" || warn "could not write $STATE_FILE"
 
 exit 0

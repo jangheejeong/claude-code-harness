@@ -1898,6 +1898,41 @@ else
 fi
 rm -rf "$PROJ"
 
+# The hook's own writing does not count as the coder moving. .claude/notes/ is
+# where this hook and announce-agent.sh keep their files, and a project that
+# does not gitignore that directory would otherwise show a different tree on
+# every single cycle — the state file this run is about to write is itself part
+# of the difference. No-progress detection would be permanently off, silently.
+PROJ=$(new_git_proj)
+record_block "$PROJ"
+FP1=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+printf 'a later note\n' > "$PROJ/.claude/notes/agent-activity.log"
+record_block "$PROJ"
+FP2=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+if [ -n "$FP2" ] && [ "$FP2" = "$FP1" ]; then
+  report 0 "$R" "the harness's own .claude/notes/ churn does not move the fingerprint"
+else
+  report 1 "$R" "the harness's own .claude/notes/ churn does not move the fingerprint (last='$FP2' before='$FP1')"
+fi
+
+# ...while a sibling under .claude/ does. Untracked entries have to be listed one
+# by one for that: git collapses a wholly untracked directory to a single
+# `?? .claude/` line, and a second new file inside it would leave the fingerprint
+# unchanged — a coder writing hooks or skills would read as stalled.
+mkdir -p "$PROJ/.claude/hooks"
+printf 'first\n' > "$PROJ/.claude/hooks/one.sh"
+record_block "$PROJ"
+FP3=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+printf 'second\n' > "$PROJ/.claude/hooks/two.sh"
+record_block "$PROJ"
+FP4=$(state_field "$PROJ/$STATE_REL" last_diff_sha)
+if [ -n "$FP3" ] && [ "$FP3" != "$FP1" ] && [ -n "$FP4" ] && [ "$FP4" != "$FP3" ]; then
+  report 0 "$R" "a second new file under .claude/ still moves the fingerprint"
+else
+  report 1 "$R" "a second new file under .claude/ still moves the fingerprint (one='$FP3' two='$FP4' base='$FP1')"
+fi
+rm -rf "$PROJ"
+
 # The harness runs wherever the user starts it, and that is not always a git
 # repo. No fingerprint is the honest answer there; a crash, or a constant that
 # compares equal to itself, would both be worse.
