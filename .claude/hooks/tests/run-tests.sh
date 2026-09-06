@@ -1733,13 +1733,14 @@ enforce_case 2 "null attempt counts as none spent -> exit 2 at 0/3" \
 # A verdict this hook does not recognise is not a failed review, so it ends the
 # turn — and silently, because "the reviewer never judged" is the documented
 # Phase 1 fallback, not an anomaly worth a warning on every legacy run.
-enforce_quiet_case() {  # <expected-exit> <desc> <state>
-  local expected="$1" desc="$2" state="$3"
+enforce_quiet_case() {  # <expected-exit> <desc> <state> [PATH]
+  local expected="$1" desc="$2" state="$3" path="${4:-$PATH}"
   local proj out msg err rc=0 ok=0
   proj=$(new_proj)
   printf '%s\n' "$state" > "$proj/$STATE_REL"
   err=$(mktemp /tmp/hooktest-err-XXXXXX)
-  out=$(printf '%s' "$(stop_json)" | CLAUDE_PROJECT_DIR="$proj" bash "$HOOKS_DIR/$E" 2>"$err") || rc=$?
+  out=$(printf '%s' "$(stop_json)" \
+    | env PATH="$path" CLAUDE_PROJECT_DIR="$proj" /bin/bash "$HOOKS_DIR/$E" 2>"$err") || rc=$?
   msg=$(cat "$err"); rm -f "$err"; rm -rf "$proj"
   [ "$rc" -eq "$expected" ] && [ -z "$msg" ] && [ -z "$out" ] || ok=1
   if [ "$ok" -eq 0 ]; then
@@ -1830,26 +1831,39 @@ enforce_case 0 "a newline in last_verdict -> exit 0 (python3 fallback, same answ
   "$SHIFTED_STATE" "$(stop_json)" - - "$EDGE_NOJQ"
 
 # The two readers disagree about what is true: jq's only falsy values are false
-# and null, python's also include 0, "", [] and {}. Both flags this hook reads
-# are booleans, so these values only arrive from a hand-edited state file or a
-# host that renders them differently — but "whether jq is installed changes
-# nothing else" is the contract, and an `enforced: 0` that looks spent to jq and
-# armed to python3 breaks it in the direction that switches enforcement off.
-# Both readers count JSON true and nothing else, so a mangled flag reads as unset
-# and the verdict stays armed. Phase 3 puts more keys in this file; they inherit
-# the same rule.
-for FALSY in 0 '""' '[]' '{}'; do
-  FALSY_STATE="{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"enforced\":$FALSY}"
-  enforce_case 2 "enforced: $FALSY is not true, so the verdict is still armed (jq)" \
-    "$FALSY_STATE" "$(stop_json)" 'attempt 1/3' -
-  enforce_case 2 "enforced: $FALSY is not true, so the verdict is still armed (python3 fallback)" \
-    "$FALSY_STATE" "$(stop_json)" 'attempt 1/3' - "$EDGE_NOJQ"
-done
+# and null, python's also include 0, "", [] and {}. Every flag this hook reads is
+# a boolean, so these values only arrive from a hand-edited state file or a host
+# that renders them differently — but "whether jq is installed changes nothing
+# else" is the contract, and an `enforced: 0` that looks spent to jq and armed to
+# python3 breaks it in the direction that switches enforcement off.
+#
+# The table has to hold values from BOTH sides of the disagreement. With only
+# 0, "", [] and {} in it, the python3 half asserted nothing: python already calls
+# those falsy, so the hook's `is True` could be written as a bare truth test and
+# every case still passed. 1 and "true" are where the two readers actually part
+# company — truthy to python, not `true` to jq — and they are what makes the
+# python3 column bite.
+for NOT_TRUE in 0 '""' '[]' '{}' 1 '"true"'; do
+  ARMED_STATE="{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"enforced\":$NOT_TRUE}"
+  enforce_case 2 "enforced: $NOT_TRUE is not true, so the verdict is still armed (jq)" \
+    "$ARMED_STATE" "$(stop_json)" 'attempt 1/3' -
+  enforce_case 2 "enforced: $NOT_TRUE is not true, so the verdict is still armed (python3 fallback)" \
+    "$ARMED_STATE" "$(stop_json)" 'attempt 1/3' - "$EDGE_NOJQ"
 
-enforce_case 2 "stop_hook_active: 0 is not true, so the budget still bites (jq)" \
-  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json 0)" 'attempt 1/3' -
-enforce_case 2 "stop_hook_active: 0 is not true, so the budget still bites (python3 fallback)" \
-  '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json 0)" 'attempt 1/3' - "$EDGE_NOJQ"
+  enforce_case 2 "stop_hook_active: $NOT_TRUE is not true, so the budget still bites (jq)" \
+    '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json "$NOT_TRUE")" 'attempt 1/3' -
+  enforce_case 2 "stop_hook_active: $NOT_TRUE is not true, so the budget still bites (python3 fallback)" \
+    '{"last_verdict":"BLOCK","attempt":1}' "$(stop_json "$NOT_TRUE")" 'attempt 1/3' - "$EDGE_NOJQ"
+
+  # The key Phase 3 added inherits the rule. Announcing on a mangled flag would
+  # be the same failure pointed the other way: a fact reported out of a file
+  # that never carried it.
+  MARK_STATE="{\"record_failed\":$NOT_TRUE,\"record_failed_reason\":\"nothing happened\"}"
+  enforce_quiet_case 0 "record_failed: $NOT_TRUE is not true, so nothing is announced (jq)" \
+    "$MARK_STATE"
+  enforce_quiet_case 0 "record_failed: $NOT_TRUE is not true, so nothing is announced (python3 fallback)" \
+    "$MARK_STATE" "$EDGE_NOJQ"
+done
 rm -rf "$EDGE_NOJQ"
 
 # The same shift in record-verdict.sh is worse: a newline in agent_type pushes
