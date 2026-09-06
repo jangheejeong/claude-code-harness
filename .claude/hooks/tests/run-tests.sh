@@ -2057,6 +2057,77 @@ enforce_case 0 "python3 fallback: a marked recording failure -> exit 0 + the rea
   "$FAILED_MARK" "$(stop_json)" - 'run_phase.py exited 3 without a verdict' "$FAILED_NOJQ"
 rm -rf "$FAILED_NOJQ"
 
+# ---------- enforce-loop.sh : a record_failed_reason is a string or it is nothing ----------
+# This value crosses an engine boundary no other one does. On an ordinary host
+# jq renders it for the announcement and python3 compares it back when clearing
+# the mark, and the two only ever agreed by accident: `// "" | tostring`
+# promotes 0 to "0" where `or ""` collapses it to "". The compare-and-set then
+# does not recognise the reason its own hook just printed, the mark survives,
+# and the same two lines greet every turn from then on — the jq-only failure of
+# the previous round with the engines swapped. The fingerprint keys already
+# carry the cure (a string or nothing) and this is the last key without it.
+#
+# Only a hand-edited or corrupt file reaches these shapes; mark_record_failure
+# always writes a string. The rule is a type, so the table is written out rather
+# than the two shapes that happened to break.
+#
+# All three hosts, because each one pairs a different reader with a different
+# compare-and-set, and only the mixed pair has ever been wrong. The two
+# single-engine columns are here as the guard that fixing the mixed one does not
+# take them with it.
+reason_consumed_case() {  # <label> <json-value> [PATH]
+  local label="$1" value="$2" path="${3:-$PATH}"
+  local proj out1 out2 marked rc1=0 rc2=0 ok=0
+  proj=$(new_proj)
+  printf '{"record_failed":true,"record_failed_reason":%s}\n' "$value" > "$proj/$STATE_REL"
+  out1=$(printf '%s' "$(stop_json)" \
+    | env PATH="$path" CLAUDE_PROJECT_DIR="$proj" /bin/bash "$HOOKS_DIR/$E" 2>/dev/null) || rc1=$?
+  out2=$(printf '%s' "$(stop_json)" \
+    | env PATH="$path" CLAUDE_PROJECT_DIR="$proj" /bin/bash "$HOOKS_DIR/$E" 2>/dev/null) || rc2=$?
+  marked=$(state_field "$proj/$STATE_REL" record_failed)
+  rm -rf "$proj"
+  # Announced on the first turn, silent on the second, and the mark gone from
+  # disk — the same "one fact, one reaction" the verdict itself obeys.
+  { [ "$rc1" -eq 0 ] && [ "$rc2" -eq 0 ]; } || ok=1
+  printf '%s' "$out1" | grep -qF '기록되지' || ok=1
+  [ -z "$out2" ] || ok=1
+  [ -z "$marked" ] || ok=1
+  if [ "$ok" -eq 0 ]; then
+    report 0 "$E" "$label"
+  else
+    report 1 "$E" "$label (rc=$rc1/$rc2 out1='$out1' out2='$out2' marked='$marked')"
+  fi
+}
+
+# The jq-only host from the section below, built early so all three columns run
+# off the same table. Where the host has no jq there is no such column to run.
+REASON_JQ_ONLY=""
+if command -v jq >/dev/null 2>&1; then
+  REASON_JQ_ONLY=$(mktemp -d /tmp/hooktest-reason-jq-XXXXXX)
+  for BIN in jq cat mv rm mkdir git; do ln -s "$(command -v "$BIN")" "$REASON_JQ_ONLY/$BIN"; done
+fi
+REASON_PY_ONLY=$(mktemp -d /tmp/hooktest-reason-py-XXXXXX)
+ln -s "$REAL_PY" "$REASON_PY_ONLY/python3"
+ln -s "$(command -v cat)" "$REASON_PY_ONLY/cat"
+
+# `0`, `true`, `[]` and `{}` are where jq and python3 render differently today;
+# `3`, `false` and `null` are where they agree, and agreement nothing asserts is
+# agreement by luck. The two string rows are the feature: an ordinary reason
+# still works, and one carrying a newline still matches after the reader squashes
+# it — the announcement and the compare-and-set have to squash the same way or a
+# hand-written multi-line reason is announced forever too.
+for BAD_REASON in 0 true false '[]' '{}' 3 null '"parser died"' '"a\nb"'; do
+  reason_consumed_case "a record_failed_reason of $BAD_REASON is announced once, then consumed (jq)" \
+    "$BAD_REASON"
+  reason_consumed_case "a record_failed_reason of $BAD_REASON is announced once, then consumed (python3 fallback)" \
+    "$BAD_REASON" "$REASON_PY_ONLY"
+  [ -z "$REASON_JQ_ONLY" ] || reason_consumed_case \
+    "a record_failed_reason of $BAD_REASON is announced once, then consumed (jq-only host)" \
+    "$BAD_REASON" "$REASON_JQ_ONLY"
+done
+rm -rf "$REASON_PY_ONLY"
+[ -z "$REASON_JQ_ONLY" ] || rm -rf "$REASON_JQ_ONLY"
+
 # ---------- both hooks : a host that has jq and no python3 ----------
 # The suite has always tested the two extremes — both readers present, and
 # neither — and never this one, which is a real shape: a slim container, a PATH
