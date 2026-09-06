@@ -12,14 +12,16 @@ allowed-tools: Agent, Read, Edit, Grep, Glob, Bash
 2. Capture the phase diff: `git diff $(git merge-base <base-branch> HEAD)...HEAD`. Save to `.claude/notes/review-<phase>-<date>.diff` if it exceeds ~500 lines, then reference the file.
 3. Run `git status --porcelain`. Any uncommitted or untracked leftovers are themselves a `[NEW][CHANGES]` finding ("work not committed") — pass them along to the reviewer.
 4. Read the relevant `Plans.md` Phase.
-5. Spawn `@agent-reviewer` with: the Plan section, the diff (or pointer), the merge-base, and any step-3 leftovers.
+5. Spawn `@agent-reviewer` with: the Plan section, the diff (or pointer), the merge-base, and any step-3 leftovers. If you name the subagent, the name must start with `reviewer` — `.claude/hooks/record-verdict.sh` records a verdict only for `reviewer` and `reviewer-*`, and any other name silently switches the loop budget below off.
 6. Render the reviewer's verdict (APPROVE / REQUEST CHANGES / BLOCK) and findings.
 
 ## On BLOCK or REQUEST CHANGES
 
 - Spawn `@agent-coder` with the findings (fix mode).
 - Re-run `/review` after the coder reports done.
-- Loop max 3 cycles per Phase, then escalate.
+- The budget is 3 cycles per Phase, and **you are not the one counting them**. `.claude/hooks/record-verdict.sh` writes each reviewer verdict and the attempt number to `.claude/notes/loop-state.json`, and `.claude/hooks/enforce-loop.sh` reads that file at the end of every main turn:
+  - budget left → the hook exits 2, which refuses to end the turn and puts the re-dispatch instruction on stderr. Ending the turn on a BLOCK is not something you can decide to do.
+  - budget spent (attempt 3) → the hook lets the turn end and prints that this is **not** success and a human has to take it from here. Escalate, do not start a fourth cycle.
 
 ## On APPROVE
 
