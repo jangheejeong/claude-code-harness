@@ -2103,6 +2103,62 @@ enforce_case 2 "python3 fallback: the tree moved -> exit 2" \
   "$MOVED_FP" "$(stop_json)" 'attempt 1/3' - "$NOPROG_NOJQ"
 rm -rf "$NOPROG_NOJQ"
 
+# ---------- enforce-loop.sh : a fingerprint is a JSON string or it is nothing ----------
+# These two keys are the only values in the state file whose *equality* decides
+# an exit code, so the readers cannot merely be close — they have to answer the
+# same on every shape a file can hold. They have now drifted apart twice, so the
+# cases below pin the whole table rather than the shapes that happened to break.
+#
+# Each case runs the hook twice, once as the host has it and once with jq
+# hidden, and requires the same exit code and the same bytes on both streams.
+# The two runs get their own project dir on purpose: a run that reacts marks the
+# verdict spent, and a spent verdict answers differently, so sharing one dir
+# would let the first reader dictate the second reader's answer.
+FP_NOJQ=$(mktemp -d /tmp/hooktest-nojq-fp-XXXXXX)
+ln -s "$REAL_PY" "$FP_NOJQ/python3"
+ln -s "$(command -v cat)" "$FP_NOJQ/cat"
+
+fingerprint_parity_case() {  # <expected-exit> <desc> <state> [want-stderr|-]
+  local expected="$1" desc="$2" state="$3" want_err="${4:--}"
+  local jq_rc=0 py_rc=0 ok=0 proj
+  local jq_out jq_err py_out py_err
+  jq_out=$(mktemp /tmp/hooktest-fp-XXXXXX); jq_err=$(mktemp /tmp/hooktest-fp-XXXXXX)
+  py_out=$(mktemp /tmp/hooktest-fp-XXXXXX); py_err=$(mktemp /tmp/hooktest-fp-XXXXXX)
+
+  proj=$(new_proj); printf '%s\n' "$state" > "$proj/$STATE_REL"
+  printf '%s' "$(stop_json)" \
+    | env CLAUDE_PROJECT_DIR="$proj" /bin/bash "$HOOKS_DIR/$E" >"$jq_out" 2>"$jq_err" || jq_rc=$?
+  rm -rf "$proj"
+
+  proj=$(new_proj); printf '%s\n' "$state" > "$proj/$STATE_REL"
+  printf '%s' "$(stop_json)" \
+    | env PATH="$FP_NOJQ" CLAUDE_PROJECT_DIR="$proj" /bin/bash "$HOOKS_DIR/$E" >"$py_out" 2>"$py_err" || py_rc=$?
+  rm -rf "$proj"
+
+  [ "$jq_rc" -eq "$py_rc" ] || ok=1
+  cmp -s "$jq_out" "$py_out" || ok=1
+  cmp -s "$jq_err" "$py_err" || ok=1
+  [ "$jq_rc" -eq "$expected" ] || ok=1
+  [ "$want_err" = "-" ] || grep -qF "$want_err" "$jq_err" || ok=1
+  if [ "$ok" -eq 0 ]; then
+    report 0 "$E" "$desc"
+  else
+    report 1 "$E" "$desc (jq rc=$jq_rc err='$(cat "$jq_err")' | python3 rc=$py_rc err='$(cat "$py_err")')"
+  fi
+  rm -f "$jq_out" "$jq_err" "$py_out" "$py_err"
+}
+
+# record_state only ever writes a string here or leaves the key out, so a number
+# is a hand-edited or corrupt file — not a tree anybody measured. jq renders it
+# as "0" and finds two equal fingerprints, which stops a loop on a measurement
+# that never happened; that is enforcement switching itself off, the exact
+# failure this feature exists to prevent. Both readers have to read it as absent
+# and let the loop run.
+fingerprint_parity_case 2 "both fingerprints are the number 0 -> exit 2 on both readers" \
+  '{"last_verdict":"BLOCK","attempt":1,"last_diff_sha":0,"prev_diff_sha":0}' 'attempt 1/3'
+
+rm -rf "$FP_NOJQ"
+
 # One verdict still buys one reaction. Stopping early is a reaction, so an
 # abandoned stalled loop has to go quiet after saying it once — the same rule
 # that keeps an abandoned BLOCK from blocking every future turn.
