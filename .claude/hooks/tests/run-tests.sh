@@ -2571,6 +2571,134 @@ for CORRUPT in 3 true '[]' '{}'; do
   fi
 done
 
+# ---------- record-verdict.sh : the base a re-review diffs against ----------
+# Round 1 of /review diffs the whole phase off the merge-base. Every later round
+# re-reads that same accumulation — measured on Phase 3: 76KB, then 114KB, then
+# 123KB, most of the third already reviewed twice. The base for round N+1 is the
+# commit round N judged, and this hook is the only thing that knows when a round
+# was judged.
+#
+# Not last_diff_sha: that is a `git hash-object` of the working tree, a value no
+# `git diff` can take as an argument. Two keys because they answer two different
+# questions — "did anything move" and "move from where".
+
+PROJ=$(new_git_proj)
+record_block "$PROJ"
+WANT_HEAD=$(git -C "$PROJ" rev-parse HEAD)
+GOT_HEAD=$(state_field "$PROJ/$STATE_REL" last_reviewed_head)
+if [ "$GOT_HEAD" = "$WANT_HEAD" ]; then
+  report 0 "$R" "a BLOCK records the commit that was reviewed"
+else
+  report 1 "$R" "a BLOCK records the commit that was reviewed (got '$GOT_HEAD' want '$WANT_HEAD')"
+fi
+
+# The coder commits its fix and the next BLOCK moves the base forward. A base
+# stuck at the first commit would hand round 3 everything round 2 already saw,
+# which is the whole cost this key exists to remove.
+printf 'fix\n' > "$PROJ/tracked.txt"
+git -C "$PROJ" commit -qam fix --no-gpg-sign >/dev/null 2>&1
+record_block "$PROJ"
+MOVED_HEAD=$(git -C "$PROJ" rev-parse HEAD)
+GOT_HEAD2=$(state_field "$PROJ/$STATE_REL" last_reviewed_head)
+if [ "$GOT_HEAD2" = "$MOVED_HEAD" ] && [ "$GOT_HEAD2" != "$WANT_HEAD" ]; then
+  report 0 "$R" "a later BLOCK moves the base to the commit it judged"
+else
+  report 1 "$R" "a later BLOCK moves the base to the commit it judged (got '$GOT_HEAD2' want '$MOVED_HEAD')"
+fi
+rm -rf "$PROJ"
+
+# APPROVE ends the phase, and the next phase's first review has to see all of
+# itself. A base left on disk would quietly make that review incremental against
+# a commit belonging to the phase before it.
+PROJ=$(new_git_proj)
+record_block "$PROJ"
+assistant_jsonl "$PROJ/approve.jsonl" '<verdict>APPROVE</verdict>'
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/approve.jsonl")" >/dev/null
+GOT_HEAD=$(state_field "$PROJ/$STATE_REL" last_reviewed_head)
+rm -rf "$PROJ"
+if [ -z "$GOT_HEAD" ]; then
+  report 0 "$R" "an APPROVE drops the review base, as it drops the fingerprints"
+else
+  report 1 "$R" "an APPROVE drops the review base, as it drops the fingerprints (got '$GOT_HEAD')"
+fi
+
+# UNKNOWN is a review that reached no verdict, so no round happened. Moving the
+# base here would hide the last judged round's diff from the next real reviewer
+# — the one case where a smaller diff is a worse review.
+PROJ=$(new_git_proj)
+record_block "$PROJ"
+BASE=$(state_field "$PROJ/$STATE_REL" last_reviewed_head)
+printf 'more\n' > "$PROJ/tracked.txt"
+git -C "$PROJ" commit -qam more --no-gpg-sign >/dev/null 2>&1
+assistant_jsonl "$PROJ/unknown.jsonl" 'I could not finish the review.'
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/unknown.jsonl")" >/dev/null
+GOT_HEAD=$(state_field "$PROJ/$STATE_REL" last_reviewed_head)
+rm -rf "$PROJ"
+if [ -n "$BASE" ] && [ "$GOT_HEAD" = "$BASE" ]; then
+  report 0 "$R" "an UNKNOWN leaves the review base where the last judged round put it"
+else
+  report 1 "$R" "an UNKNOWN leaves the review base where the last judged round put it (got '$GOT_HEAD' want '$BASE')"
+fi
+
+# No repo and no commits get the same answer: absent, not "". /review keys its
+# fallback off whether a base is there at all, and an empty string reaching
+# `git diff` as an argument diffs against the index instead — a silently
+# different review, which is worse than an honestly full one.
+for CASE in no-repo no-commits; do
+  PROJ=$(new_proj)
+  if [ "$CASE" = no-commits ]; then
+    git -C "$PROJ" init -q >/dev/null 2>&1
+    git -C "$PROJ" config user.email harness@example.invalid
+    git -C "$PROJ" config user.name harness-tests
+  fi
+  record_block "$PROJ"
+  SHAPE=$(python3 -c 'import json,sys
+s = json.load(open(sys.argv[1]))
+print("absent" if "last_reviewed_head" not in s else repr(s["last_reviewed_head"]))' \
+    "$PROJ/$STATE_REL" 2>/dev/null)
+  GOT_V=$(state_field "$PROJ/$STATE_REL" last_verdict)
+  rm -rf "$PROJ"
+  if [ "$SHAPE" = absent ] && [ "$GOT_V" = BLOCK ]; then
+    report 0 "$R" "$CASE -> no review base at all, the verdict is still recorded"
+  else
+    report 1 "$R" "$CASE -> no review base at all, the verdict is still recorded (base=$SHAPE verdict='$GOT_V')"
+  fi
+done
+
+# The writer preserves keys it does not know about. Adding one of its own must
+# not cost it that.
+PROJ=$(new_git_proj)
+printf '{"last_verdict":"BLOCK","attempt":1,"a_key_from_the_future":"keep me"}\n' > "$PROJ/$STATE_REL"
+record_block "$PROJ"
+KEPT=$(state_field "$PROJ/$STATE_REL" a_key_from_the_future)
+GOT_HEAD=$(state_field "$PROJ/$STATE_REL" last_reviewed_head)
+rm -rf "$PROJ"
+if [ "$KEPT" = "keep me" ] && [ -n "$GOT_HEAD" ]; then
+  report 0 "$R" "recording a review base keeps keys this hook does not know"
+else
+  report 1 "$R" "recording a review base keeps keys this hook does not know (kept='$KEPT' base='$GOT_HEAD')"
+fi
+
+# ---------- enforce-loop.sh : the review base is none of its business ----------
+# D7 as a test, and the guard on this whole change: the reason a token
+# optimisation was allowed anywhere near the hook that holds the loop budget is
+# that it only ever writes. enforce-loop.sh does not read last_reviewed_head, so
+# no value of it can move a budget decision.
+#
+# The two states are the ones the no-progress cases above pin — stalled (exit 0)
+# and moved (exit 2). Every shape a JSON file can hold gets bolted onto both and
+# has to leave the answer alone. The string cases matter most: those are the ones
+# a reader added later would actually parse, and the loop would then have a
+# switch nobody knew they were flipping.
+for HEAD_VALUE in '"deadbeef"' '""' 'null' '3' 'true' '[]' '{}'; do
+  enforce_case 0 "a last_reviewed_head of $HEAD_VALUE leaves the stalled verdict alone" \
+    "{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"last_diff_sha\":\"deadbeef\",\"prev_diff_sha\":\"deadbeef\",\"last_reviewed_head\":$HEAD_VALUE}" \
+    "$(stop_json)" '무진전' -
+  enforce_case 2 "a last_reviewed_head of $HEAD_VALUE leaves the moved verdict alone" \
+    "{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"last_diff_sha\":\"deadbeef\",\"prev_diff_sha\":\"cafebabe\",\"last_reviewed_head\":$HEAD_VALUE}" \
+    "$(stop_json)" 'attempt 1/3' -
+done
+
 # ---------- the two hooks : a stalled loop stops before the budget does ----------
 # The cases above seed fingerprints by hand. This one lets the hooks produce
 # their own, in a real git repo, in the order a session runs them: reviewer

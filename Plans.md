@@ -226,6 +226,53 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
 
 ---
 
+### Phase 5 — 재리뷰가 이미 본 것을 다시 읽지 않는다 (착수 2026-09-14)
+
+**측정이 먼저다.** `.claude/notes/*.diff` 합계 617KB(≈176k 토큰), verdict 로그 143KB(≈41k 토큰), 서브에이전트 58회. Phase 3 한 개가 `76KB → 114KB → 123KB`(r1/r2/r3) = 313KB ≈ 90k 토큰인데, r3 diff 123KB 중 대부분은 r1·r2 에서 이미 읽은 내용이다.
+
+원인은 `review/SKILL.md:12` 의 `git diff $(git merge-base <base> HEAD)...HEAD` 가 **브랜치 누적 diff** 라는 점이다. fix 커밋이 쌓일수록 커지고, 재리뷰는 "이번 수정분"이 아니라 "Phase 전체"를 매번 처음부터 다시 읽는다. 비용이 라운드 수에 선형이 아니라 **누적 × 라운드** 로 붙는다.
+
+> **Non-goals:36 과의 관계** — "토큰·비용 예산 실링" 은 **여전히 non-goal** 이다. 여기서 하는 건 상한을 거는 게 아니라, 같은 리뷰를 같은 품질로 하면서 **중복 입력을 제거**하는 것이다. 리뷰 범위는 줄지 않는다 (D8).
+
+- **Scope**: 리뷰 시점의 HEAD 를 상태 파일에 기록 + `/review` 가 2회차부터 증분 diff 를 뜨도록 분기
+- **설계 결정**
+  - **D6. diff base 는 커밋 sha 이며 무진전 지문과 별개다.** `last_diff_sha` 는 `record-verdict.sh:258` 의 `git hash-object` 기반 **워킹트리 내용 해시**라 `git diff` 의 base 로 쓸 수 없다. 새 키 `last_reviewed_head` 를 추가한다.
+  - **D7. 새 키는 `record-verdict.sh` 만 쓰고 `enforce-loop.sh` 는 읽지 않는다.** 읽는 쪽을 안 건드리면 `enforce-loop.sh:68` 의 jq/python3 이중 엔진 렌더링 규칙(`STATE_STRING_JQ`)과 그 아래 예산 판정 경로가 그대로 남는다. 블라스트 반경을 writer 한쪽으로 가둔다.
+  - **D8. 증분은 리뷰어가 보는 1차 표면이지 리뷰 범위가 아니다.** Spec correctness 렌즈는 계속 Phase 전체를 판정한다. 리뷰어에게 증분 diff(인라인) + **직전 전체 diff 파일 경로** + 직전 라운드 findings 를 함께 준다. 리뷰어는 `Read/Grep/Bash` 를 갖고 있으므로 필요하면 실제 파일을 본다.
+  - **D9. base 가 닿지 않으면 전체로 폴백한다.** coder 가 amend/rebase 하면 기록된 sha 가 unreachable 이 된다. 조용히 빈 diff 로 리뷰를 통과시키는 게 최악이므로, 존재 확인에 실패하면 merge-base 전체 diff 로 되돌아가고 그 사실을 리뷰어에게 명시한다.
+  - **D10. 증분은 `<sha>..HEAD` 가 아니라 `git diff <sha>`.** 후자는 워킹트리까지 포함한다. coder 가 커밋을 안 한 경우 전자는 빈 diff 가 되는데, 그건 "수정 없음"이 아니라 "커밋 안 함"이고 기존 3단계가 이미 `[NEW][CHANGES]` 로 잡는 사안이다.
+- **Touched files (expected)**:
+  - `.claude/hooks/record-verdict.sh` — `record_state()` 에 `last_reviewed_head` 쓰기 (읽기 추가 없음)
+  - `.claude/skills/review/SKILL.md` — 2단계 diff 캡처 분기
+  - `.claude/agents/reviewer.md:25` — Process 3 을 증분 분기에 맞춤
+  - `.claude/hooks/tests/run-tests.sh` — 케이스 추가
+  - `HARNESS.md`, `README.md`, `README.en.md` — 동기화
+- **Out of scope**: `enforce-loop.sh` 수정, 무진전 감지 로직 변경, `/orchestrator` 자동화, verdict 로그 크기(별건)
+- **Acceptance** (TDD-ready):
+
+  기록 — `record-verdict.sh`
+  - [ ] BLOCK / CHANGES 기록 시 `last_reviewed_head` 에 그 시점 `git rev-parse HEAD` 가 **JSON 문자열로** 들어간다
+  - [ ] APPROVE → 키를 **삭제**한다. `forget_progress()` 와 같은 이유 — Phase 가 끝났으므로 다음 Phase 는 전체 리뷰로 시작해야 한다
+  - [ ] UNKNOWN → 키를 **그대로 둔다**. 판정이 없었으면 사이클도 없었고, 다음 판정은 마지막으로 판정된 리뷰 기준으로 비교돼야 한다
+  - [ ] git 저장소가 아니거나 HEAD 가 없는(커밋 0개) 경우 → **키를 쓰지 않는다.** 빈 문자열이나 에러 문자열을 넣지 않는다 (`last_diff_sha` 의 string-or-nothing 규칙과 동일)
+  - [ ] 기존 키(`last_verdict`, `attempt`, `enforced`, `last_diff_sha`, `prev_diff_sha`, 훅이 모르는 키)가 전부 보존된다
+  - [ ] **`enforce-loop.sh` 의 판정이 이 키와 무관하다** — `last_reviewed_head` 에 숫자·리스트·불린·누락 어느 것을 넣어도 예산 강제 exit code 가 불변 (D7 을 테스트로 고정)
+
+  소비 — `review/SKILL.md`
+  - [ ] 2단계가 두 분기로 갈라진다: `last_reviewed_head` 없음 → merge-base 전체 diff / 있음 → `git diff <last_reviewed_head>`
+  - [ ] base sha 가 unreachable (`git cat-file -e <sha>^{commit}` 실패) → 전체 diff 폴백 + 리뷰어에게 폴백 사실 명시 (D9)
+  - [ ] 증분 리뷰 시 리뷰어에게 넘기는 3종이 명시된다: 증분 diff / 직전 전체 diff 파일 경로 / 직전 라운드 findings (D8)
+  - [ ] Spec correctness 렌즈는 Phase 전체 기준임이 스킬과 `reviewer.md` 양쪽에 적힌다 — **증분만 보고 인수 기준을 판정하지 않는다**
+  - [ ] 증분 diff 가 비어 있으면 "리뷰 스킵"이 아니라 무진전이다. `enforce-loop.sh` 의 `무진전 중단` 과 같은 결론(에스컬레이션)으로 간다
+
+  문서
+  - [ ] `HARNESS.md` 의 loop-state.json 키 목록에 `last_reviewed_head` 와 "writer 전용" 이 등재된다
+  - [ ] `README.md` / `README.en.md` 내용 동등 (`docs/harness/DOC_SYNC_POLICY.md` 준수)
+- **Risk**: 증분 리뷰가 회귀를 놓친다 — 라운드 2 의 fix 가 라운드 1 에서 통과시킨 코드를 깨뜨리는 경우. 완화는 D8(전체 diff 파일 포인터 + 전체 기준 spec 렌즈)이고, 이건 **완화지 제거가 아니다.** 실측으로 확인할 것: Phase 5 자신의 리뷰가 2라운드 이상 가면 그 라운드가 곧 이 리스크의 첫 시험대다.
+- **기대 효과**: Phase 3 실측 기준 90k → ~30k 토큰. 라운드가 늘수록 격차가 커진다.
+
+---
+
 ## Open questions (해결됨 — 2026-09-05)
 
 - [x] **Q1 — verdict 어휘.** `<verdict>` 태그 안에는 `REQUEST CHANGES` (reviewer.md 의 기존 `### 결론` 표기와 동일), `run_phase.py` 의 파싱 결과 문자열은 `CHANGES` 로 정규화. Phase 1 인수 기준이 이미 이 형태다.
