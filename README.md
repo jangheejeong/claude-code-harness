@@ -531,10 +531,11 @@ cat .claude/notes/agent-activity.log
 ```json
 // .claude/notes/loop-state.json  (gitignore 됨)
 {"last_verdict": "BLOCK", "attempt": 2, "enforced": false,
- "last_diff_sha": "8f3c…", "prev_diff_sha": "1a90…"}
+ "last_diff_sha": "8f3c…", "prev_diff_sha": "1a90…",
+ "last_reviewed_head": "4837194…"}
 ```
 
-`APPROVE` 면 `attempt` 를 0 으로 리셋, `BLOCK` / `REQUEST CHANGES` 면 +1, 판정을 못 읽었으면 (`UNKNOWN`) 그대로 둔다. `last_diff_sha` 는 이번 사이클의 작업 트리 지문이고 `prev_diff_sha` 는 직전 사이클의 것이다 — 아래 `enforce-loop.sh` 가 둘을 비교해 헛도는 루프를 끊는다. 판정을 **아예 기록하지 못하면** `record_failed` / `record_failed_reason` 을 대신 남겨서, 그 사이클이 조용히 사라지지 않게 한다. 카운터를 컨텍스트가 아니라 디스크에 두는 이유는 컨텍스트가 한 번 압축되면 그 안의 숫자는 사라지기 때문이다. 어떤 입력에도 **항상 exit 0** — `SubagentStop` 의 exit 2 는 "서브에이전트를 멈추지 못하게 한다" 는 뜻이라 read-only 인 리뷰어를 계속 돌릴 뿐이다.
+`APPROVE` 면 `attempt` 를 0 으로 리셋, `BLOCK` / `REQUEST CHANGES` 면 +1, 판정을 못 읽었으면 (`UNKNOWN`) 그대로 둔다. `last_diff_sha` 는 이번 사이클의 작업 트리 지문이고 `prev_diff_sha` 는 직전 사이클의 것이다 — 아래 `enforce-loop.sh` 가 둘을 비교해 헛도는 루프를 끊는다. `last_reviewed_head` 는 **리뷰한 커밋**이고, 다음 라운드의 `/review` 가 여기서부터 diff 를 떠서 이미 읽은 코드를 다시 읽지 않는다 (지문은 내용 해시라 `git diff` 의 인자가 못 된다). 이 키만은 `enforce-loop.sh` 가 읽지 않는다 — 루프 예산은 자기가 소유한 값으로만 판정한다. 판정을 **아예 기록하지 못하면** `record_failed` / `record_failed_reason` 을 대신 남겨서, 그 사이클이 조용히 사라지지 않게 한다. 카운터를 컨텍스트가 아니라 디스크에 두는 이유는 컨텍스트가 한 번 압축되면 그 안의 숫자는 사라지기 때문이다. 어떤 입력에도 **항상 exit 0** — `SubagentStop` 의 exit 2 는 "서브에이전트를 멈추지 못하게 한다" 는 뜻이라 read-only 인 리뷰어를 계속 돌릴 뿐이다.
 
 > ⚠️ **리뷰어 서브에이전트 이름은 `reviewer` 로 시작해야 한다.** 이 hook 은 `agent_type` 이 `reviewer` 또는 `reviewer-*` 일 때만 기록한다 (`reviewer-phase2` 같은 팀메이트 이름까지 걸리도록). `phase3-reviewer` 나 `review-gate` 로 띄우면 기록이 없고, 기록이 없으면 아래 루프 강제가 **조용히 꺼진다.**
 

@@ -535,10 +535,11 @@ When the reviewer finishes, this writes down its verdict. It parses the last ans
 ```json
 // .claude/notes/loop-state.json  (gitignored)
 {"last_verdict": "BLOCK", "attempt": 2, "enforced": false,
- "last_diff_sha": "8f3c…", "prev_diff_sha": "1a90…"}
+ "last_diff_sha": "8f3c…", "prev_diff_sha": "1a90…",
+ "last_reviewed_head": "4837194…"}
 ```
 
-`APPROVE` resets `attempt` to 0, `BLOCK` / `REQUEST CHANGES` increments it, and a verdict that could not be read (`UNKNOWN`) leaves it alone. `last_diff_sha` is this cycle's working-tree fingerprint and `prev_diff_sha` is the previous cycle's — `enforce-loop.sh` below compares the two to cut off a loop that is spinning in place. When a verdict cannot be recorded **at all**, `record_failed` / `record_failed_reason` go in instead, so that cycle does not disappear in silence. The counter lives on disk rather than in context because one compaction is all it takes for a number in context to be gone. **Always exits 0**, whatever the input — `SubagentStop`'s exit 2 means "prevent the subagent from stopping", which would only keep the read-only reviewer running.
+`APPROVE` resets `attempt` to 0, `BLOCK` / `REQUEST CHANGES` increments it, and a verdict that could not be read (`UNKNOWN`) leaves it alone. `last_diff_sha` is this cycle's working-tree fingerprint and `prev_diff_sha` is the previous cycle's — `enforce-loop.sh` below compares the two to cut off a loop that is spinning in place. `last_reviewed_head` is the **commit that was reviewed**, and the next round's `/review` diffs from there so it does not re-read code it has already read (a fingerprint is a content hash, which `git diff` cannot take as an argument). That one key is the exception `enforce-loop.sh` never reads — the retry budget judges only on values it owns. When a verdict cannot be recorded **at all**, `record_failed` / `record_failed_reason` go in instead, so that cycle does not disappear in silence. The counter lives on disk rather than in context because one compaction is all it takes for a number in context to be gone. **Always exits 0**, whatever the input — `SubagentStop`'s exit 2 means "prevent the subagent from stopping", which would only keep the read-only reviewer running.
 
 > ⚠️ **A reviewer subagent's name must start with `reviewer`.** This hook records only when `agent_type` is `reviewer` or `reviewer-*` (so teammate names like `reviewer-phase2` still count). Spawn it as `phase3-reviewer` or `review-gate` and nothing is recorded — and with nothing recorded, the enforcement below is **silently off**.
 

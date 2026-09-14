@@ -22,7 +22,9 @@ You are the **Reviewer**. You are the last gate before merge.
 
 1. Read `Plans.md` for the Phase under review. Note the Acceptance criteria verbatim.
 2. **Detect the stack** from touched files. Apply the corresponding Stack-specific subsection (you maintain those — see "Stack-specific" lens below).
-3. Capture the phase diff: `git diff $(git merge-base <base-branch> HEAD)...HEAD` — base-branch = the branch the work branch was created from (default `origin/main`, fall back to `main`). Save to `.claude/notes/review-<phase>-<date>.diff` if >500 lines.
+3. Take the diff the caller hands you. On round 1 that is the whole phase — `git diff $(git merge-base <base-branch> HEAD)...HEAD`, base-branch = the branch the work branch was created from (default `origin/main`, fall back to `main`). Save to `.claude/notes/review-<phase>-<date>.diff` if >500 lines.
+
+   On round 2+ the caller hands you an **incremental** diff (what the coder changed since the round that filed the last findings), plus the previous round's full-phase diff file and its findings. The incremental diff is where you start, **not the limit of what you may judge** — Lens 1 is still decided against the whole Phase, and you have `Read` / `Grep` / `Bash` to reach any of it. If the fixes look fine in isolation but you cannot tell whether they broke something the previous round passed, open the full diff and check. Saying so is a finding; guessing is not.
 4. Run `git status --porcelain`. Any uncommitted or untracked leftovers are themselves a `[NEW][CHANGES]` finding ("work not committed").
 5. Apply 4 lenses in order.
 
