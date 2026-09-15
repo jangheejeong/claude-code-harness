@@ -587,6 +587,43 @@ else
   report 1 "review/SKILL.md" "a worker that repeats a finding gets closed instead of resumed again (line='$ESCAPE_HATCH')"
 fi
 
+# --- the skills have to find the parser too (D20) ---
+# Phase 8 gave the hook HARNESS_RUN_PHASE so it survives being installed at
+# ~/.claude/hooks/. The skills were left naming the parser relative to the cwd,
+# so in a folder without the harness — where there is no scripts/harness/ at all
+# — /review instructs the model to run a command that cannot work. Same variable
+# and not a second one, so a global install sets one thing in one place.
+#
+# Static checks, because the behaviour here is a model reading prose: the text is
+# what there is to pin. A bare `scripts/harness/run_phase.py` with no
+# HARNESS_RUN_PHASE in front of it is the shape that regressed.
+ORCH_SKILL="$REPO_ROOT/.claude/skills/orchestrator/SKILL.md"
+
+bare_parser_refs() {  # <file> -> the lines naming the parser without the variable
+  grep -n 'scripts/harness/run_phase\.py' "$1" | grep -v 'HARNESS_RUN_PHASE'
+}
+
+for SKILL_FILE in "$REVIEW_SKILL" "$ORCH_SKILL"; do
+  BARE=$(bare_parser_refs "$SKILL_FILE")
+  SKILL_LABEL="$(basename "$(dirname "$SKILL_FILE")")/SKILL.md"
+  if [ -z "$BARE" ]; then
+    report 0 "$SKILL_LABEL" "every parser reference goes through HARNESS_RUN_PHASE"
+  else
+    report 1 "$SKILL_LABEL" "every parser reference goes through HARNESS_RUN_PHASE (bare: $BARE)"
+  fi
+done
+
+# ...and the fallback has to survive too. A substitution that dropped the default
+# would break the repo-local case, which is the one every run of this suite is in.
+for SKILL_FILE in "$REVIEW_SKILL" "$ORCH_SKILL"; do
+  SKILL_LABEL="$(basename "$(dirname "$SKILL_FILE")")/SKILL.md"
+  if grep -qF '${HARNESS_RUN_PHASE:-scripts/harness/run_phase.py}' "$SKILL_FILE"; then
+    report 0 "$SKILL_LABEL" "the override keeps the repo-relative path as its default"
+  else
+    report 1 "$SKILL_LABEL" "the override keeps the repo-relative path as its default"
+  fi
+done
+
 verdict_case 0 "APPROVE" "APPROVE -> stdout APPROVE, exit 0" \
   '## Review: Phase 1
 
