@@ -2016,6 +2016,54 @@ invocation_case "invoked by absolute path -> records BLOCK, attempt 1" \
 invocation_case "invoked by relative path from the repo root -> records BLOCK, attempt 1" \
   "$REPO_ROOT" ".claude/hooks/$R"
 
+# ---------- record-verdict.sh : HARNESS_RUN_PHASE overrides that lookup (D17) ----------
+# Deriving the parser from $0 is right while the hook and the parser ship in the
+# same repo, and wrong the moment the hook is installed at ~/.claude/hooks/,
+# where the same expression names ~/scripts/harness/run_phase.py — a file that
+# does not exist. This is the only one of the six hooks that breaks on a global
+# install; the rest use $CLAUDE_PROJECT_DIR or no path at all.
+#
+# The orphan hook is what makes these cases decisive: it is a copy with no parser
+# beside it, so the default lookup cannot succeed and a recorded verdict can only
+# have come from the variable.
+
+dash_if_empty() { [ -n "$1" ] && printf '%s' "$1" || printf -- '-'; }
+
+# One reviewer stop, reported as the four things that distinguish "recorded" from
+# "gave up": the exit code, the verdict, the counter, and the failure mark. The
+# `env` arguments are what each case is actually varying.
+parser_run() {  # <hook-path> [env assignments...] -> "rc verdict attempt marked"
+  local hook="$1"; shift
+  local proj rc=0 verdict attempt marked
+  proj=$(new_proj)
+  assistant_jsonl "$proj/transcript.jsonl" '<verdict>BLOCK</verdict>'
+  printf '%s' "$(subagent_stop_json reviewer "$proj/transcript.jsonl")" \
+    | env CLAUDE_PROJECT_DIR="$proj" "$@" bash "$hook" >/dev/null 2>&1 || rc=$?
+  verdict=$(dash_if_empty "$(state_field "$proj/$STATE_REL" last_verdict)")
+  attempt=$(dash_if_empty "$(state_field "$proj/$STATE_REL" attempt)")
+  marked=$(dash_if_empty "$(state_field "$proj/$STATE_REL" record_failed)")
+  rm -rf "$proj"
+  printf '%s %s %s %s' "$rc" "$verdict" "$attempt" "$marked"
+}
+
+parser_case() {  # <desc> <expected "rc verdict attempt marked"> <hook> [env...]
+  local desc="$1" want="$2"; shift 2
+  local got
+  got=$(parser_run "$@")
+  if [ "$got" = "$want" ]; then
+    report 0 "$R" "$desc"
+  else
+    report 1 "$R" "$desc (got '$got', want '$want')"
+  fi
+}
+
+# The global install, in one case: the hook sits where its parser is not, and the
+# absolute path in the variable is the only thing that can find it.
+ORPHAN=$(orphan_hook)
+parser_case "HARNESS_RUN_PHASE finds the parser a \$0 lookup cannot reach" \
+  "0 BLOCK 1 -" "$ORPHAN/.claude/hooks/$R" "HARNESS_RUN_PHASE=$REPO_ROOT/scripts/harness/run_phase.py"
+rm -rf "$ORPHAN"
+
 # ---------- both hooks : CLAUDE_PROJECT_DIR is not guaranteed ----------
 # Hooks are invoked with the variable set, but a wrapper script, a manual run or
 # a test harness can drop it. Neither hook may crash, and neither may reach for
