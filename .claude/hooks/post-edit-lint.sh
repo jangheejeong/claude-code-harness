@@ -86,12 +86,20 @@ project_formatter() {  # <dir> -> the formatter declared at or above <dir>, "" i
 DIR=$(cd "$(dirname "$FILE")" 2>/dev/null && pwd) || exit 0
 TOOL=$(project_formatter "$DIR")
 
-# Nothing declared → nothing runs.
+# Nothing declared → nothing runs. A repo that never chose a style does not get
+# one chosen for it; imposing ruff's defaults there is the same defect as the
+# 88-column fold, only quieter.
 [ -z "$TOOL" ] && exit 0
 
 # Snapshot file content before formatting
 HASH_BEFORE=$(hash_file "$FILE")
 
+# One arm per declared tool and deliberately no fallback arm: if the declared
+# formatter is not installed the command fails, nothing is written, and the hook
+# says nothing. Do not add an `else run the other one` here — that is exactly how
+# a repo asking for black at 120 columns got folded by ruff at 88, which is the
+# bug this file was rewritten to remove. A missing tool is a machine set up
+# wrong; formatting nothing reports that honestly.
 case "$TOOL" in
   ruff)  ruff format "$FILE" >/dev/null 2>&1 ;;
   black) black --quiet "$FILE" >/dev/null 2>&1 ;;

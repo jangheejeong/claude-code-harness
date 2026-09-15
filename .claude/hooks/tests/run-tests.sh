@@ -309,6 +309,35 @@ line-length = 120
 nested_case "the lookup climbs out of a subdirectory to the config above it" black no "$BLACK_DECL"
 nested_case "a .git between the file and that config stops the climb"        none yes "$BLACK_DECL"
 
+# --- declared but not installed ---
+# The obvious repair here is "well, run the other one" — and that is the
+# original bug written small: it is how a repo asking for black at 120 columns
+# ended up folded by ruff at 88. A missing tool is a machine that is set up
+# wrong, and formatting nothing says so honestly. Whoever reaches for a fallback
+# on this branch should read these two cases first.
+missing_tool_case() {  # <desc> <config-name> <config-body> <tool-to-remove>
+  local desc="$1" cfg="$2" body="$3" gone="$4" proj stubs got
+  proj=$(new_lint_proj); stubs=$(lint_stubs)
+  printf '%s' "$body" > "$proj/$cfg"
+  rm -f "$stubs/$gone"   # the declared tool is not on PATH; the other one is
+  got=$(formatter_for "$proj/sample.py" "$stubs")
+  rm -rf "$proj" "$stubs"
+  if [ -z "$got" ]; then
+    report 0 "$L" "$desc"
+  else
+    report 1 "$L" "$desc (ran '$got', expected nothing)"
+  fi
+}
+
+missing_tool_case "black declared and missing -> nothing runs, not ruff" \
+  pyproject.toml '[tool.black]
+line-length = 120
+' black
+missing_tool_case "ruff declared and missing -> nothing runs, not black" \
+  pyproject.toml '[tool.ruff]
+line-length = 100
+' ruff
+
 # The point of the whole change: black's line-length has to reach the file. ruff
 # format folds this 100-column call at its default 88; black at 120 leaves it on
 # one line. If black were not installed the hook would run nothing and the line
