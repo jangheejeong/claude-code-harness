@@ -41,7 +41,15 @@ self_dir() {
     *) printf '%s' "." ;;
   esac
 }
-RUN_PHASE="$(self_dir)/../../scripts/harness/run_phase.py"
+# The override exists for one thing: a copy of this hook installed at
+# ~/.claude/hooks/, where the expression below names ~/scripts/harness/run_phase.py
+# and finds nothing. This is the only one of the hooks that breaks on a global
+# install, and ~/.claude/settings.json sets the variable to an absolute path
+# rather than the repo growing a ~/scripts/ or a symlink to satisfy it. Inside
+# the repo the variable is unset and nothing changes, so it will read as unused —
+# it is not. `:-` and not `-`: an empty value is a variable somebody meant to set
+# and did not, and `python3 ""` is not a better answer than the default path.
+RUN_PHASE="${HARNESS_RUN_PHASE:-$(self_dir)/../../scripts/harness/run_phase.py}"
 STATE_FILE="${CLAUDE_PROJECT_DIR:-.}/.claude/notes/loop-state.json"
 
 warn() { echo "[record-verdict] WARNING: $*" >&2; }

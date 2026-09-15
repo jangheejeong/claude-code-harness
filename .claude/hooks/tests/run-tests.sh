@@ -150,6 +150,319 @@ printf 'x  =  1\n' > "$TMP_PY"
 run_case "$L" 0 "python file: format + exit 0"      "$(path_json "$TMP_PY")"
 rm -f "$TMP_PY"
 
+# ---------- post-edit-lint.sh : the project picks the formatter (D14-D16) ----------
+# The hook used to pick by which tool was on PATH, so ruff won wherever it was
+# installed — and ruff does not read [tool.black]. Of the 23 python projects
+# under ~/Projects/heum, 8 declare black with line-length 119 or 120 while ruff
+# format defaults to 88, so an edit in any of them refolded lines nobody asked
+# it to touch. A diff like that cannot be reviewed, which is the whole cost.
+#
+# Both real formatters are installed on a dev box, so "which one ran" cannot be
+# read back off the file. Stubs that do nothing but log their own name make the
+# answer unambiguous, and a PATH without the pyenv shims stops a real tool from
+# answering in place of a stub that was deliberately left out.
+LINT_PATH="/usr/bin:/bin"   # jq and python3 live here; ruff and black do not
+
+new_lint_proj() {  # -> temp dir standing in for a repo root, holding sample.py
+  local d
+  d=$(mktemp -d /tmp/hooktest-lint-XXXXXX)
+  mkdir -p "$d/.git"   # boundary marker; the hook tests existence, not a real repo
+  printf 'x = 1\n' > "$d/sample.py"
+  printf '%s' "$d"
+}
+
+lint_stubs() {  # -> temp dir of fake ruff/black that append their name to ran.log
+  local d t
+  d=$(mktemp -d /tmp/hooktest-stub-XXXXXX)
+  for t in ruff black; do
+    printf '#!/bin/bash\nprintf "%%s\\n" %s >> "$(dirname "$0")/ran.log"\nexit 0\n' "$t" > "$d/$t"
+    chmod +x "$d/$t"
+  done
+  printf '%s' "$d"
+}
+
+formatter_for() {  # <py-file> <stub-dir> -> name of the formatter that ran ("" = none)
+  rm -f "$2/ran.log"
+  printf '%s' "$(path_json "$1")" | PATH="$2:$LINT_PATH" bash "$HOOKS_DIR/$L" >/dev/null 2>&1
+  cat "$2/ran.log" 2>/dev/null
+}
+
+choice_case() {  # <desc> <ruff|black|none> <config-name> <config-body>
+  local desc="$1" want="$2" cfg="$3" body="$4" proj stubs got
+  proj=$(new_lint_proj); stubs=$(lint_stubs)
+  [ -n "$cfg" ] && printf '%s' "$body" > "$proj/$cfg"
+  got=$(formatter_for "$proj/sample.py" "$stubs")
+  rm -rf "$proj" "$stubs"
+  [ -z "$got" ] && got=none
+  if [ "$got" = "$want" ]; then
+    report 0 "$L" "$desc"
+  else
+    report 1 "$L" "$desc (ran '$got', expected '$want')"
+  fi
+}
+
+choice_case "[tool.black] alone -> black" black pyproject.toml \
+  '[tool.black]
+line-length = 120
+'
+choice_case "[tool.ruff] alone -> ruff" ruff pyproject.toml \
+  '[tool.ruff]
+line-length = 100
+'
+# Most repos configure ruff through a subtable and never write the bare header,
+# so a check that only matched [tool.ruff] exactly would miss them.
+choice_case "[tool.ruff.format] counts as declaring ruff" ruff pyproject.toml \
+  '[tool.ruff.format]
+quote-style = "single"
+'
+# ...and a table that merely starts with the same letters is a different tool.
+choice_case "[tool.ruffian] is not ruff" none pyproject.toml \
+  '[tool.ruffian]
+enabled = true
+'
+# A commented-out header is a project that decided against it, or has not
+# decided yet. Either way it has not declared a formatter.
+choice_case "a commented-out [tool.black] declares nothing" none pyproject.toml \
+  '# [tool.black]
+# line-length = 120
+'
+# A repo that keeps ruff's settings in their own file has no [tool.ruff] table
+# anywhere, so the file's existence is the declaration. Empty bodies on purpose:
+# the name is what carries the meaning.
+choice_case "ruff.toml alone -> ruff"  ruff ruff.toml  ''
+choice_case ".ruff.toml alone -> ruff" ruff .ruff.toml ''
+
+# D16 — a repo that declares both gets one of them, and it has to be the same
+# one every time. Alternating would leave the two tools undoing each other's
+# output, so every edit would show a diff and none of them would mean anything.
+# No project under ~/Projects/heum is in this state today; the rule exists so
+# the first one that is does not get a coin flip.
+choice_case "both declared -> ruff" ruff pyproject.toml \
+  '[tool.ruff]
+line-length = 100
+
+[tool.black]
+line-length = 120
+'
+# ...and the order they appear in the file must not decide it either.
+choice_case "both declared, black written first -> still ruff" ruff pyproject.toml \
+  '[tool.black]
+line-length = 120
+
+[tool.ruff]
+line-length = 100
+'
+
+# [tool.ruff.lint] configures the linter and says nothing about who formats.
+# Linting with ruff and formatting with black is one of the commonest Python
+# setups there is, and reading that section as a format declaration folds the
+# repo at 88 — the exact defect this section exists to remove, surviving in the
+# shape it is most likely to meet. [tool.ruff.isort] and the other lint-side
+# sub-tables are the same story.
+choice_case "[tool.ruff.lint] + [tool.black] -> black" black pyproject.toml \
+  '[tool.ruff.lint]
+select = ["E", "F"]
+
+[tool.black]
+line-length = 120
+'
+choice_case "[tool.ruff.lint] alone declares no formatter" none pyproject.toml \
+  '[tool.ruff.lint]
+select = ["E"]
+'
+choice_case "[tool.ruff.isort] alone declares no formatter" none pyproject.toml \
+  '[tool.ruff.isort]
+known-first-party = ["app"]
+'
+# ...but a bare [tool.ruff] alongside a lint table still qualifies, and D16 then
+# picks ruff over black on the strength of that header, not of the lint one.
+choice_case "[tool.ruff] + [tool.ruff.lint] + [tool.black] -> ruff" ruff pyproject.toml \
+  '[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E"]
+
+[tool.black]
+line-length = 120
+'
+choice_case "[tool.ruff.format] + [tool.black] -> ruff" ruff pyproject.toml \
+  '[tool.ruff.format]
+quote-style = "single"
+
+[tool.black]
+line-length = 120
+'
+
+# D15 — no declaration, no formatting. This is the behaviour change: 12 of the
+# 23 heum projects declare nothing and were being formatted at ruff's defaults,
+# which is the same imposition as the 88-column fold, just harder to notice.
+# A pyproject with no formatter table is the commonest shape of "undeclared".
+choice_case "no config at all -> nothing runs"            none ''               ''
+choice_case "a pyproject with no formatter table -> none" none pyproject.toml \
+  '[project]
+name = "undeclared"
+'
+
+# ...and the proof it is the file, not the stubs: with the real ruff on PATH an
+# undeclared project comes back byte-for-byte. `x  =  1` is what ruff rewrites
+# first, so this line failing means a default slipped back in.
+BARE_PROJ=$(new_lint_proj)
+printf 'x  =  1\n' > "$BARE_PROJ/loose.py"
+printf '%s' "$(path_json "$BARE_PROJ/loose.py")" | bash "$HOOKS_DIR/$L" >/dev/null 2>&1
+BARE_AFTER=$(cat "$BARE_PROJ/loose.py")
+rm -rf "$BARE_PROJ"
+if [ "$BARE_AFTER" = "x  =  1" ]; then
+  report 0 "$L" "an undeclared project is left byte-for-byte alone, real formatters installed"
+else
+  report 1 "$L" "an undeclared project is left byte-for-byte alone, real formatters installed (got '$BARE_AFTER')"
+fi
+
+# --- the walk, and where it has to stop ---
+# Config sits at the repo root and edits happen deep in the tree, so the lookup
+# has to climb. ~/Projects/heum is a plain directory holding independent repos
+# side by side, so it must not climb past the repo it started in — one project's
+# 120 columns are not the next one's.
+nested_case() {  # <desc> <ruff|black|none> <child-is-a-repo: yes|no> <parent config body>
+  local desc="$1" want="$2" child_repo="$3" body="$4" outer stubs got
+  outer=$(mktemp -d /tmp/hooktest-lint-XXXXXX)
+  printf '%s' "$body" > "$outer/pyproject.toml"
+  mkdir -p "$outer/child/src"
+  [ "$child_repo" = yes ] && mkdir -p "$outer/child/.git"
+  printf 'x = 1\n' > "$outer/child/src/sample.py"
+  stubs=$(lint_stubs)
+  got=$(formatter_for "$outer/child/src/sample.py" "$stubs")
+  rm -rf "$outer" "$stubs"
+  [ -z "$got" ] && got=none
+  if [ "$got" = "$want" ]; then
+    report 0 "$L" "$desc"
+  else
+    report 1 "$L" "$desc (ran '$got', expected '$want')"
+  fi
+}
+
+BLACK_DECL='[tool.black]
+line-length = 120
+'
+# The control comes first: without a boundary the parent's config is reachable,
+# so the climb is real and the next case is measuring the boundary, not a lookup
+# that never worked.
+nested_case "the lookup climbs out of a subdirectory to the config above it" black no "$BLACK_DECL"
+nested_case "a .git between the file and that config stops the climb"        none yes "$BLACK_DECL"
+
+# --- declared but not installed ---
+# The obvious repair here is "well, run the other one" — and that is the
+# original bug written small: it is how a repo asking for black at 120 columns
+# ended up folded by ruff at 88. A missing tool is a machine that is set up
+# wrong, and formatting nothing says so honestly. Whoever reaches for a fallback
+# on this branch should read these two cases first.
+missing_tool_case() {  # <desc> <config-name> <config-body> <tool-to-remove>
+  local desc="$1" cfg="$2" body="$3" gone="$4" proj stubs got
+  proj=$(new_lint_proj); stubs=$(lint_stubs)
+  printf '%s' "$body" > "$proj/$cfg"
+  rm -f "$stubs/$gone"   # the declared tool is not on PATH; the other one is
+  got=$(formatter_for "$proj/sample.py" "$stubs")
+  rm -rf "$proj" "$stubs"
+  if [ -z "$got" ]; then
+    report 0 "$L" "$desc"
+  else
+    report 1 "$L" "$desc (ran '$got', expected nothing)"
+  fi
+}
+
+missing_tool_case "black declared and missing -> nothing runs, not ruff" \
+  pyproject.toml '[tool.black]
+line-length = 120
+' black
+missing_tool_case "ruff declared and missing -> nothing runs, not black" \
+  pyproject.toml '[tool.ruff]
+line-length = 100
+' ruff
+
+# --- exit 0, whatever happens ---
+# This hook runs after every Edit and Write. Its exit code is not advice, it is
+# whether the coder's turn continues, so there is no input it may fail on. The
+# formatter lookup added directories to walk and a file to read, which is new
+# ground for a non-zero exit to come from.
+run_case "$L" 0 "a path that does not exist"        "$(path_json '/tmp/hooktest-no-such-dir-xyz/gone.py')"
+run_case "$L" 0 "malformed JSON on stdin"           'not json at all'
+run_case "$L" 0 "JSON with no tool_input"           '{"hook_event_name":"PostToolUse"}'
+run_case "$L" 0 "a path that is a directory"        "$(path_json '/tmp')"
+
+# A path with no directory part leaves `dirname` returning ".", whose parent is
+# itself — so a walk fed "." climbs nowhere and quietly reports no config. Here
+# the config sits one level above the working directory, which is the only shape
+# that tells a resolved path from an unresolved one: with the path made absolute
+# the lookup reaches the config, and with "." it stops on the first step.
+REL_PROJ=$(new_lint_proj)
+printf '[tool.black]\n' > "$REL_PROJ/pyproject.toml"
+mkdir -p "$REL_PROJ/nested"
+printf 'x = 1\n' > "$REL_PROJ/nested/sample.py"
+REL_STUBS=$(lint_stubs)
+REL_RC=0
+( cd "$REL_PROJ/nested" && printf '%s' "$(path_json 'sample.py')" \
+  | PATH="$REL_STUBS:$LINT_PATH" bash "$HOOKS_DIR/$L" >/dev/null 2>&1 ) || REL_RC=$?
+REL_RAN=$(cat "$REL_STUBS/ran.log" 2>/dev/null)
+rm -rf "$REL_PROJ" "$REL_STUBS"
+if [ "$REL_RC" -eq 0 ] && [ "$REL_RAN" = black ]; then
+  report 0 "$L" "a .py name with no directory part still finds the config above it"
+else
+  report 1 "$L" "a .py name with no directory part still finds the config above it (rc=$REL_RC ran '$REL_RAN')"
+fi
+
+# An unreadable pyproject.toml is the one a formatter lookup can trip over that
+# the old hook never touched: it is grepped, and a repo can hold a file the
+# editing user cannot read. Answering "nothing declared" is the right answer and
+# exiting 0 is the only allowed one.
+UNREADABLE_PROJ=$(new_lint_proj)
+printf '[tool.black]\n' > "$UNREADABLE_PROJ/pyproject.toml"
+chmod 000 "$UNREADABLE_PROJ/pyproject.toml"
+UNREADABLE_RC=0
+printf '%s' "$(path_json "$UNREADABLE_PROJ/sample.py")" \
+  | bash "$HOOKS_DIR/$L" >/dev/null 2>&1 || UNREADABLE_RC=$?
+chmod 644 "$UNREADABLE_PROJ/pyproject.toml"
+rm -rf "$UNREADABLE_PROJ"
+if [ "$UNREADABLE_RC" -eq 0 ]; then
+  report 0 "$L" "an unreadable pyproject.toml still exits 0"
+else
+  report 1 "$L" "an unreadable pyproject.toml still exits 0 (got $UNREADABLE_RC)"
+fi
+
+# The formatter itself failing is routine — a file mid-edit does not parse. The
+# hook reports nothing and gets out of the way; a syntax error is the coder's to
+# see from their own tools, not something to interrupt the turn over.
+BROKEN_PROJ=$(new_lint_proj)
+printf '[tool.black]\n' > "$BROKEN_PROJ/pyproject.toml"
+printf 'def broken(:\n' > "$BROKEN_PROJ/broken.py"
+BROKEN_RC=0
+BROKEN_OUT=$(printf '%s' "$(path_json "$BROKEN_PROJ/broken.py")" \
+  | bash "$HOOKS_DIR/$L" 2>/dev/null) || BROKEN_RC=$?
+BROKEN_KEPT=$(cat "$BROKEN_PROJ/broken.py")
+rm -rf "$BROKEN_PROJ"
+if [ "$BROKEN_RC" -eq 0 ] && [ -z "$BROKEN_OUT" ] && [ "$BROKEN_KEPT" = "def broken(:" ]; then
+  report 0 "$L" "a file the formatter cannot parse: exit 0, no output, file untouched"
+else
+  report 1 "$L" "a file the formatter cannot parse: exit 0, no output, file untouched (rc=$BROKEN_RC out='$BROKEN_OUT')"
+fi
+
+# The point of the whole change: black's line-length has to reach the file. ruff
+# format folds this 100-column call at its default 88; black at 120 leaves it on
+# one line. If black were not installed the hook would run nothing and the line
+# would survive for that reason instead — either way the fold is what must not
+# happen, and the fold is what shipped before.
+WIDE_PROJ=$(new_lint_proj)
+printf '[tool.black]\nline-length = 120\n' > "$WIDE_PROJ/pyproject.toml"
+WIDE_LINE='result = some_function_with_a_long_name(first_argument, second_argument, third_argument, fourth_arg)'
+printf '%s\n' "$WIDE_LINE" > "$WIDE_PROJ/wide.py"
+printf '%s' "$(path_json "$WIDE_PROJ/wide.py")" | bash "$HOOKS_DIR/$L" >/dev/null 2>&1
+WIDE_AFTER=$(cat "$WIDE_PROJ/wide.py")
+rm -rf "$WIDE_PROJ"
+if [ "$WIDE_AFTER" = "$WIDE_LINE" ]; then
+  report 0 "$L" "a black project's line-length survives: 100 columns are not folded at 88"
+else
+  report 1 "$L" "a black project's line-length survives: 100 columns are not folded at 88 (got '$WIDE_AFTER')"
+fi
+
 # ---------- announce-agent.sh ----------
 TMP_PROJ=$(mktemp -d /tmp/hooktest-proj-XXXXXX)
 export CLAUDE_PROJECT_DIR="$TMP_PROJ"
@@ -1743,6 +2056,83 @@ invocation_case "invoked by absolute path -> records BLOCK, attempt 1" \
   "$REPO_ROOT" "$HOOKS_DIR/$R"
 invocation_case "invoked by relative path from the repo root -> records BLOCK, attempt 1" \
   "$REPO_ROOT" ".claude/hooks/$R"
+
+# ---------- record-verdict.sh : HARNESS_RUN_PHASE overrides that lookup (D17) ----------
+# Deriving the parser from $0 is right while the hook and the parser ship in the
+# same repo, and wrong the moment the hook is installed at ~/.claude/hooks/,
+# where the same expression names ~/scripts/harness/run_phase.py — a file that
+# does not exist. This is the only one of the six hooks that breaks on a global
+# install; the rest use $CLAUDE_PROJECT_DIR or no path at all.
+#
+# The orphan hook is what makes these cases decisive: it is a copy with no parser
+# beside it, so the default lookup cannot succeed and a recorded verdict can only
+# have come from the variable.
+
+dash_if_empty() { [ -n "$1" ] && printf '%s' "$1" || printf -- '-'; }
+
+# One reviewer stop, reported as the four things that distinguish "recorded" from
+# "gave up": the exit code, the verdict, the counter, and the failure mark. The
+# `env` arguments are what each case is actually varying.
+parser_run() {  # <hook-path> [env assignments...] -> "rc verdict attempt marked"
+  local hook="$1"; shift
+  local proj rc=0 verdict attempt marked
+  proj=$(new_proj)
+  assistant_jsonl "$proj/transcript.jsonl" '<verdict>BLOCK</verdict>'
+  # The caller's arguments go first: `env` takes its options before any
+  # assignment, so a trailing `-u FOO` would be passed to bash as a command
+  # instead and the run would exit 127 having tested nothing.
+  printf '%s' "$(subagent_stop_json reviewer "$proj/transcript.jsonl")" \
+    | env "$@" CLAUDE_PROJECT_DIR="$proj" bash "$hook" >/dev/null 2>&1 || rc=$?
+  verdict=$(dash_if_empty "$(state_field "$proj/$STATE_REL" last_verdict)")
+  attempt=$(dash_if_empty "$(state_field "$proj/$STATE_REL" attempt)")
+  marked=$(dash_if_empty "$(state_field "$proj/$STATE_REL" record_failed)")
+  rm -rf "$proj"
+  printf '%s %s %s %s' "$rc" "$verdict" "$attempt" "$marked"
+}
+
+parser_case() {  # <desc> <expected "rc verdict attempt marked"> <hook> [env...]
+  local desc="$1" want="$2"; shift 2
+  local got
+  got=$(parser_run "$@")
+  if [ "$got" = "$want" ]; then
+    report 0 "$R" "$desc"
+  else
+    report 1 "$R" "$desc (got '$got', want '$want')"
+  fi
+}
+
+# The global install, in one case: the hook sits where its parser is not, and the
+# absolute path in the variable is the only thing that can find it.
+ORPHAN=$(orphan_hook)
+parser_case "HARNESS_RUN_PHASE finds the parser a \$0 lookup cannot reach" \
+  "0 BLOCK 1 -" "$ORPHAN/.claude/hooks/$R" "HARNESS_RUN_PHASE=$REPO_ROOT/scripts/harness/run_phase.py"
+rm -rf "$ORPHAN"
+
+# Unset is the case every run of this suite is already in, asserted here anyway
+# because it is the one the override could take away: a `${HARNESS_RUN_PHASE}`
+# written without a default turns every in-repo run into the orphan above.
+parser_case "unset -> the \$0-derived path, unchanged" \
+  "0 BLOCK 1 -" "$HOOKS_DIR/$R" -u HARNESS_RUN_PHASE
+
+# Empty is the one a future reader will get wrong, in either direction: `:-`
+# treats it as unset and falls back, while `-` would hand `python3` an empty
+# path. Both spellings look equally right in a diff and only one of them keeps a
+# half-finished ~/.claude/settings.json from silently disabling the loop, so the
+# behaviour is pinned rather than left to whoever edits the line next.
+parser_case "empty -> falls back to the default, not an empty path" \
+  "0 BLOCK 1 -" "$HOOKS_DIR/$R" HARNESS_RUN_PHASE=
+
+# A variable pointing at nothing is a misconfigured install, and it lands in the
+# path that already exists for a parser that cannot run: the failure is marked so
+# the next Stop can say so, the counter is not moved, and the turn is not
+# blocked. Inventing a verdict here would spend one of three attempts on a typo.
+parser_case "set to a path that does not exist -> marked as failed, counters untouched" \
+  "0 - - True" "$HOOKS_DIR/$R" HARNESS_RUN_PHASE=/nonexistent/run_phase.py
+
+# ...and a directory is the same misconfiguration with a different shape — the
+# obvious typo of naming the folder and not the file in settings.json.
+parser_case "set to a directory -> marked as failed, counters untouched" \
+  "0 - - True" "$HOOKS_DIR/$R" "HARNESS_RUN_PHASE=$REPO_ROOT/scripts/harness"
 
 # ---------- both hooks : CLAUDE_PROJECT_DIR is not guaranteed ----------
 # Hooks are invoked with the variable set, but a wrapper script, a manual run or

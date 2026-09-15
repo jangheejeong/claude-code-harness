@@ -6,10 +6,19 @@
 #
 # Behavior:
 #   - .py files only (other extensions: silent skip)
-#   - Tries ruff format first, falls back to black
-#   - If neither tool is installed: silent skip
+#   - The project picks the formatter, not PATH: walk up from the edited file
+#     for ruff.toml / .ruff.toml / a [tool.ruff] or [tool.black] table, stopping
+#     at the repo root
+#   - Nothing declared, or the declared tool not installed: silent skip
 #   - Only emits stdout when the file actually changed (avoid noise)
 #   - exit 0 always — never blocks the coder; lint failures are reviewer's job
+#
+# Why the project and not PATH?
+#   Picking by "which one is installed" meant ruff won wherever it was on PATH,
+#   and ruff does not read [tool.black]. Of the 23 python projects under
+#   ~/Projects/heum, 8 declare black at line-length 119 or 120 against ruff
+#   format's default of 88, so an edit in any of them refolded lines the coder
+#   never touched — and a diff nobody can review is worse than no formatting.
 #
 # Why not run ruff check --fix?
 #   - `format` is style-only (whitespace, line length, quotes); semantically safe
@@ -51,18 +60,71 @@ hash_file() {  # shasum (macOS) -> sha1sum (Linux) -> cksum (POSIX)
   fi
 }
 
+toml_declares() {  # <pyproject.toml> <ruff|black>: does it declare that tool as the formatter?
+  # Anchored at the start of a line so a `# [tool.black]` comment does not count,
+  # and closed with `]` so [tool.ruffx] is somebody else.
+  #
+  # Only the headers that actually say "this tool formats here" qualify. ruff's
+  # sub-tables are nearly all lint-side — [tool.ruff.lint], [tool.ruff.isort],
+  # [tool.ruff.pydocstyle] — and a repo that lints with ruff while formatting
+  # with black is one of the commonest Python setups there is. Counting those as
+  # a formatting declaration hands that repo to ruff and folds it at 88, which
+  # is the defect this whole lookup exists to remove. [tool.ruff.format] is the
+  # one sub-table that does say it, and a bare [tool.ruff] carries the
+  # formatter's own settings, so both stay in.
+  case "$2" in
+    ruff) grep -qE "^[[:space:]]*\[tool\.ruff(\]|\.format\])" "$1" 2>/dev/null ;;
+    *)    grep -qE "^[[:space:]]*\[tool\.$2\]" "$1" 2>/dev/null ;;
+  esac
+}
+
+declared_in() {  # <dir> -> "ruff" | "black" | "" — what this one directory declares
+  # A dedicated ruff file needs no table inside it — its name is the declaration.
+  if [ -f "$1/ruff.toml" ] || [ -f "$1/.ruff.toml" ]; then printf ruff; return; fi
+  if [ -f "$1/pyproject.toml" ]; then
+    if toml_declares "$1/pyproject.toml" ruff; then printf ruff; return; fi
+    if toml_declares "$1/pyproject.toml" black; then printf black; return; fi
+  fi
+}
+
+project_formatter() {  # <dir> -> the formatter declared at or above <dir>, "" if none
+  local dir="$1" found parent
+  while [ -n "$dir" ]; do
+    found=$(declared_in "$dir")
+    [ -n "$found" ] && { printf '%s' "$found"; return; }
+    # Stop at the repo root. ~/Projects/heum is a plain directory holding
+    # independent repos side by side, so climbing past one would hand a repo
+    # whatever its neighbour, or the home directory, happens to declare.
+    # `-e` and not `-d`: in a git worktree .git is a file, and a worktree is
+    # every bit as much a boundary as a clone.
+    [ -e "$dir/.git" ] && return
+    parent=$(dirname "$dir")
+    [ "$parent" = "$dir" ] && return   # reached /, nothing above it
+    dir="$parent"
+  done
+}
+
+DIR=$(cd "$(dirname "$FILE")" 2>/dev/null && pwd) || exit 0
+TOOL=$(project_formatter "$DIR")
+
+# Nothing declared → nothing runs. A repo that never chose a style does not get
+# one chosen for it; imposing ruff's defaults there is the same defect as the
+# 88-column fold, only quieter.
+[ -z "$TOOL" ] && exit 0
+
 # Snapshot file content before formatting
 HASH_BEFORE=$(hash_file "$FILE")
 
-TOOL=""
-if command -v ruff >/dev/null 2>&1; then
-  ruff format "$FILE" >/dev/null 2>&1 && TOOL="ruff"
-elif command -v black >/dev/null 2>&1; then
-  black --quiet "$FILE" >/dev/null 2>&1 && TOOL="black"
-fi
-
-# No tool available → silent skip
-[ -z "$TOOL" ] && exit 0
+# One arm per declared tool and deliberately no fallback arm: if the declared
+# formatter is not installed the command fails, nothing is written, and the hook
+# says nothing. Do not add an `else run the other one` here — that is exactly how
+# a repo asking for black at 120 columns got folded by ruff at 88, which is the
+# bug this file was rewritten to remove. A missing tool is a machine set up
+# wrong; formatting nothing reports that honestly.
+case "$TOOL" in
+  ruff)  ruff format "$FILE" >/dev/null 2>&1 ;;
+  black) black --quiet "$FILE" >/dev/null 2>&1 ;;
+esac
 
 HASH_AFTER=$(hash_file "$FILE")
 if [ "$HASH_BEFORE" != "$HASH_AFTER" ]; then
