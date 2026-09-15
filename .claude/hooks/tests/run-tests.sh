@@ -7,6 +7,14 @@
 
 set -u
 
+# "Self-contained" has to survive the harness being installed globally. Once
+# ~/.claude/settings.json exports HARNESS_RUN_PHASE, every shell carries it —
+# including this one — and the orphan fixtures, whose whole job is to be a hook
+# with no parser within reach, would find the real parser instead. Six cases
+# flipped on the machine that first had the install. Cases that want the variable
+# set it themselves, per run, through `env`.
+unset HARNESS_RUN_PHASE
+
 HOOKS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0
 FAIL=0
@@ -585,6 +593,68 @@ if printf '%s\n' "$ESCAPE_HATCH" | grep -qiF 'twice'; then
   report 0 "review/SKILL.md" "a worker that repeats a finding gets closed instead of resumed again"
 else
   report 1 "review/SKILL.md" "a worker that repeats a finding gets closed instead of resumed again (line='$ESCAPE_HATCH')"
+fi
+
+# --- the skills have to find the parser too (D20) ---
+# Phase 8 gave the hook HARNESS_RUN_PHASE so it survives being installed at
+# ~/.claude/hooks/. The skills were left naming the parser relative to the cwd,
+# so in a folder without the harness — where there is no scripts/harness/ at all
+# — /review instructs the model to run a command that cannot work. Same variable
+# and not a second one, so a global install sets one thing in one place.
+#
+# Static checks, because the behaviour here is a model reading prose: the text is
+# what there is to pin. A bare `scripts/harness/run_phase.py` with no
+# HARNESS_RUN_PHASE in front of it is the shape that regressed.
+ORCH_SKILL="$REPO_ROOT/.claude/skills/orchestrator/SKILL.md"
+
+bare_parser_refs() {  # <file> -> the lines naming the parser without the variable
+  grep -n 'scripts/harness/run_phase\.py' "$1" | grep -v 'HARNESS_RUN_PHASE'
+}
+
+for SKILL_FILE in "$REVIEW_SKILL" "$ORCH_SKILL"; do
+  BARE=$(bare_parser_refs "$SKILL_FILE")
+  SKILL_LABEL="$(basename "$(dirname "$SKILL_FILE")")/SKILL.md"
+  if [ -z "$BARE" ]; then
+    report 0 "$SKILL_LABEL" "every parser reference goes through HARNESS_RUN_PHASE"
+  else
+    report 1 "$SKILL_LABEL" "every parser reference goes through HARNESS_RUN_PHASE (bare: $BARE)"
+  fi
+done
+
+# ...and the fallback has to survive too. A substitution that dropped the default
+# would break the repo-local case, which is the one every run of this suite is in.
+for SKILL_FILE in "$REVIEW_SKILL" "$ORCH_SKILL"; do
+  SKILL_LABEL="$(basename "$(dirname "$SKILL_FILE")")/SKILL.md"
+  if grep -qF '${HARNESS_RUN_PHASE:-scripts/harness/run_phase.py}' "$SKILL_FILE"; then
+    report 0 "$SKILL_LABEL" "the override keeps the repo-relative path as its default"
+  else
+    report 1 "$SKILL_LABEL" "the override keeps the repo-relative path as its default"
+  fi
+done
+
+# D21 — the instruction that matters more than the substitution. Step 6 reads as
+# though machine-parsing is a precondition for continuing, and it is not: the
+# verdict is in the reviewer's reply, and record-verdict.sh has already written
+# it to loop-state.json. A /review that halted because a helper script was
+# missing would be a worse failure than the one D20 fixes — the review itself
+# was fine and the loop budget is being kept by the hooks either way.
+#
+# Pinned on the sentence carrying the parser, so the clause cannot drift away
+# from the command it qualifies into some other part of the file.
+PARSER_STEP=$(grep -F 'HARNESS_RUN_PHASE' "$REVIEW_SKILL" | head -1)
+if printf '%s' "$PARSER_STEP" | grep -qiE 'cannot (be )?(reach|run|found)|not (reachable|there|available)|missing' \
+   && printf '%s' "$PARSER_STEP" | grep -qiE 'do not stop|don.t stop|carry on|continue|skip'; then
+  report 0 "review/SKILL.md" "an unreachable parser is a step to skip, not a reason to stop the review"
+else
+  report 1 "review/SKILL.md" "an unreachable parser is a step to skip, not a reason to stop the review (line='$PARSER_STEP')"
+fi
+
+# ...and it has to say where the verdict still is, or "carry on" is an
+# instruction with no next action attached.
+if printf '%s' "$PARSER_STEP" | grep -qiE "repl(y|ies)|loop-state|record-verdict"; then
+  report 0 "review/SKILL.md" "...and names where the verdict still is when the parser is gone"
+else
+  report 1 "review/SKILL.md" "...and names where the verdict still is when the parser is gone (line='$PARSER_STEP')"
 fi
 
 verdict_case 0 "APPROVE" "APPROVE -> stdout APPROVE, exit 0" \
@@ -2107,6 +2177,23 @@ ORPHAN=$(orphan_hook)
 parser_case "HARNESS_RUN_PHASE finds the parser a \$0 lookup cannot reach" \
   "0 BLOCK 1 -" "$ORPHAN/.claude/hooks/$R" "HARNESS_RUN_PHASE=$REPO_ROOT/scripts/harness/run_phase.py"
 rm -rf "$ORPHAN"
+
+# The other side of the same variable. Once the harness is installed globally,
+# ~/.claude/settings.json exports HARNESS_RUN_PHASE into every shell, this suite
+# included — and an orphan fixture is supposed to be a hook that *cannot* reach a
+# parser. With the variable inherited it reaches the real one, and the dozen
+# "the parser cannot run" cases above quietly start testing a parser that runs
+# fine. Measured on this machine after the install: 6 cases flipped.
+#
+# The suite unsets it in its preamble so every case runs from the same place;
+# this asserts that it is still gone by the time cases are running, which is the
+# only moment that matters. On a machine that never had the variable this is
+# trivially true, and on one with the global install it is the whole invariant.
+if [ -z "${HARNESS_RUN_PHASE:-}" ]; then
+  report 0 "$R" "no case inherits a HARNESS_RUN_PHASE from the developer's shell"
+else
+  report 1 "$R" "no case inherits a HARNESS_RUN_PHASE from the developer's shell (='$HARNESS_RUN_PHASE')"
+fi
 
 # Unset is the case every run of this suite is already in, asserted here anyway
 # because it is the one the override could take away: a `${HARNESS_RUN_PHASE}`

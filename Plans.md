@@ -375,6 +375,43 @@ ruff 가 깔려 있으면 무조건 ruff 다. 그래서 120자로 맞춰둔 8개
   - [ ] `~/Projects/heum` 에서 리뷰어 1회 → `attempt` 가 **1만** 증가 (D18 이 지켜졌는지)
 - **Risk**: D18 을 빠뜨리면 예산이 조용히 반토막 난다. 실측으로 확인했고, 증상은 "두 번째 BLOCK 에서 3/3 소진" 이라 원인을 찾기 어렵다. 설치 후 `attempt` 증가폭을 반드시 확인할 것.
 
+### Phase 9 — 스킬도 파서를 찾을 수 있어야 한다 (착수 2026-09-15)
+
+Phase 8 이 훅에 `HARNESS_RUN_PHASE` 를 넣어 전역 설치를 가능하게 했고, 실제로 `~/.claude/` 에 훅·스킬·에이전트를 올렸다. 그런데 **스킬은 그 변수를 쓰지 않는다.** 두 파일 세 곳이 레포 상대경로를 그대로 시킨다:
+
+```
+review/SKILL.md:33        python3 scripts/harness/run_phase.py --parse-verdict <file>
+orchestrator/SKILL.md:43  scripts/harness/run_phase.py
+orchestrator/SKILL.md:46  python scripts/harness/run_phase.py --subproject ...
+```
+
+하네스가 설치되지 않은 폴더에는 `scripts/harness/` 가 없다. 실측으로 확인했다. 그 폴더에서 `/review` 를 돌리면 verdict 를 기계 판독하라는 지시가 **실패하는 명령**을 가리킨다. 훅은 Phase 8 로 막았는데 스킬은 안 막혔다 — **전역화가 절반만 된 상태다.**
+
+- **Scope**: 세 곳이 파서를 `HARNESS_RUN_PHASE` 우선으로 찾게 한다
+- **설계 결정**
+  - **D20. 스킬도 훅과 같은 변수를 쓴다.** `${HARNESS_RUN_PHASE:-scripts/harness/run_phase.py}`. 변수를 하나 더 만들지 않는 이유는, 전역 설치가 한 곳만 설정하면 되게 하기 위해서다. `~/.claude/settings.json` 의 `env` 에 이미 절대경로가 들어 있다.
+  - **D21. 변수가 없고 경로도 없으면 그 지시를 건너뛴다.** 파싱이 불가능한 상태에서 `/review` 가 멈춰서는 안 된다 — verdict 는 리뷰어 답장에도 있고, `record-verdict.sh` 가 이미 디스크에 기록했다. 기계 판독은 사람이 눈으로 읽는 것에 대한 **보강**이지 전제가 아니다. 스킬이 그렇게 읽히도록 쓴다.
+- **Touched files**: `.claude/skills/review/SKILL.md`, `.claude/skills/orchestrator/SKILL.md`
+- **Out of scope**: 훅 수정(Phase 8 에서 끝남), `update.sh` 의 전역 설치 지원, 전역 사본의 drift(별건 — 아래 참조)
+- **Acceptance**
+  - [ ] 세 곳 모두 `HARNESS_RUN_PHASE` 를 우선 쓰고, 없으면 레포 상대경로로 떨어진다
+  - [ ] 파서에 닿지 못하는 경우 무엇을 하라는지 스킬에 적혀 있다 (D21 — 멈추지 말 것)
+  - [ ] `run-tests.sh` 가 세 곳에 상대경로 단독 형태가 남아 있지 않음을 단언한다
+  - [ ] 441 케이스 회귀 0
+**Review: APPROVE — 2026-09-15** (2라운드, 예산 2/3). 448/448.
+
+라운드 1 은 **REQUEST CHANGES** 였고, 지적은 내가 쓴 D21 문장이 **발동하는 바로 그 조건에서 거짓인 근거**를 댄다는 것이었다 — "훅이 이미 기록했다" 고 했는데, 훅도 같은 `HARNESS_RUN_PHASE` 로 파서를 찾으므로 스킬이 못 닿으면 훅도 못 닿아 `record_failed` 를 남겼을 것이다. 같은 파일 `:45` 가 그 경우를 이미 다르게 설명하고 있어 자기모순이기도 했다. 문장을 "그 라운드를 미기록으로 취급하고 `:45` 가 다루는 경우로 보고하라" 로 교체했다.
+
+**이것이 내가 쓴 모델용 지시문이 리뷰에서 뒤집힌 두 번째 사례다** (첫 번째는 Phase 6 의 `<verdict>` 태그). 두 번 다 동작 결함이 아니라 **문장이 성립하지 않는 조건에서 읽히는 문제**였고, 두 번 다 리뷰 게이트가 유일한 방어선이었다.
+
+#### Phase 9 리뷰 이월 사항
+
+- **[NEW][NIT] `run-tests.sh:644`** — D21 테스트가 "파서 문장" 이 아니라 "변수를 언급한 첫 줄" 에 앵커돼 있다. 리뷰어와 후속 처리로 합의. 그대로 쓸 수 있는 한 줄이 `.claude/notes/review-phase9-r2-verdict.log` 에 있다.
+
+- **Risk**: 스킬은 모델이 읽는 지시문이라 문장 하나가 동작을 바꾼다. 이 레포는 이미 그것으로 `BLOCK` 을 한 번 받았다 (Phase 6 의 `<verdict>` 태그). 좁게 고치고 문장을 늘리지 않는다.
+
+> **별건으로 남기는 것 — 전역 사본의 drift.** `~/.claude/skills/` 와 `~/Projects/heum/.claude/skills/` 에 같은 스킬이 두 벌 있다. 훅과 달리 스킬은 둘 다 실행되지 않고 프로젝트 것이 전역을 덮으므로 동작 문제는 없다. 다만 `update.sh` 는 heum 쪽만 갱신하므로 **heum 밖에서는 낡은 사본을 쓰게 된다.** 가장 싼 해법은 `update.sh` 실행 후 전역으로 복사하는 절차 한 줄이고, 제대로 된 해법은 `update.sh` 가 전역 설치를 지원하는 것이다. 후자는 별도 Phase.
+
 ## Open questions (해결됨 — 2026-09-05)
 
 - [x] **Q1 — verdict 어휘.** `<verdict>` 태그 안에는 `REQUEST CHANGES` (reviewer.md 의 기존 `### 결론` 표기와 동일), `run_phase.py` 의 파싱 결과 문자열은 `CHANGES` 로 정규화. Phase 1 인수 기준이 이미 이 형태다.
