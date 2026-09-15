@@ -7,6 +7,14 @@
 
 set -u
 
+# "Self-contained" has to survive the harness being installed globally. Once
+# ~/.claude/settings.json exports HARNESS_RUN_PHASE, every shell carries it —
+# including this one — and the orphan fixtures, whose whole job is to be a hook
+# with no parser within reach, would find the real parser instead. Six cases
+# flipped on the machine that first had the install. Cases that want the variable
+# set it themselves, per run, through `env`.
+unset HARNESS_RUN_PHASE
+
 HOOKS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0
 FAIL=0
