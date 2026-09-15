@@ -60,10 +60,22 @@ hash_file() {  # shasum (macOS) -> sha1sum (Linux) -> cksum (POSIX)
   fi
 }
 
-toml_declares() {  # <pyproject.toml> <ruff|black>: does it hold a [tool.<x>] table?
-  # Anchored at the start of a line so a `# [tool.black]` comment does not count.
-  # The trailing class keeps [tool.ruff.format] in and a [tool.ruffx] out.
-  grep -qE "^[[:space:]]*\[tool\.$2(\]|\.)" "$1" 2>/dev/null
+toml_declares() {  # <pyproject.toml> <ruff|black>: does it declare that tool as the formatter?
+  # Anchored at the start of a line so a `# [tool.black]` comment does not count,
+  # and closed with `]` so [tool.ruffx] is somebody else.
+  #
+  # Only the headers that actually say "this tool formats here" qualify. ruff's
+  # sub-tables are nearly all lint-side — [tool.ruff.lint], [tool.ruff.isort],
+  # [tool.ruff.pydocstyle] — and a repo that lints with ruff while formatting
+  # with black is one of the commonest Python setups there is. Counting those as
+  # a formatting declaration hands that repo to ruff and folds it at 88, which
+  # is the defect this whole lookup exists to remove. [tool.ruff.format] is the
+  # one sub-table that does say it, and a bare [tool.ruff] carries the
+  # formatter's own settings, so both stay in.
+  case "$2" in
+    ruff) grep -qE "^[[:space:]]*\[tool\.ruff(\]|\.format\])" "$1" 2>/dev/null ;;
+    *)    grep -qE "^[[:space:]]*\[tool\.$2\]" "$1" 2>/dev/null ;;
+  esac
 }
 
 declared_in() {  # <dir> -> "ruff" | "black" | "" — what this one directory declares
