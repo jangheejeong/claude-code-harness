@@ -190,13 +190,20 @@ verdict_case() {  # <expected-exit> <expected-stdout> <description> <log-body>
 
 # The verdict tag must be the template's LAST line so a hook can read the
 # reviewer's conclusion by tailing the log instead of re-parsing the review.
+# There are two templates now — the file's and the reply's — and each is read by
+# a different parser, so every occurrence has to close its block, not just the
+# first one grep happens to reach.
 VERDICT_TEMPLATE_LINE='<verdict>APPROVE|REQUEST CHANGES|BLOCK</verdict>'
-TAG_LINE=$(grep -nxF "$VERDICT_TEMPLATE_LINE" "$REVIEWER_MD" | head -1 | cut -d: -f1)
-NEXT_LINE=$(awk -v n="$((${TAG_LINE:-0} + 1))" 'NR==n' "$REVIEWER_MD")
-if [ -n "$TAG_LINE" ] && [ "$NEXT_LINE" = '```' ]; then
-  report 0 "reviewer.md" "verdict tag is the last line of the output template"
+TAG_LINES=$(grep -nxF "$VERDICT_TEMPLATE_LINE" "$REVIEWER_MD" | cut -d: -f1)
+TAG_BAD=""
+for TAG_LINE in $TAG_LINES; do
+  NEXT_LINE=$(awk -v n="$((TAG_LINE + 1))" 'NR==n' "$REVIEWER_MD")
+  [ "$NEXT_LINE" = '```' ] || TAG_BAD="$TAG_BAD $TAG_LINE:'$NEXT_LINE'"
+done
+if [ -n "$TAG_LINES" ] && [ -z "$TAG_BAD" ]; then
+  report 0 "reviewer.md" "verdict tag is the last line of every output template"
 else
-  report 1 "reviewer.md" "verdict tag is the last line of the output template (line='$TAG_LINE' next='$NEXT_LINE')"
+  report 1 "reviewer.md" "verdict tag is the last line of every output template (lines='$TAG_LINES' bad=$TAG_BAD)"
 fi
 
 if grep -qF '### 결론' "$REVIEWER_MD" && grep -qF '### 판정 표' "$REVIEWER_MD" \

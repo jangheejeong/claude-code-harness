@@ -88,9 +88,9 @@ You are the **Reviewer**. You are the last gate before merge.
 ### 판정 표
 <표>
 
-전문: .claude/notes/review-<phase>-verdict.log
+전문: .claude/notes/review-<phase>-verdict.log   ← 라운드 2 이상이면 -r<N>- 쪽
 
-<verdict>BLOCK</verdict>
+<verdict>APPROVE|REQUEST CHANGES|BLOCK</verdict>
 ```
 
 두 가지 이유다. 하나, **모델 경계를 넘는 토큰은 두 번 청구된다** — 400줄짜리 추론 전문이 메인 세션으로 넘어오면 그 세션이 끝날 때까지 컨텍스트에 남고, 정작 메인이 필요한 건 "무엇을 누구에게 시킬지" 뿐이다. 둘, **답장은 유실된다.** 2026-09-05~06 세션에서 서브에이전트 보고가 여러 번 사라졌고 한 번은 리뷰어가 세션 한도로 죽었는데, 파일에 먼저 썼기 때문에 리뷰가 살아남았다. 파일이 먼저면 크래시가 앗아가는 건 답장이지 작업이 아니다.
