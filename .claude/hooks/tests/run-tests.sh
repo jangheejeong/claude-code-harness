@@ -253,6 +253,47 @@ line-length = 120
 line-length = 100
 '
 
+# [tool.ruff.lint] configures the linter and says nothing about who formats.
+# Linting with ruff and formatting with black is one of the commonest Python
+# setups there is, and reading that section as a format declaration folds the
+# repo at 88 — the exact defect this section exists to remove, surviving in the
+# shape it is most likely to meet. [tool.ruff.isort] and the other lint-side
+# sub-tables are the same story.
+choice_case "[tool.ruff.lint] + [tool.black] -> black" black pyproject.toml \
+  '[tool.ruff.lint]
+select = ["E", "F"]
+
+[tool.black]
+line-length = 120
+'
+choice_case "[tool.ruff.lint] alone declares no formatter" none pyproject.toml \
+  '[tool.ruff.lint]
+select = ["E"]
+'
+choice_case "[tool.ruff.isort] alone declares no formatter" none pyproject.toml \
+  '[tool.ruff.isort]
+known-first-party = ["app"]
+'
+# ...but a bare [tool.ruff] alongside a lint table still qualifies, and D16 then
+# picks ruff over black on the strength of that header, not of the lint one.
+choice_case "[tool.ruff] + [tool.ruff.lint] + [tool.black] -> ruff" ruff pyproject.toml \
+  '[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E"]
+
+[tool.black]
+line-length = 120
+'
+choice_case "[tool.ruff.format] + [tool.black] -> ruff" ruff pyproject.toml \
+  '[tool.ruff.format]
+quote-style = "single"
+
+[tool.black]
+line-length = 120
+'
+
 # D15 — no declaration, no formatting. This is the behaviour change: 12 of the
 # 23 heum projects declare nothing and were being formatted at ruff's defaults,
 # which is the same imposition as the 88-column fold, just harder to notice.
