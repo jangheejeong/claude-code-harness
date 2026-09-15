@@ -28,12 +28,13 @@ allowed-tools: Agent, Read, Edit, Grep, Glob, Bash
 5. Spawn `@agent-reviewer` with: the Plan section, the diff (or pointer), the merge-base, and any step-3 leftovers. If you name the subagent, the name must start with `reviewer` — `.claude/hooks/record-verdict.sh` records a verdict only for `reviewer` and `reviewer-*`, and any other name silently switches the loop budget below off.
 
    On round 2+, hand over three things, not one: the incremental diff, **the previous round's full-phase diff file path**, and **the previous round's findings**. The incremental diff is where the reviewer starts, not the limit of what it may judge — spec correctness is still decided against the whole Phase, and the reviewer has `Read`/`Grep`/`Bash` to reach any part of it. Withhold the full diff and the round-2 reviewer can only tell you the fixes look fine, which is not the question.
-6. Render the reviewer's verdict (APPROVE / REQUEST CHANGES / BLOCK) and findings.
+6. The reviewer replies with a verdict line, a findings table, and the path of the full review it wrote to `.claude/notes/`. Parse the verdict mechanically rather than by eye — `python3 scripts/harness/run_phase.py --parse-verdict <that file>` — then read the file for the findings you are about to dispatch. Do not ask the reviewer to paste the full review into the conversation; it is already on disk, and a review that crossed into this session once stays in its context for the rest of it.
 
 ## On BLOCK or REQUEST CHANGES
 
-- Spawn `@agent-coder` with the findings (fix mode).
-- Re-run `/review` after the coder reports done.
+- **Resume the coder that wrote this phase** — `SendMessage` to its name, with the findings. It already holds the plan, the files and the reasoning; a fresh coder would re-read all of it to arrive where this one already is. Spawn a new one only if no coder from this phase is still reachable, or if the fix belongs to a different role (a findings list that is entirely documentation goes to `@agent-documenter`, not to a coder — the hook's re-dispatch message says so too).
+- **Resume the same reviewer for the re-review.** It wrote the findings; it does not need the diff explained again, and it can say plainly which of its own points are now closed instead of re-deriving them.
+- Re-run `/review` after the fix reports done.
 - The budget is 3 cycles per Phase, and **you are not the one counting them**. `.claude/hooks/record-verdict.sh` writes each reviewer verdict and the attempt number to `.claude/notes/loop-state.json`, and `.claude/hooks/enforce-loop.sh` reads that file at the end of every main turn:
   - budget left **and the working tree moved since the last cycle** → the hook exits 2, which refuses to end the turn and puts the re-dispatch instruction on stderr. The turn after a fresh BLOCK does not end on your say-so.
   - budget left **but the working tree fingerprints identically to the previous cycle** → the hook exits 0, with attempts still on the counter, and prints `무진전 중단` on stderr. That is a stop, not a pass. It does not mean the hook died or the phase passed; it means the coder's cycle reached no file, so another one buys the same review of the same code. Do not start it — escalate to the user with the findings.
