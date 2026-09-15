@@ -338,6 +338,72 @@ missing_tool_case "ruff declared and missing -> nothing runs, not black" \
 line-length = 100
 ' ruff
 
+# --- exit 0, whatever happens ---
+# This hook runs after every Edit and Write. Its exit code is not advice, it is
+# whether the coder's turn continues, so there is no input it may fail on. The
+# formatter lookup added directories to walk and a file to read, which is new
+# ground for a non-zero exit to come from.
+run_case "$L" 0 "a path that does not exist"        "$(path_json '/tmp/hooktest-no-such-dir-xyz/gone.py')"
+run_case "$L" 0 "malformed JSON on stdin"           'not json at all'
+run_case "$L" 0 "JSON with no tool_input"           '{"hook_event_name":"PostToolUse"}'
+run_case "$L" 0 "a path that is a directory"        "$(path_json '/tmp')"
+
+# A path with no directory part leaves `dirname` returning ".", whose parent is
+# itself — so a walk fed "." climbs nowhere and quietly reports no config. Here
+# the config sits one level above the working directory, which is the only shape
+# that tells a resolved path from an unresolved one: with the path made absolute
+# the lookup reaches the config, and with "." it stops on the first step.
+REL_PROJ=$(new_lint_proj)
+printf '[tool.black]\n' > "$REL_PROJ/pyproject.toml"
+mkdir -p "$REL_PROJ/nested"
+printf 'x = 1\n' > "$REL_PROJ/nested/sample.py"
+REL_STUBS=$(lint_stubs)
+REL_RC=0
+( cd "$REL_PROJ/nested" && printf '%s' "$(path_json 'sample.py')" \
+  | PATH="$REL_STUBS:$LINT_PATH" bash "$HOOKS_DIR/$L" >/dev/null 2>&1 ) || REL_RC=$?
+REL_RAN=$(cat "$REL_STUBS/ran.log" 2>/dev/null)
+rm -rf "$REL_PROJ" "$REL_STUBS"
+if [ "$REL_RC" -eq 0 ] && [ "$REL_RAN" = black ]; then
+  report 0 "$L" "a .py name with no directory part still finds the config above it"
+else
+  report 1 "$L" "a .py name with no directory part still finds the config above it (rc=$REL_RC ran '$REL_RAN')"
+fi
+
+# An unreadable pyproject.toml is the one a formatter lookup can trip over that
+# the old hook never touched: it is grepped, and a repo can hold a file the
+# editing user cannot read. Answering "nothing declared" is the right answer and
+# exiting 0 is the only allowed one.
+UNREADABLE_PROJ=$(new_lint_proj)
+printf '[tool.black]\n' > "$UNREADABLE_PROJ/pyproject.toml"
+chmod 000 "$UNREADABLE_PROJ/pyproject.toml"
+UNREADABLE_RC=0
+printf '%s' "$(path_json "$UNREADABLE_PROJ/sample.py")" \
+  | bash "$HOOKS_DIR/$L" >/dev/null 2>&1 || UNREADABLE_RC=$?
+chmod 644 "$UNREADABLE_PROJ/pyproject.toml"
+rm -rf "$UNREADABLE_PROJ"
+if [ "$UNREADABLE_RC" -eq 0 ]; then
+  report 0 "$L" "an unreadable pyproject.toml still exits 0"
+else
+  report 1 "$L" "an unreadable pyproject.toml still exits 0 (got $UNREADABLE_RC)"
+fi
+
+# The formatter itself failing is routine — a file mid-edit does not parse. The
+# hook reports nothing and gets out of the way; a syntax error is the coder's to
+# see from their own tools, not something to interrupt the turn over.
+BROKEN_PROJ=$(new_lint_proj)
+printf '[tool.black]\n' > "$BROKEN_PROJ/pyproject.toml"
+printf 'def broken(:\n' > "$BROKEN_PROJ/broken.py"
+BROKEN_RC=0
+BROKEN_OUT=$(printf '%s' "$(path_json "$BROKEN_PROJ/broken.py")" \
+  | bash "$HOOKS_DIR/$L" 2>/dev/null) || BROKEN_RC=$?
+BROKEN_KEPT=$(cat "$BROKEN_PROJ/broken.py")
+rm -rf "$BROKEN_PROJ"
+if [ "$BROKEN_RC" -eq 0 ] && [ -z "$BROKEN_OUT" ] && [ "$BROKEN_KEPT" = "def broken(:" ]; then
+  report 0 "$L" "a file the formatter cannot parse: exit 0, no output, file untouched"
+else
+  report 1 "$L" "a file the formatter cannot parse: exit 0, no output, file untouched (rc=$BROKEN_RC out='$BROKEN_OUT')"
+fi
+
 # The point of the whole change: black's line-length has to reach the file. ruff
 # format folds this 100-column call at its default 88; black at 120 leaves it on
 # one line. If black were not installed the hook would run nothing and the line
