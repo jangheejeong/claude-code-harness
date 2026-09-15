@@ -40,10 +40,10 @@ for phase in Plans.md:
 
 ## Bash helper
 
-For long runs the orchestrator can shell out to `scripts/harness/run_phase.py` to keep main-context noise minimal:
+For long runs the orchestrator can shell out to `${HARNESS_RUN_PHASE:-scripts/harness/run_phase.py}` to keep main-context noise minimal:
 
 ```bash
-python scripts/harness/run_phase.py --subproject api-server --phase 2 --agent coder
+python "${HARNESS_RUN_PHASE:-scripts/harness/run_phase.py}" --subproject api-server --phase 2 --agent coder
 ```
 
 The script captures the subagent's output to `.claude/notes/phase-<n>-<agent>-<ts>.log` and returns a one-line status to the main session.
