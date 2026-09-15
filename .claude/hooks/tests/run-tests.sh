@@ -150,6 +150,80 @@ printf 'x  =  1\n' > "$TMP_PY"
 run_case "$L" 0 "python file: format + exit 0"      "$(path_json "$TMP_PY")"
 rm -f "$TMP_PY"
 
+# ---------- post-edit-lint.sh : the project picks the formatter (D14-D16) ----------
+# The hook used to pick by which tool was on PATH, so ruff won wherever it was
+# installed — and ruff does not read [tool.black]. Of the 23 python projects
+# under ~/Projects/heum, 8 declare black with line-length 119 or 120 while ruff
+# format defaults to 88, so an edit in any of them refolded lines nobody asked
+# it to touch. A diff like that cannot be reviewed, which is the whole cost.
+#
+# Both real formatters are installed on a dev box, so "which one ran" cannot be
+# read back off the file. Stubs that do nothing but log their own name make the
+# answer unambiguous, and a PATH without the pyenv shims stops a real tool from
+# answering in place of a stub that was deliberately left out.
+LINT_PATH="/usr/bin:/bin"   # jq and python3 live here; ruff and black do not
+
+new_lint_proj() {  # -> temp dir standing in for a repo root, holding sample.py
+  local d
+  d=$(mktemp -d /tmp/hooktest-lint-XXXXXX)
+  mkdir -p "$d/.git"   # boundary marker; the hook tests existence, not a real repo
+  printf 'x = 1\n' > "$d/sample.py"
+  printf '%s' "$d"
+}
+
+lint_stubs() {  # -> temp dir of fake ruff/black that append their name to ran.log
+  local d t
+  d=$(mktemp -d /tmp/hooktest-stub-XXXXXX)
+  for t in ruff black; do
+    printf '#!/bin/bash\nprintf "%%s\\n" %s >> "$(dirname "$0")/ran.log"\nexit 0\n' "$t" > "$d/$t"
+    chmod +x "$d/$t"
+  done
+  printf '%s' "$d"
+}
+
+formatter_for() {  # <py-file> <stub-dir> -> name of the formatter that ran ("" = none)
+  rm -f "$2/ran.log"
+  printf '%s' "$(path_json "$1")" | PATH="$2:$LINT_PATH" bash "$HOOKS_DIR/$L" >/dev/null 2>&1
+  cat "$2/ran.log" 2>/dev/null
+}
+
+choice_case() {  # <desc> <ruff|black|none> <config-name> <config-body>
+  local desc="$1" want="$2" cfg="$3" body="$4" proj stubs got
+  proj=$(new_lint_proj); stubs=$(lint_stubs)
+  [ -n "$cfg" ] && printf '%s' "$body" > "$proj/$cfg"
+  got=$(formatter_for "$proj/sample.py" "$stubs")
+  rm -rf "$proj" "$stubs"
+  [ -z "$got" ] && got=none
+  if [ "$got" = "$want" ]; then
+    report 0 "$L" "$desc"
+  else
+    report 1 "$L" "$desc (ran '$got', expected '$want')"
+  fi
+}
+
+choice_case "[tool.black] alone -> black" black pyproject.toml \
+  '[tool.black]
+line-length = 120
+'
+
+# The point of the whole change: black's line-length has to reach the file. ruff
+# format folds this 100-column call at its default 88; black at 120 leaves it on
+# one line. If black were not installed the hook would run nothing and the line
+# would survive for that reason instead — either way the fold is what must not
+# happen, and the fold is what shipped before.
+WIDE_PROJ=$(new_lint_proj)
+printf '[tool.black]\nline-length = 120\n' > "$WIDE_PROJ/pyproject.toml"
+WIDE_LINE='result = some_function_with_a_long_name(first_argument, second_argument, third_argument, fourth_arg)'
+printf '%s\n' "$WIDE_LINE" > "$WIDE_PROJ/wide.py"
+printf '%s' "$(path_json "$WIDE_PROJ/wide.py")" | bash "$HOOKS_DIR/$L" >/dev/null 2>&1
+WIDE_AFTER=$(cat "$WIDE_PROJ/wide.py")
+rm -rf "$WIDE_PROJ"
+if [ "$WIDE_AFTER" = "$WIDE_LINE" ]; then
+  report 0 "$L" "a black project's line-length survives: 100 columns are not folded at 88"
+else
+  report 1 "$L" "a black project's line-length survives: 100 columns are not folded at 88 (got '$WIDE_AFTER')"
+fi
+
 # ---------- announce-agent.sh ----------
 TMP_PROJ=$(mktemp -d /tmp/hooktest-proj-XXXXXX)
 export CLAUDE_PROJECT_DIR="$TMP_PROJ"
