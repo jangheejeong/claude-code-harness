@@ -190,13 +190,20 @@ verdict_case() {  # <expected-exit> <expected-stdout> <description> <log-body>
 
 # The verdict tag must be the template's LAST line so a hook can read the
 # reviewer's conclusion by tailing the log instead of re-parsing the review.
+# There are two templates now — the file's and the reply's — and each is read by
+# a different parser, so every occurrence has to close its block, not just the
+# first one grep happens to reach.
 VERDICT_TEMPLATE_LINE='<verdict>APPROVE|REQUEST CHANGES|BLOCK</verdict>'
-TAG_LINE=$(grep -nxF "$VERDICT_TEMPLATE_LINE" "$REVIEWER_MD" | head -1 | cut -d: -f1)
-NEXT_LINE=$(awk -v n="$((${TAG_LINE:-0} + 1))" 'NR==n' "$REVIEWER_MD")
-if [ -n "$TAG_LINE" ] && [ "$NEXT_LINE" = '```' ]; then
-  report 0 "reviewer.md" "verdict tag is the last line of the output template"
+TAG_LINES=$(grep -nxF "$VERDICT_TEMPLATE_LINE" "$REVIEWER_MD" | cut -d: -f1)
+TAG_BAD=""
+for TAG_LINE in $TAG_LINES; do
+  NEXT_LINE=$(awk -v n="$((TAG_LINE + 1))" 'NR==n' "$REVIEWER_MD")
+  [ "$NEXT_LINE" = '```' ] || TAG_BAD="$TAG_BAD $TAG_LINE:'$NEXT_LINE'"
+done
+if [ -n "$TAG_LINES" ] && [ -z "$TAG_BAD" ]; then
+  report 0 "reviewer.md" "verdict tag is the last line of every output template"
 else
-  report 1 "reviewer.md" "verdict tag is the last line of the output template (line='$TAG_LINE' next='$NEXT_LINE')"
+  report 1 "reviewer.md" "verdict tag is the last line of every output template (lines='$TAG_LINES' bad=$TAG_BAD)"
 fi
 
 if grep -qF '### 결론' "$REVIEWER_MD" && grep -qF '### 판정 표' "$REVIEWER_MD" \
@@ -204,6 +211,67 @@ if grep -qF '### 결론' "$REVIEWER_MD" && grep -qF '### 판정 표' "$REVIEWER_
   report 0 "reviewer.md" "결론 / 판정 표 / Findings sections intact"
 else
   report 1 "reviewer.md" "결론 / 판정 표 / Findings sections intact"
+fi
+
+# The tag lives in two places and only one of them counts the round.
+# record-verdict.sh reads the agent transcript — the reviewer's *reply* — so a
+# reply that ends with a findings table and a file path is recorded UNKNOWN,
+# the cycle never reaches the counter, and enforce-loop.sh lets the turn end
+# without a word. The file's copy is read by `/review --parse-verdict`, which
+# keeps working the whole time: the human path stays green while enforcement
+# goes dark. These three lines are what keeps a future "the reply is already
+# too long" edit from switching it off again.
+REPLY_SPEC=$(grep -F '답장에는' "$REVIEWER_MD" | grep -F '만 담는다')
+if printf '%s\n' "$REPLY_SPEC" | grep -qF '<verdict>'; then
+  report 0 "reviewer.md" "the reply spec lists the verdict tag among what the reply carries"
+else
+  report 1 "reviewer.md" "the reply spec lists the verdict tag among what the reply carries (spec='$REPLY_SPEC')"
+fi
+
+TAG_RULE=$(grep -F '`<verdict>` 태그는' "$REVIEWER_MD")
+if printf '%s\n' "$TAG_RULE" | grep -qF '답장' && printf '%s\n' "$TAG_RULE" | grep -qF '파일'; then
+  report 0 "reviewer.md" "the verdict tag is demanded on the last line of both the file and the reply"
+else
+  report 1 "reviewer.md" "the verdict tag is demanded on the last line of both the file and the reply (rule='$TAG_RULE')"
+fi
+
+if grep -qF 'record-verdict.sh' "$REVIEWER_MD"; then
+  report 0 "reviewer.md" "reviewer.md names the hook that reads the reply's tag"
+else
+  report 1 "reviewer.md" "reviewer.md names the hook that reads the reply's tag"
+fi
+
+# A re-review is the *same* reviewer resumed under the same phase name, so one
+# filename per phase means round 2 writes over round 1 — and round 1's file is
+# what the skill hands round 2 as "the previous round's findings". The notes
+# directory already holds review-phase2-verdict.log next to its -r2- and -r3-,
+# so the convention exists; only the instruction has to follow it.
+if grep -qF 'review-<phase>-r<N>-verdict.log' "$REVIEWER_MD" \
+   && grep -qF '덮어쓰지' "$REVIEWER_MD"; then
+  report 0 "reviewer.md" "round 2+ writes its own verdict log instead of overwriting the last one"
+else
+  report 1 "reviewer.md" "round 2+ writes its own verdict log instead of overwriting the last one"
+fi
+
+# The orchestrator's side of the same defect: it parses the *file*, which has
+# the tag either way, so a reply recorded as UNKNOWN looks like a clean round
+# from where /review stands. It has to be told what a missing tag means.
+REVIEW_SKILL="$REPO_ROOT/.claude/skills/review/SKILL.md"
+if grep -qF '<verdict>' "$REVIEW_SKILL"; then
+  report 0 "review/SKILL.md" "the orchestrator is told a reply without the tag was recorded UNKNOWN"
+else
+  report 1 "review/SKILL.md" "the orchestrator is told a reply without the tag was recorded UNKNOWN"
+fi
+
+# Resuming the worker that wrote the phase keeps its transcript, and a wrong
+# assumption is part of that transcript — the one thing a blank instance was
+# good at dropping. The plan wrote down the way out; a way out that lives only
+# in the plan is not one, because the skill is the file the orchestrator reads.
+ESCAPE_HATCH=$(grep -iF 'spawn fresh' "$REVIEW_SKILL")
+if printf '%s\n' "$ESCAPE_HATCH" | grep -qiF 'twice'; then
+  report 0 "review/SKILL.md" "a worker that repeats a finding gets closed instead of resumed again"
+else
+  report 1 "review/SKILL.md" "a worker that repeats a finding gets closed instead of resumed again (line='$ESCAPE_HATCH')"
 fi
 
 verdict_case 0 "APPROVE" "APPROVE -> stdout APPROVE, exit 0" \
@@ -2570,6 +2638,147 @@ for CORRUPT in 3 true '[]' '{}'; do
     report 1 "$R" "a last_diff_sha of $CORRUPT is not carried over as a string (prev='$GOT_PREV' last='$GOT_FP')"
   fi
 done
+
+# ---------- record-verdict.sh : the base a re-review diffs against ----------
+# Round 1 of /review diffs the whole phase off the merge-base. Every later round
+# re-reads that same accumulation — measured on Phase 3: 76KB, then 114KB, then
+# 123KB, most of the third already reviewed twice. The base for round N+1 is the
+# commit round N judged, and this hook is the only thing that knows when a round
+# was judged.
+#
+# Not last_diff_sha: that is a `git hash-object` of the working tree, a value no
+# `git diff` can take as an argument. Two keys because they answer two different
+# questions — "did anything move" and "move from where".
+
+PROJ=$(new_git_proj)
+record_block "$PROJ"
+WANT_HEAD=$(git -C "$PROJ" rev-parse HEAD)
+GOT_HEAD=$(state_field "$PROJ/$STATE_REL" last_reviewed_head)
+if [ "$GOT_HEAD" = "$WANT_HEAD" ]; then
+  report 0 "$R" "a BLOCK records the commit that was reviewed"
+else
+  report 1 "$R" "a BLOCK records the commit that was reviewed (got '$GOT_HEAD' want '$WANT_HEAD')"
+fi
+
+# The coder commits its fix and the next BLOCK moves the base forward. A base
+# stuck at the first commit would hand round 3 everything round 2 already saw,
+# which is the whole cost this key exists to remove.
+printf 'fix\n' > "$PROJ/tracked.txt"
+git -C "$PROJ" commit -qam fix --no-gpg-sign >/dev/null 2>&1
+record_block "$PROJ"
+MOVED_HEAD=$(git -C "$PROJ" rev-parse HEAD)
+GOT_HEAD2=$(state_field "$PROJ/$STATE_REL" last_reviewed_head)
+if [ "$GOT_HEAD2" = "$MOVED_HEAD" ] && [ "$GOT_HEAD2" != "$WANT_HEAD" ]; then
+  report 0 "$R" "a later BLOCK moves the base to the commit it judged"
+else
+  report 1 "$R" "a later BLOCK moves the base to the commit it judged (got '$GOT_HEAD2' want '$MOVED_HEAD')"
+fi
+rm -rf "$PROJ"
+
+# APPROVE ends the phase, and the next phase's first review has to see all of
+# itself. A base left on disk would quietly make that review incremental against
+# a commit belonging to the phase before it.
+PROJ=$(new_git_proj)
+record_block "$PROJ"
+assistant_jsonl "$PROJ/approve.jsonl" '<verdict>APPROVE</verdict>'
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/approve.jsonl")" >/dev/null
+GOT_HEAD=$(state_field "$PROJ/$STATE_REL" last_reviewed_head)
+rm -rf "$PROJ"
+if [ -z "$GOT_HEAD" ]; then
+  report 0 "$R" "an APPROVE drops the review base, as it drops the fingerprints"
+else
+  report 1 "$R" "an APPROVE drops the review base, as it drops the fingerprints (got '$GOT_HEAD')"
+fi
+
+# UNKNOWN is a review that reached no verdict, so no round happened. Moving the
+# base here would hide the last judged round's diff from the next real reviewer
+# — the one case where a smaller diff is a worse review.
+PROJ=$(new_git_proj)
+record_block "$PROJ"
+BASE=$(state_field "$PROJ/$STATE_REL" last_reviewed_head)
+printf 'more\n' > "$PROJ/tracked.txt"
+git -C "$PROJ" commit -qam more --no-gpg-sign >/dev/null 2>&1
+assistant_jsonl "$PROJ/unknown.jsonl" 'I could not finish the review.'
+record_run "$PROJ" "$(subagent_stop_json reviewer "$PROJ/unknown.jsonl")" >/dev/null
+GOT_HEAD=$(state_field "$PROJ/$STATE_REL" last_reviewed_head)
+rm -rf "$PROJ"
+if [ -n "$BASE" ] && [ "$GOT_HEAD" = "$BASE" ]; then
+  report 0 "$R" "an UNKNOWN leaves the review base where the last judged round put it"
+else
+  report 1 "$R" "an UNKNOWN leaves the review base where the last judged round put it (got '$GOT_HEAD' want '$BASE')"
+fi
+
+# No repo and no commits get the same answer: absent, not "". /review keys its
+# fallback off whether a base is there at all, and an empty string reaching
+# `git diff` as an argument diffs against the index instead — a silently
+# different review, which is worse than an honestly full one.
+for CASE in no-repo no-commits; do
+  PROJ=$(new_proj)
+  if [ "$CASE" = no-commits ]; then
+    git -C "$PROJ" init -q >/dev/null 2>&1
+    git -C "$PROJ" config user.email harness@example.invalid
+    git -C "$PROJ" config user.name harness-tests
+  fi
+  record_block "$PROJ"
+  SHAPE=$(python3 -c 'import json,sys
+s = json.load(open(sys.argv[1]))
+print("absent" if "last_reviewed_head" not in s else repr(s["last_reviewed_head"]))' \
+    "$PROJ/$STATE_REL" 2>/dev/null)
+  GOT_V=$(state_field "$PROJ/$STATE_REL" last_verdict)
+  rm -rf "$PROJ"
+  if [ "$SHAPE" = absent ] && [ "$GOT_V" = BLOCK ]; then
+    report 0 "$R" "$CASE -> no review base at all, the verdict is still recorded"
+  else
+    report 1 "$R" "$CASE -> no review base at all, the verdict is still recorded (base=$SHAPE verdict='$GOT_V')"
+  fi
+done
+
+# The writer preserves keys it does not know about. Adding one of its own must
+# not cost it that.
+PROJ=$(new_git_proj)
+printf '{"last_verdict":"BLOCK","attempt":1,"a_key_from_the_future":"keep me"}\n' > "$PROJ/$STATE_REL"
+record_block "$PROJ"
+KEPT=$(state_field "$PROJ/$STATE_REL" a_key_from_the_future)
+GOT_HEAD=$(state_field "$PROJ/$STATE_REL" last_reviewed_head)
+rm -rf "$PROJ"
+if [ "$KEPT" = "keep me" ] && [ -n "$GOT_HEAD" ]; then
+  report 0 "$R" "recording a review base keeps keys this hook does not know"
+else
+  report 1 "$R" "recording a review base keeps keys this hook does not know (kept='$KEPT' base='$GOT_HEAD')"
+fi
+
+# ---------- enforce-loop.sh : the review base is none of its business ----------
+# D7 as a test, and the guard on this whole change: the reason a token
+# optimisation was allowed anywhere near the hook that holds the loop budget is
+# that it only ever writes. enforce-loop.sh does not read last_reviewed_head, so
+# no value of it can move a budget decision.
+#
+# The two states are the ones the no-progress cases above pin — stalled (exit 0)
+# and moved (exit 2). Every shape a JSON file can hold gets bolted onto both and
+# has to leave the answer alone. The string cases matter most: those are the ones
+# a reader added later would actually parse, and the loop would then have a
+# switch nobody knew they were flipping.
+#
+# Both engines, byte for byte, not whichever one this host happens to have: a
+# reader added to one branch only is how the other two keys in this file drifted
+# apart twice, and a single-engine case would let it ship green — green on a
+# machine with jq, and green the opposite way on a machine without it. That is
+# what fingerprint_parity_case is for, so it is what runs here; it reads
+# $FP_NOJQ, which the block above already removed, so build one for this block.
+FP_NOJQ=$(mktemp -d /tmp/hooktest-nojq-head-XXXXXX)
+ln -s "$REAL_PY" "$FP_NOJQ/python3"
+ln -s "$(command -v cat)" "$FP_NOJQ/cat"
+
+for HEAD_VALUE in '"deadbeef"' '""' 'null' '3' 'true' '[]' '{}'; do
+  fingerprint_parity_case 0 "a last_reviewed_head of $HEAD_VALUE leaves the stalled verdict alone on both readers" \
+    "{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"last_diff_sha\":\"deadbeef\",\"prev_diff_sha\":\"deadbeef\",\"last_reviewed_head\":$HEAD_VALUE}" \
+    '무진전'
+  fingerprint_parity_case 2 "a last_reviewed_head of $HEAD_VALUE leaves the moved verdict alone on both readers" \
+    "{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"last_diff_sha\":\"deadbeef\",\"prev_diff_sha\":\"cafebabe\",\"last_reviewed_head\":$HEAD_VALUE}" \
+    'attempt 1/3'
+done
+
+rm -rf "$FP_NOJQ"
 
 # ---------- the two hooks : a stalled loop stops before the budget does ----------
 # The cases above seed fingerprints by hand. This one lets the hooks produce

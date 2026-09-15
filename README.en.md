@@ -108,6 +108,29 @@ There are three reasons it stops, and all three exit 0 to release the turn while
 ### 6. Response format is enforced too — conclusion first, evidence after
 Free-form LLM prose buries the conclusion mid-text and never separates scope (made by this work vs. pre-existing). A [BLUF (Bottom Line Up Front)](https://en.wikipedia.org/wiki/BLUF_(communication)) template is pinned in `CLAUDE.md` — making 4 sections mandatory: **conclusion → evidence (file:line) → scope·severity tags → decision needed (with one recommended option)**. Header labels are spelled out in Korean (English abbreviations like `TL;DR / Decision needed` are banned — they hurt readability); only the tag vocabulary (`[NEW]/[EXISTING]/[BLOCK]/[CHANGES]/[NIT]`) is shared with the `reviewer` and `tester` subagents — so there's no vocabulary switch between main-session reports and review results.
 
+### 7. Keeping the loop affordable enough to run
+
+A loop that is enforced actually runs, and then **the cost of one round sets the pace of the work.** Measured across three phases in this repo:
+
+```
+12 review rounds
+617KB of diff read by reviewers      one phase alone: 76KB → 114KB → 123KB (r1/r2/r3)
+29 subagent spawns                   8 of them fix rounds
+test suite 75 cases / 25s → 407 cases / 90s
+```
+
+`76KB → 114KB → 123KB` is the shape of the problem. Each round is bigger than the last, because `git diff $(git merge-base <base> HEAD)...HEAD` is the **accumulated branch diff** — it grows with every fix commit, and a re-review reads the whole phase from scratch rather than what the coder just changed. Most of r3's 123KB had already been read twice.
+
+Three places to cut.
+
+**What a re-review re-reads.** `record-verdict.sh` records the HEAD at each reviewer stop as `last_reviewed_head`, and from round 2 `/review` diffs against that sha alone. The key is dropped on APPROVE so the next phase starts from a full diff again. Measured: 444 lines → 229. The *scope* does not shrink — the reviewer is handed the previous round's full diff file and its findings, and spec correctness is still judged against the whole phase.
+
+**What a fix round rebuilds.** A fix is the same coder's job, so it is resumed with `SendMessage` rather than spawned fresh. A resumed worker still holds the plan, the files it read and its own reasoning. The docs are explicit that *"Each subagent invocation creates a new instance rather than continuing an earlier one"*, and prompt caching agrees — it costs more than it saves at two calls and turns profitable around three, which is exactly the length of a fix loop. There is a price: resuming hands back **any wrong assumption too**, which a blank instance would have dropped. So when the same finding comes back twice, that worker is closed and a new one takes over.
+
+**What a report drags into the main session.** The reviewer writes its full review to `.claude/notes/review-<phase>-r<N>-verdict.log` **first**, then replies with just the conclusion line, the findings table, the file path and the `<verdict>` tag. Tokens crossing a model boundary are billed twice and then sit in the main context for the rest of the session, while the orchestrator only needs the verdict and who to hand it to. It also survives crashes better — one reviewer died on a session limit with its review already safely on disk.
+
+> **Careful** — the `<verdict>` tag in the *reply* is not optional. `record-verdict.sh` reads the reviewer's reply, not the file. A reply that does not end with the tag is recorded as `UNKNOWN` and that round is never counted — while the file still carries a perfectly readable verdict, so **nothing anywhere warns you**. The first draft of this very section shipped that defect and the review caught it as a `BLOCK`: a change meant to save tokens was a path to switching loop enforcement off.
+
 ---
 
 > The expensive parts — phase decomposition, the TDD cycle, edge-case expansion, 4-lens review, the auto-fix loop — are handled by AI; the human only passes the three gates.
@@ -535,10 +558,11 @@ When the reviewer finishes, this writes down its verdict. It parses the last ans
 ```json
 // .claude/notes/loop-state.json  (gitignored)
 {"last_verdict": "BLOCK", "attempt": 2, "enforced": false,
- "last_diff_sha": "8f3c…", "prev_diff_sha": "1a90…"}
+ "last_diff_sha": "8f3c…", "prev_diff_sha": "1a90…",
+ "last_reviewed_head": "4837194…"}
 ```
 
-`APPROVE` resets `attempt` to 0, `BLOCK` / `REQUEST CHANGES` increments it, and a verdict that could not be read (`UNKNOWN`) leaves it alone. `last_diff_sha` is this cycle's working-tree fingerprint and `prev_diff_sha` is the previous cycle's — `enforce-loop.sh` below compares the two to cut off a loop that is spinning in place. When a verdict cannot be recorded **at all**, `record_failed` / `record_failed_reason` go in instead, so that cycle does not disappear in silence. The counter lives on disk rather than in context because one compaction is all it takes for a number in context to be gone. **Always exits 0**, whatever the input — `SubagentStop`'s exit 2 means "prevent the subagent from stopping", which would only keep the read-only reviewer running.
+`APPROVE` resets `attempt` to 0, `BLOCK` / `REQUEST CHANGES` increments it, and a verdict that could not be read (`UNKNOWN`) leaves it alone. `last_diff_sha` is this cycle's working-tree fingerprint and `prev_diff_sha` is the previous cycle's — `enforce-loop.sh` below compares the two to cut off a loop that is spinning in place. `last_reviewed_head` is the **commit that was reviewed**, and the next round's `/review` diffs from there so it does not re-read code it has already read (a fingerprint is a content hash, which `git diff` cannot take as an argument). That one key is the exception `enforce-loop.sh` never reads — the retry budget judges only on values it owns. When a verdict cannot be recorded **at all**, `record_failed` / `record_failed_reason` go in instead, so that cycle does not disappear in silence. The counter lives on disk rather than in context because one compaction is all it takes for a number in context to be gone. **Always exits 0**, whatever the input — `SubagentStop`'s exit 2 means "prevent the subagent from stopping", which would only keep the read-only reviewer running.
 
 > ⚠️ **A reviewer subagent's name must start with `reviewer`.** This hook records only when `agent_type` is `reviewer` or `reviewer-*` (so teammate names like `reviewer-phase2` still count). Spawn it as `phase3-reviewer` or `review-gate` and nothing is recorded — and with nothing recorded, the enforcement below is **silently off**.
 

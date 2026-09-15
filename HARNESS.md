@@ -174,7 +174,11 @@ Claude 의 도구 호출 직전/직후, 그리고 agent · 턴이 끝나는 시�
 
 리뷰어가 끝날 때 그 판정을 디스크에 적어두는 훅. 서브에이전트 트랜스크립트에서 마지막 답변을 꺼내 `run_phase.py --parse-verdict` 로 파싱하고, 결과를 `.claude/notes/loop-state.json` 에 `last_verdict` / `attempt` / `enforced` 로 기록한다. `APPROVE` 면 `attempt` 를 0 으로 되돌리고, `BLOCK` 이나 `REQUEST CHANGES` 면 1 올리고, 판정을 못 읽었으면(`UNKNOWN`) 그대로 둔다. 카운터를 컨텍스트가 아니라 파일에 두는 이유는 압축 한 번이면 컨텍스트 안의 숫자는 사라지기 때문이다.
 
-세 필드가 전부는 아니다. `BLOCK` / `REQUEST CHANGES` 를 기록할 때는 그 순간의 작업 트리 지문을 `last_diff_sha` 에, 직전 사이클의 지문을 `prev_diff_sha` 에 함께 남긴다 (아래 `enforce-loop.sh` 가 둘을 비교한다). `APPROVE` 거나 지문을 뜰 수 없으면 — git 저장소가 아닌 경우 — 두 값을 지운다. 그리고 판정을 **아예 기록하지 못했으면** 그 사실을 `record_failed` / `record_failed_reason` 으로 남긴다. 기록에 성공하면 그 표시는 지워진다.
+세 필드가 전부는 아니다. `BLOCK` / `REQUEST CHANGES` 를 기록할 때는 그 순간의 작업 트리 지문을 `last_diff_sha` 에, 직전 사이클의 지문을 `prev_diff_sha` 에 함께 남긴다 (아래 `enforce-loop.sh` 가 둘을 비교한다). `APPROVE` 거나 지문을 뜰 수 없으면 — git 저장소가 아닌 경우 — 두 값을 지운다.
+
+같은 자리에 **리뷰한 커밋** 도 `last_reviewed_head` 로 남긴다. 다음 라운드의 `/review` 가 여기서부터 diff 를 떠서, 이미 두 번 읽은 코드를 세 번째로 읽지 않게 하는 값이다. `last_diff_sha` 로는 안 되는데, 그건 작업 트리 **내용 해시**라 `git diff` 의 인자가 될 수 없기 때문이다. `APPROVE` 면 지문과 함께 지워져서 다음 Phase 의 첫 리뷰는 항상 전체 diff 로 시작한다.
+
+**이 키는 `enforce-loop.sh` 가 읽지 않는다.** 쓰는 건 이 훅, 읽는 건 `/review` 스킬뿐이다. 루프 예산이 자기가 소유하지 않은 키에 의존하면 안 되기 때문 — 값이 깨져도 라운드 하나가 절감분을 잃을 뿐, 강제가 꺼지지는 않는다. 그리고 판정을 **아예 기록하지 못했으면** 그 사실을 `record_failed` / `record_failed_reason` 으로 남긴다. 기록에 성공하면 그 표시는 지워진다.
 
 **어떤 입력에도 exit 0.** `SubagentStop` 의 exit 2 는 "서브에이전트를 멈추지 못하게 한다" 는 뜻이라, read-only 인 리뷰어를 계속 돌리는 것 외엔 아무 효과가 없다. 판정은 아래 `enforce-loop.sh` 가 한다.
 

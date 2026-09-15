@@ -259,12 +259,37 @@ diff_fingerprint() {  # -> hash of the repo's current state, or "" if unavailabl
   } | git -C "$dir" hash-object --stdin 2>/dev/null || return 0
 }
 
+# The commit the reviewer just judged, which is the base the next round's diff
+# starts from. `/review` reads it; nothing in enforce-loop.sh does, and that is
+# deliberate — the budget must not depend on a key the loop does not own, so a
+# corrupt or hand-edited value here can cost a round its saving and can never
+# switch enforcement off.
+#
+# Not diff_fingerprint(): that hashes the working tree, and no `git diff` takes
+# such a value as an argument. The two keys answer different questions — whether
+# anything moved, and what to measure the next move from.
+#
+# Read at SubagentStop, when the reviewer (read-only) has just finished, so HEAD
+# is still the commit it reviewed. Empty is a valid answer — no git, no repo, no
+# commits yet — and `/review` falls back to the full merge-base diff on it.
+reviewed_head() {  # -> the reviewed commit's sha, or "" if unavailable
+  local dir="${CLAUDE_PROJECT_DIR:-.}"
+  command -v git >/dev/null 2>&1 || return 0
+  git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  # `--verify --quiet` and not a bare `rev-parse HEAD`: on a repo with no commits
+  # the bare form exits non-zero *after* printing the literal string `HEAD` on
+  # stdout, and `|| return 0` cannot take that back. The state file would then
+  # carry `last_reviewed_head: "HEAD"` — a base `git diff` accepts as the current
+  # tip, making round 2 diff HEAD against itself and review an empty change.
+  git -C "$dir" rev-parse --verify --quiet HEAD 2>/dev/null || return 0
+}
+
 # Preserves keys this hook does not know about.
-record_state() {  # <verdict> <diff-fingerprint|"">
-  python3 - "$STATE_FILE" "$1" "$2" <<'PY'
+record_state() {  # <verdict> <diff-fingerprint|""> <reviewed-head|"">
+  python3 - "$STATE_FILE" "$1" "$2" "$3" <<'PY'
 import json, os, sys
 
-path, verdict, fingerprint = sys.argv[1], sys.argv[2], sys.argv[3]
+path, verdict, fingerprint, head = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 try:
     with open(path) as f:
         state = json.load(f)
@@ -296,6 +321,10 @@ def forget_progress():
     # asked, and the answer it would give is "stalled".
     state.pop("prev_diff_sha", None)
     state.pop("last_diff_sha", None)
+    # The review base belongs to the same broken adjacency. Left behind, it
+    # would make the next phase's first review incremental against a commit from
+    # the phase before it — a diff that is smaller because it is wrong.
+    state.pop("last_reviewed_head", None)
 
 
 if verdict == "APPROVE":
@@ -319,6 +348,23 @@ else:
         state["last_diff_sha"] = fingerprint
     else:
         forget_progress()
+    # After the fingerprint branch, and independent of it. The two are
+    # measurements of the same moment, but either can come back empty on its
+    # own, and a base thrown away because the *other* measurement failed would
+    # cost the next round its saving for no reason. Written last so the
+    # forget_progress() above cannot take it back.
+    #
+    # A string or nothing, never "" — the same rule the fingerprints keep, for
+    # the same reason. `/review` asks whether a base is there at all, and an
+    # empty base is not a smaller base, it is a different command: quoted it
+    # dies (`git diff ""` -> fatal: ambiguous argument, exit 128), unquoted it
+    # vanishes and `git diff` compares the tree to the index. One review that
+    # never runs, one that runs on the wrong question — and the second is the
+    # quiet one, which is why the key is absent instead of empty.
+    if head:
+        state["last_reviewed_head"] = head
+    else:
+        state.pop("last_reviewed_head", None)
 
 # open(path, "w") truncates first, and a Stop firing inside that window would
 # read a zero-byte file, warn and give up the turn. Rename instead: a reader
@@ -387,6 +433,7 @@ esac
 # that a thin PATH cannot drown out this hook's one warning, and this line sits
 # under the same rule. STATE_FILE always carries a directory component.
 mkdir -p "${STATE_FILE%/*}" 2>/dev/null || true
-record_state "$VERDICT" "$(diff_fingerprint)" || give_up "could not write $STATE_FILE"
+record_state "$VERDICT" "$(diff_fingerprint)" "$(reviewed_head)" \
+  || give_up "could not write $STATE_FILE"
 
 exit 0

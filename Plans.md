@@ -226,6 +226,88 @@ pytest 를 새로 들이지 않는다. 하네스는 설치 단계 없이 어디�
 
 ---
 
+### Phase 5 — 재리뷰가 이미 본 것을 다시 읽지 않는다 (착수 2026-09-14)
+
+**측정이 먼저다.** `.claude/notes/*.diff` 합계 617KB(≈176k 토큰), verdict 로그 143KB(≈41k 토큰), 서브에이전트 58회. Phase 3 한 개가 `76KB → 114KB → 123KB`(r1/r2/r3) = 313KB ≈ 90k 토큰인데, r3 diff 123KB 중 대부분은 r1·r2 에서 이미 읽은 내용이다.
+
+원인은 `review/SKILL.md:12` 의 `git diff $(git merge-base <base> HEAD)...HEAD` 가 **브랜치 누적 diff** 라는 점이다. fix 커밋이 쌓일수록 커지고, 재리뷰는 "이번 수정분"이 아니라 "Phase 전체"를 매번 처음부터 다시 읽는다. 비용이 라운드 수에 선형이 아니라 **누적 × 라운드** 로 붙는다.
+
+> **Non-goals:36 과의 관계** — "토큰·비용 예산 실링" 은 **여전히 non-goal** 이다. 여기서 하는 건 상한을 거는 게 아니라, 같은 리뷰를 같은 품질로 하면서 **중복 입력을 제거**하는 것이다. 리뷰 범위는 줄지 않는다 (D8).
+
+- **Scope**: 리뷰 시점의 HEAD 를 상태 파일에 기록 + `/review` 가 2회차부터 증분 diff 를 뜨도록 분기
+- **설계 결정**
+  - **D6. diff base 는 커밋 sha 이며 무진전 지문과 별개다.** `last_diff_sha` 는 `record-verdict.sh:258` 의 `git hash-object` 기반 **워킹트리 내용 해시**라 `git diff` 의 base 로 쓸 수 없다. 새 키 `last_reviewed_head` 를 추가한다.
+  - **D7. 새 키는 `record-verdict.sh` 만 쓰고 `enforce-loop.sh` 는 읽지 않는다.** 읽는 쪽을 안 건드리면 `enforce-loop.sh:68` 의 jq/python3 이중 엔진 렌더링 규칙(`STATE_STRING_JQ`)과 그 아래 예산 판정 경로가 그대로 남는다. 블라스트 반경을 writer 한쪽으로 가둔다.
+  - **D8. 증분은 리뷰어가 보는 1차 표면이지 리뷰 범위가 아니다.** Spec correctness 렌즈는 계속 Phase 전체를 판정한다. 리뷰어에게 증분 diff(인라인) + **직전 전체 diff 파일 경로** + 직전 라운드 findings 를 함께 준다. 리뷰어는 `Read/Grep/Bash` 를 갖고 있으므로 필요하면 실제 파일을 본다.
+  - **D9. base 가 닿지 않으면 전체로 폴백한다.** coder 가 amend/rebase 하면 기록된 sha 가 unreachable 이 된다. 조용히 빈 diff 로 리뷰를 통과시키는 게 최악이므로, 존재 확인에 실패하면 merge-base 전체 diff 로 되돌아가고 그 사실을 리뷰어에게 명시한다.
+  - **D10. 증분은 `<sha>..HEAD` 가 아니라 `git diff <sha>`.** 후자는 워킹트리까지 포함한다. coder 가 커밋을 안 한 경우 전자는 빈 diff 가 되는데, 그건 "수정 없음"이 아니라 "커밋 안 함"이고 기존 3단계가 이미 `[NEW][CHANGES]` 로 잡는 사안이다.
+- **Touched files (expected)**:
+  - `.claude/hooks/record-verdict.sh` — `record_state()` 에 `last_reviewed_head` 쓰기 (읽기 추가 없음)
+  - `.claude/skills/review/SKILL.md` — 2단계 diff 캡처 분기
+  - `.claude/agents/reviewer.md:25` — Process 3 을 증분 분기에 맞춤
+  - `.claude/hooks/tests/run-tests.sh` — 케이스 추가
+  - `HARNESS.md`, `README.md`, `README.en.md` — 동기화
+- **Out of scope**: `enforce-loop.sh` 수정, 무진전 감지 로직 변경, `/orchestrator` 자동화, verdict 로그 크기(별건)
+- **Acceptance** (TDD-ready):
+
+  기록 — `record-verdict.sh`
+  - [ ] BLOCK / CHANGES 기록 시 `last_reviewed_head` 에 그 시점 `git rev-parse HEAD` 가 **JSON 문자열로** 들어간다
+  - [ ] APPROVE → 키를 **삭제**한다. `forget_progress()` 와 같은 이유 — Phase 가 끝났으므로 다음 Phase 는 전체 리뷰로 시작해야 한다
+  - [ ] UNKNOWN → 키를 **그대로 둔다**. 판정이 없었으면 사이클도 없었고, 다음 판정은 마지막으로 판정된 리뷰 기준으로 비교돼야 한다
+  - [ ] git 저장소가 아니거나 HEAD 가 없는(커밋 0개) 경우 → **키를 쓰지 않는다.** 빈 문자열이나 에러 문자열을 넣지 않는다 (`last_diff_sha` 의 string-or-nothing 규칙과 동일)
+  - [ ] 기존 키(`last_verdict`, `attempt`, `enforced`, `last_diff_sha`, `prev_diff_sha`, 훅이 모르는 키)가 전부 보존된다
+  - [ ] **`enforce-loop.sh` 의 판정이 이 키와 무관하다** — `last_reviewed_head` 에 숫자·리스트·불린·누락 어느 것을 넣어도 예산 강제 exit code 가 불변 (D7 을 테스트로 고정)
+
+  소비 — `review/SKILL.md`
+  - [ ] 2단계가 두 분기로 갈라진다: `last_reviewed_head` 없음 → merge-base 전체 diff / 있음 → `git diff <last_reviewed_head>`
+  - [ ] base sha 가 unreachable (`git cat-file -e <sha>^{commit}` 실패) → 전체 diff 폴백 + 리뷰어에게 폴백 사실 명시 (D9)
+  - [ ] 증분 리뷰 시 리뷰어에게 넘기는 3종이 명시된다: 증분 diff / 직전 전체 diff 파일 경로 / 직전 라운드 findings (D8)
+  - [ ] Spec correctness 렌즈는 Phase 전체 기준임이 스킬과 `reviewer.md` 양쪽에 적힌다 — **증분만 보고 인수 기준을 판정하지 않는다**
+  - [ ] 증분 diff 가 비어 있으면 "리뷰 스킵"이 아니라 무진전이다. `enforce-loop.sh` 의 `무진전 중단` 과 같은 결론(에스컬레이션)으로 간다
+
+  문서
+  - [ ] `HARNESS.md` 의 loop-state.json 키 목록에 `last_reviewed_head` 와 "writer 전용" 이 등재된다
+  - [ ] `README.md` / `README.en.md` 내용 동등 (`docs/harness/DOC_SYNC_POLICY.md` 준수)
+- **Risk**: 증분 리뷰가 회귀를 놓친다 — 라운드 2 의 fix 가 라운드 1 에서 통과시킨 코드를 깨뜨리는 경우. 완화는 D8(전체 diff 파일 포인터 + 전체 기준 spec 렌즈)이고, 이건 **완화지 제거가 아니다.** 실측으로 확인할 것: Phase 5 자신의 리뷰가 2라운드 이상 가면 그 라운드가 곧 이 리스크의 첫 시험대다.
+- **기대 효과**: Phase 3 실측 기준 90k → ~30k 토큰. 라운드가 늘수록 격차가 커진다.
+
+### Phase 6 — 워커를 다시 만들지 말고 이어 쓰고, 보고는 디스크에 둔다 (착수 2026-09-15)
+
+> **프로세스 누락 기록.** 이 Phase 의 코드(`f733a90`)가 **계획 항목보다 먼저 커밋됐다.** 하네스 자기 규칙(`코드 전에 합의된 Plans.md`) 위반이고, 리뷰어가 spec correctness 를 판정할 근거가 없는 상태였다. 본 항목은 리뷰 직전에 사후 작성한 것이며, 그 사실을 숨기지 않기 위해 여기 적는다.
+
+Phase 5 가 **재리뷰가 다시 읽는 diff** 를 줄였다면, 여기는 같은 비용의 나머지 두 갈래 — **fix 라운드가 다시 쌓는 컨텍스트**와 **모델 경계를 넘는 보고 크기** — 를 줄인다.
+
+- **측정 근거**: 2026-09-05~06 세션에서 서브에이전트 29회 스폰. 그중 fix 라운드 8회 대부분을 **기존 워커 재개가 아니라 신규 스폰**으로 처리했고, 각 신규 코더가 `Plans.md`·훅 2개·리뷰 로그를 처음부터 다시 읽었다.
+- **설계 결정**
+  - **D11. 같은 일이 이어지면 재개, 역할이 바뀌면 닫는다.** 기존 규칙 "다음을 띄우기 전에 이전 것을 닫아라" 는 *두 워커가 같은 파일을 동시에 들지 않게* 하려던 것인데, 모든 인수인계에 적용되어 이어서 할 일까지 닫았다. 공식 문서는 invocation 이 항상 새 인스턴스를 만들고 재개는 의도적 행위임을 명시한다. 프롬프트 캐시도 같은 방향 — 2회 이하에서는 손해, 3회 근처에서 손익분기이고 fix 루프가 정확히 3회다.
+  - **D12. 보고는 파일이 먼저, 답장은 나중.** 모델 경계를 넘는 토큰은 두 번 청구되고 그 세션이 끝날 때까지 컨텍스트에 남는다. 오케스트레이터에게 필요한 건 verdict 와 "누구에게 넘길지" 뿐이다. 부수 효과로 크래시 내성이 생긴다 — 2026-09-06 리뷰어 하나가 세션 한도로 죽었는데 파일에 먼저 썼기 때문에 리뷰가 살아남았다.
+  - **D13. 조용함을 멈춤으로 읽지 않는다.** 2026-09-06 감사를 마치고 테스트를 쓰던 tester 를 "5분간 파일 안 씀" 을 근거로 죽여 미커밋 작업을 잃었다. 90초 스위트를 반복 실행 중이었다. 판단 근거는 시간이 아니라 산출물(커밋·파일·프로세스)이다.
+- **Touched files**: `.claude/skills/work/SKILL.md`, `.claude/skills/review/SKILL.md`, `.claude/agents/reviewer.md`
+- **Out of scope**: 훅 수정, `run_phase.py`, Phase 5 의 증분 diff 로직, `/orchestrator` 자동화
+- **Acceptance**
+  - [ ] `work/SKILL.md` 수명 규칙이 "역할 전환 시 닫기 / 연속 시 재개" 로 갈라지고, 닫아야 하는 이유(파일 동시 보유)가 남는다
+  - [ ] `review/SKILL.md` 의 fix 라운드가 신규 스폰이 아니라 **기존 코더·리뷰어 재개**를 기본으로 지시한다. 문서 전용 findings 는 documenter 로 간다고 명시한다 (`enforce-loop.sh:379` 의 재투입 문구와 일치)
+  - [ ] `reviewer.md` 가 전문을 `.claude/notes/` 에 **먼저** 쓰고 답장에는 verdict + 판정 표 + 경로만 담도록 지시한다
+  - [ ] `review/SKILL.md` 6단계가 그 파일을 `--parse-verdict` 로 기계 판독하고, 전문을 대화에 붙여넣지 말라고 명시한다
+  - [ ] "조용함 ≠ 멈춤" 이 근거 사례와 함께 `work/SKILL.md` 에 남는다
+  - [ ] 기존 401 케이스 회귀 0 (본 Phase 는 훅을 안 건드리므로 스위트는 카나리아)
+**Review: APPROVE — 2026-09-15** (2라운드, 예산 2/3). Phase 5·6 공통. 407/407 통과 (착수 시 401).
+
+라운드 1 은 **BLOCK** 이었고 그 결함은 내가 만든 것이다 — `reviewer.md` 에서 `<verdict>` 태그를 "파일에 쓸 전문의 형식" 안으로 밀어넣어, **답장에는 태그를 요구하지 않게** 됐다. `record-verdict.sh` 는 답장만 읽으므로 판정이 `UNKNOWN` 으로 기록되고 그 라운드가 세어지지 않는다. 파일 쪽 판정은 멀쩡히 읽히므로 경고도 안 뜬다. **토큰을 아끼려던 최적화가 루프 강제를 끄는 경로였다.** 이번에 안 터진 건 스폰 프롬프트에 태그를 직접 요구해서였고, 그 임시 지시가 결함을 가렸다.
+
+라운드 2 는 **Phase 5·6 을 자기 자신에게 적용한 첫 사례**다 — 리뷰어를 재스폰이 아니라 재개했고, diff 는 444줄 전체가 아니라 229줄 증분이었다. 둘 다 리뷰 품질을 떨어뜨리지 않았다(리뷰어 판정).
+
+#### Phase 5·6 리뷰 이월 사항
+
+- **[NEW][NIT] `run-tests.sh:231-235`** — 태그 규칙 검사가 두 줄을 합쳐 보므로, 규칙을 "파일만"으로 약화시켜도 초록이다. 그물이 성긴 것이지 동작 결함은 아니다.
+- **[NEW][NIT] `review/SKILL.md:31`** — 복구 지시가 태그의 **존재**만 조건으로 삼아, 템플릿의 플레이스홀더를 그대로 복사한 답장을 못 잡는다.
+- **Question → 별도 티켓** — **탈출구가 코더 쪽에만 있다.** D11 은 "같은 finding 이 두 번 돌아오면 워커를 닫고 새로"인데, 재개된 **리뷰어**가 같은 지점을 두 라운드 연속 잘못 판정하거나 재검증을 생략하면 대응물이 없다. Plans.md 의 완화가 "리뷰어는 매 라운드 독립적으로 판정한다" 인데, **리뷰어 자신이 재개되면 그 독립성이 자동으로 주어지지 않는다.** 이번 라운드엔 사고가 없었지만 라운드 3 을 겪지 않아서일 수도 있다.
+- **Question → 별도 티켓** — `run-tests.sh:236-240` 의 `grep -qF 'record-verdict.sh'` 가 파일 어디든 그 문자열이 있으면 통과한다. 의도가 "훅 이름이 언급된다" 인지 "답장의 태그를 읽는 주체로 언급된다" 인지에 따라 조여야 한다.
+
+- **Risk**: 재개가 **오염된 컨텍스트를 물려준다.** 잘못된 가정 위에서 수정한 코더를 재개하면 그 가정이 그대로 남는다 — 신규 스폰의 유일한 장점이 백지에서 시작하는 것이었다. 완화는 리뷰어가 매 라운드 독립적으로 판정한다는 것이고, **이건 완화지 제거가 아니다.** 재개한 워커가 같은 실수를 반복하면 그때는 닫고 새로 띄울 것.
+
+---
+
 ## Open questions (해결됨 — 2026-09-05)
 
 - [x] **Q1 — verdict 어휘.** `<verdict>` 태그 안에는 `REQUEST CHANGES` (reviewer.md 의 기존 `### 결론` 표기와 동일), `run_phase.py` 의 파싱 결과 문자열은 `CHANGES` 로 정규화. Phase 1 인수 기준이 이미 이 형태다.
