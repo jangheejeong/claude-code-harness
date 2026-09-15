@@ -2037,8 +2037,11 @@ parser_run() {  # <hook-path> [env assignments...] -> "rc verdict attempt marked
   local proj rc=0 verdict attempt marked
   proj=$(new_proj)
   assistant_jsonl "$proj/transcript.jsonl" '<verdict>BLOCK</verdict>'
+  # The caller's arguments go first: `env` takes its options before any
+  # assignment, so a trailing `-u FOO` would be passed to bash as a command
+  # instead and the run would exit 127 having tested nothing.
   printf '%s' "$(subagent_stop_json reviewer "$proj/transcript.jsonl")" \
-    | env CLAUDE_PROJECT_DIR="$proj" "$@" bash "$hook" >/dev/null 2>&1 || rc=$?
+    | env "$@" CLAUDE_PROJECT_DIR="$proj" bash "$hook" >/dev/null 2>&1 || rc=$?
   verdict=$(dash_if_empty "$(state_field "$proj/$STATE_REL" last_verdict)")
   attempt=$(dash_if_empty "$(state_field "$proj/$STATE_REL" attempt)")
   marked=$(dash_if_empty "$(state_field "$proj/$STATE_REL" record_failed)")
@@ -2063,6 +2066,32 @@ ORPHAN=$(orphan_hook)
 parser_case "HARNESS_RUN_PHASE finds the parser a \$0 lookup cannot reach" \
   "0 BLOCK 1 -" "$ORPHAN/.claude/hooks/$R" "HARNESS_RUN_PHASE=$REPO_ROOT/scripts/harness/run_phase.py"
 rm -rf "$ORPHAN"
+
+# Unset is the case every run of this suite is already in, asserted here anyway
+# because it is the one the override could take away: a `${HARNESS_RUN_PHASE}`
+# written without a default turns every in-repo run into the orphan above.
+parser_case "unset -> the \$0-derived path, unchanged" \
+  "0 BLOCK 1 -" "$HOOKS_DIR/$R" -u HARNESS_RUN_PHASE
+
+# Empty is the one a future reader will get wrong, in either direction: `:-`
+# treats it as unset and falls back, while `-` would hand `python3` an empty
+# path. Both spellings look equally right in a diff and only one of them keeps a
+# half-finished ~/.claude/settings.json from silently disabling the loop, so the
+# behaviour is pinned rather than left to whoever edits the line next.
+parser_case "empty -> falls back to the default, not an empty path" \
+  "0 BLOCK 1 -" "$HOOKS_DIR/$R" HARNESS_RUN_PHASE=
+
+# A variable pointing at nothing is a misconfigured install, and it lands in the
+# path that already exists for a parser that cannot run: the failure is marked so
+# the next Stop can say so, the counter is not moved, and the turn is not
+# blocked. Inventing a verdict here would spend one of three attempts on a typo.
+parser_case "set to a path that does not exist -> marked as failed, counters untouched" \
+  "0 - - True" "$HOOKS_DIR/$R" HARNESS_RUN_PHASE=/nonexistent/run_phase.py
+
+# ...and a directory is the same misconfiguration with a different shape — the
+# obvious typo of naming the folder and not the file in settings.json.
+parser_case "set to a directory -> marked as failed, counters untouched" \
+  "0 - - True" "$HOOKS_DIR/$R" "HARNESS_RUN_PHASE=$REPO_ROOT/scripts/harness"
 
 # ---------- both hooks : CLAUDE_PROJECT_DIR is not guaranteed ----------
 # Hooks are invoked with the variable set, but a wrapper script, a manual run or
