@@ -344,6 +344,31 @@ ruff 가 깔려 있으면 무조건 ruff 다. 그래서 120자로 맞춰둔 8개
   - [ ] 407 케이스 회귀 0
 - **Risk**: D15 가 12개 프로젝트의 자동 포맷을 끈다. 그 레포들은 스타일이 흐트러지기 시작하고, 리뷰어가 `[NIT]` 으로 지적할 여지가 늘어난다 — low-nit 정책이 자동화에 기대던 부분이다. **완화는 각 레포에 포매터 설정을 넣는 것**이고, 그건 이 훅이 아니라 그 레포의 결정이다.
 
+### Phase 8 — 하네스를 모든 폴더에서 쓴다 (착수 2026-09-15)
+
+지금 하네스는 `~/Projects/heum` 아래에서만 돈다. 그 폴더 루트의 `.claude/` 가 하위 레포 전부에 적용되는 구조이고, 그 밖 폴더에서는 아무 훅도 걸리지 않는다. 훅을 `~/.claude/` 로 올리면 전역이 된다 — user 레벨 훅은 이미 작동 중이다 (`~/.claude/settings.json` 에 `PreToolUse` 항목 1개).
+
+- **Scope**: `record-verdict.sh` 의 파서 경로 + `~/.claude/` 배치·등록
+- **측정 근거**
+  - 전역화에서 깨지는 코드는 **한 곳뿐**이다. 훅 6개 중 `record-verdict.sh:44` 만 `$0` 기준 상대경로로 `../../scripts/harness/run_phase.py` 를 찾는다. `~/.claude/hooks/` 에 두면 `~/scripts/harness/run_phase.py` 가 되어 존재하지 않는다. 나머지는 `$CLAUDE_PROJECT_DIR` 만 쓰거나(상태 파일 — 프로젝트별로 갈리는 게 맞다) 경로 의존이 없다.
+  - **user 와 project 양쪽에 같은 훅이 등록되면 둘 다 발동한다.** 실측: 리뷰어 한 번에 `record-verdict.sh` 가 두 번 돌면 `attempt` 가 **1이 아니라 2** 증가한다. 예산 3회가 실질 1.5회가 되고 두 번째 BLOCK 에서 소진된다.
+- **설계 결정**
+  - **D17. 파서 경로는 환경변수로 덮을 수 있게 한다.** `RUN_PHASE="${HARNESS_RUN_PHASE:-$(self_dir)/../../scripts/harness/run_phase.py}"`. 레포 안에서는 지금과 동일하게 동작하고, 전역 설치는 `~/.claude/settings.json` 의 `env` 에 절대경로를 넣어 해결한다. `~/scripts/` 를 만들거나 심링크를 거는 것보다 의도가 드러난다.
+  - **D18. 등록은 한 곳에만.** 전역 설치 후 `~/Projects/heum/.claude/settings.json` 의 훅 등록을 **뺀다.** 양쪽에 두면 카운터가 두 배로 오르고, 그건 이 하네스가 존재하는 이유인 예산을 조용히 반토막 낸다. 훅 *파일* 은 남겨도 무해하지만 등록은 하나여야 한다.
+  - **D19. `post-edit-lint.sh` 는 Phase 7 이 끝난 뒤에만 전역으로 간다.** 설치 여부로 포매터를 고르는 동안 전역화하면 그 어긋남이 heum 밖 레포까지 간다. Phase 7 이 전제다.
+- **Touched files**: `.claude/hooks/record-verdict.sh` (한 줄), `.claude/hooks/tests/run-tests.sh`, 그리고 레포 밖 설치 작업(`~/.claude/`, `~/Projects/heum/.claude/settings.json`)
+- **Out of scope**: 다른 훅의 동작 변경, `update.sh` 의 전역 설치 지원(별건), 스킬·에이전트의 전역화(이미 `~/.claude/skills` 20개가 돌고 있으므로 별개 사안)
+- **Acceptance** (TDD-ready)
+  - [ ] `HARNESS_RUN_PHASE` 가 설정돼 있으면 그 경로를 쓴다
+  - [ ] 설정돼 있지 않으면 기존 `$0` 기준 경로를 그대로 쓴다 (레포 안 동작 무변경)
+  - [ ] 그 변수가 가리키는 파일이 없으면 → 기존 "파서를 실행할 수 없음" 경로로 떨어진다. `record_failed` 를 남기고 exit 0, 카운터 무변경
+  - [ ] 빈 문자열이면 기본값으로 떨어진다 (`${VAR:-...}` 의 동작을 테스트로 고정)
+  - [ ] 407 케이스 회귀 0
+  - 설치 검증 (수동, 레포 밖)
+  - [ ] 하네스가 없는 폴더에서 평범한 대화 → `enforce-loop.sh` 가 exit 0, 상태 파일 생성 안 함
+  - [ ] `~/Projects/heum` 에서 리뷰어 1회 → `attempt` 가 **1만** 증가 (D18 이 지켜졌는지)
+- **Risk**: D18 을 빠뜨리면 예산이 조용히 반토막 난다. 실측으로 확인했고, 증상은 "두 번째 BLOCK 에서 3/3 소진" 이라 원인을 찾기 어렵다. 설치 후 `attempt` 증가폭을 반드시 확인할 것.
+
 ## Open questions (해결됨 — 2026-09-05)
 
 - [x] **Q1 — verdict 어휘.** `<verdict>` 태그 안에는 `REQUEST CHANGES` (reviewer.md 의 기존 `### 결론` 표기와 동일), `run_phase.py` 의 파싱 결과 문자열은 `CHANGES` 로 정규화. Phase 1 인수 기준이 이미 이 형태다.
