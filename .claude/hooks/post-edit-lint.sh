@@ -6,10 +6,19 @@
 #
 # Behavior:
 #   - .py files only (other extensions: silent skip)
-#   - Tries ruff format first, falls back to black
-#   - If neither tool is installed: silent skip
+#   - The project picks the formatter, not PATH: walk up from the edited file
+#     for ruff.toml / .ruff.toml / a [tool.ruff] or [tool.black] table, stopping
+#     at the repo root
+#   - Nothing declared, or the declared tool not installed: silent skip
 #   - Only emits stdout when the file actually changed (avoid noise)
 #   - exit 0 always — never blocks the coder; lint failures are reviewer's job
+#
+# Why the project and not PATH?
+#   Picking by "which one is installed" meant ruff won wherever it was on PATH,
+#   and ruff does not read [tool.black]. Of the 23 python projects under
+#   ~/Projects/heum, 8 declare black at line-length 119 or 120 against ruff
+#   format's default of 88, so an edit in any of them refolded lines the coder
+#   never touched — and a diff nobody can review is worse than no formatting.
 #
 # Why not run ruff check --fix?
 #   - `format` is style-only (whitespace, line length, quotes); semantically safe
