@@ -624,6 +624,31 @@ for SKILL_FILE in "$REVIEW_SKILL" "$ORCH_SKILL"; do
   fi
 done
 
+# D21 — the instruction that matters more than the substitution. Step 6 reads as
+# though machine-parsing is a precondition for continuing, and it is not: the
+# verdict is in the reviewer's reply, and record-verdict.sh has already written
+# it to loop-state.json. A /review that halted because a helper script was
+# missing would be a worse failure than the one D20 fixes — the review itself
+# was fine and the loop budget is being kept by the hooks either way.
+#
+# Pinned on the sentence carrying the parser, so the clause cannot drift away
+# from the command it qualifies into some other part of the file.
+PARSER_STEP=$(grep -F 'HARNESS_RUN_PHASE' "$REVIEW_SKILL" | head -1)
+if printf '%s' "$PARSER_STEP" | grep -qiE 'cannot (be )?(reach|run|found)|not (reachable|there|available)|missing' \
+   && printf '%s' "$PARSER_STEP" | grep -qiE 'do not stop|don.t stop|carry on|continue|skip'; then
+  report 0 "review/SKILL.md" "an unreachable parser is a step to skip, not a reason to stop the review"
+else
+  report 1 "review/SKILL.md" "an unreachable parser is a step to skip, not a reason to stop the review (line='$PARSER_STEP')"
+fi
+
+# ...and it has to say where the verdict still is, or "carry on" is an
+# instruction with no next action attached.
+if printf '%s' "$PARSER_STEP" | grep -qiE "repl(y|ies)|loop-state|record-verdict"; then
+  report 0 "review/SKILL.md" "...and names where the verdict still is when the parser is gone"
+else
+  report 1 "review/SKILL.md" "...and names where the verdict still is when the parser is gone (line='$PARSER_STEP')"
+fi
+
 verdict_case 0 "APPROVE" "APPROVE -> stdout APPROVE, exit 0" \
   '## Review: Phase 1
 
