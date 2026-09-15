@@ -2170,6 +2170,23 @@ parser_case "HARNESS_RUN_PHASE finds the parser a \$0 lookup cannot reach" \
   "0 BLOCK 1 -" "$ORPHAN/.claude/hooks/$R" "HARNESS_RUN_PHASE=$REPO_ROOT/scripts/harness/run_phase.py"
 rm -rf "$ORPHAN"
 
+# The other side of the same variable. Once the harness is installed globally,
+# ~/.claude/settings.json exports HARNESS_RUN_PHASE into every shell, this suite
+# included — and an orphan fixture is supposed to be a hook that *cannot* reach a
+# parser. With the variable inherited it reaches the real one, and the dozen
+# "the parser cannot run" cases above quietly start testing a parser that runs
+# fine. Measured on this machine after the install: 6 cases flipped.
+#
+# The suite unsets it in its preamble so every case runs from the same place;
+# this asserts that it is still gone by the time cases are running, which is the
+# only moment that matters. On a machine that never had the variable this is
+# trivially true, and on one with the global install it is the whole invariant.
+if [ -z "${HARNESS_RUN_PHASE:-}" ]; then
+  report 0 "$R" "no case inherits a HARNESS_RUN_PHASE from the developer's shell"
+else
+  report 1 "$R" "no case inherits a HARNESS_RUN_PHASE from the developer's shell (='$HARNESS_RUN_PHASE')"
+fi
+
 # Unset is the case every run of this suite is already in, asserted here anyway
 # because it is the one the override could take away: a `${HARNESS_RUN_PHASE}`
 # written without a default turns every in-repo run into the orphan above.
