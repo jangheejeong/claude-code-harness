@@ -226,6 +226,11 @@ choice_case "a commented-out [tool.black] declares nothing" none pyproject.toml 
   '# [tool.black]
 # line-length = 120
 '
+# A repo that keeps ruff's settings in their own file has no [tool.ruff] table
+# anywhere, so the file's existence is the declaration. Empty bodies on purpose:
+# the name is what carries the meaning.
+choice_case "ruff.toml alone -> ruff"  ruff ruff.toml  ''
+choice_case ".ruff.toml alone -> ruff" ruff .ruff.toml ''
 
 # The point of the whole change: black's line-length has to reach the file. ruff
 # format folds this 100-column call at its default 88; black at 120 leaves it on
