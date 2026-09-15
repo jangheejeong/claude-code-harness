@@ -286,7 +286,7 @@ Phase 5 가 **재리뷰가 다시 읽는 diff** 를 줄였다면, 여기는 같�
 - **Out of scope**: 훅 수정, `run_phase.py`, Phase 5 의 증분 diff 로직, `/orchestrator` 자동화
 - **Acceptance**
   - [ ] `work/SKILL.md` 수명 규칙이 "역할 전환 시 닫기 / 연속 시 재개" 로 갈라지고, 닫아야 하는 이유(파일 동시 보유)가 남는다
-  - [ ] `review/SKILL.md` 의 fix 라운드가 신규 스폰이 아니라 **기존 코더·리뷰어 재개**를 기본으로 지시한다. 문서 전용 findings 는 documenter 로 간다고 명시한다 (`enforce-loop.sh:338` 의 재투입 문구와 일치)
+  - [ ] `review/SKILL.md` 의 fix 라운드가 신규 스폰이 아니라 **기존 코더·리뷰어 재개**를 기본으로 지시한다. 문서 전용 findings 는 documenter 로 간다고 명시한다 (`enforce-loop.sh:379` 의 재투입 문구와 일치)
   - [ ] `reviewer.md` 가 전문을 `.claude/notes/` 에 **먼저** 쓰고 답장에는 verdict + 판정 표 + 경로만 담도록 지시한다
   - [ ] `review/SKILL.md` 6단계가 그 파일을 `--parse-verdict` 로 기계 판독하고, 전문을 대화에 붙여넣지 말라고 명시한다
   - [ ] "조용함 ≠ 멈춤" 이 근거 사례와 함께 `work/SKILL.md` 에 남는다

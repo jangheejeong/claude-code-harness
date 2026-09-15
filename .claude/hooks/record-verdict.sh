@@ -356,8 +356,11 @@ else:
     #
     # A string or nothing, never "" — the same rule the fingerprints keep, for
     # the same reason. `/review` asks whether a base is there at all, and an
-    # empty string reaching `git diff` as an argument diffs against the index
-    # instead: a quietly different review, worse than an honestly full one.
+    # empty base is not a smaller base, it is a different command: quoted it
+    # dies (`git diff ""` -> fatal: ambiguous argument, exit 128), unquoted it
+    # vanishes and `git diff` compares the tree to the index. One review that
+    # never runs, one that runs on the wrong question — and the second is the
+    # quiet one, which is why the key is absent instead of empty.
     if head:
         state["last_reviewed_head"] = head
     else:
