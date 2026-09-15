@@ -57,14 +57,30 @@ toml_declares() {  # <pyproject.toml> <ruff|black>: does it hold a [tool.<x>] ta
   grep -qE "^[[:space:]]*\[tool\.$2(\]|\.)" "$1" 2>/dev/null
 }
 
-project_formatter() {  # <dir> -> "ruff" | "black" | "" — what the project declares
-  local dir="$1"
+declared_in() {  # <dir> -> "ruff" | "black" | "" — what this one directory declares
   # A dedicated ruff file needs no table inside it — its name is the declaration.
-  if [ -f "$dir/ruff.toml" ] || [ -f "$dir/.ruff.toml" ]; then printf ruff; return; fi
-  if [ -f "$dir/pyproject.toml" ]; then
-    if toml_declares "$dir/pyproject.toml" ruff; then printf ruff; return; fi
-    if toml_declares "$dir/pyproject.toml" black; then printf black; return; fi
+  if [ -f "$1/ruff.toml" ] || [ -f "$1/.ruff.toml" ]; then printf ruff; return; fi
+  if [ -f "$1/pyproject.toml" ]; then
+    if toml_declares "$1/pyproject.toml" ruff; then printf ruff; return; fi
+    if toml_declares "$1/pyproject.toml" black; then printf black; return; fi
   fi
+}
+
+project_formatter() {  # <dir> -> the formatter declared at or above <dir>, "" if none
+  local dir="$1" found parent
+  while [ -n "$dir" ]; do
+    found=$(declared_in "$dir")
+    [ -n "$found" ] && { printf '%s' "$found"; return; }
+    # Stop at the repo root. ~/Projects/heum is a plain directory holding
+    # independent repos side by side, so climbing past one would hand a repo
+    # whatever its neighbour, or the home directory, happens to declare.
+    # `-e` and not `-d`: in a git worktree .git is a file, and a worktree is
+    # every bit as much a boundary as a clone.
+    [ -e "$dir/.git" ] && return
+    parent=$(dirname "$dir")
+    [ "$parent" = "$dir" ] && return   # reached /, nothing above it
+    dir="$parent"
+  done
 }
 
 DIR=$(cd "$(dirname "$FILE")" 2>/dev/null && pwd) || exit 0
