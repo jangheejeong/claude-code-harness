@@ -59,6 +59,8 @@ toml_declares() {  # <pyproject.toml> <ruff|black>: does it hold a [tool.<x>] ta
 
 project_formatter() {  # <dir> -> "ruff" | "black" | "" — what the project declares
   local dir="$1"
+  # A dedicated ruff file needs no table inside it — its name is the declaration.
+  if [ -f "$dir/ruff.toml" ] || [ -f "$dir/.ruff.toml" ]; then printf ruff; return; fi
   if [ -f "$dir/pyproject.toml" ]; then
     if toml_declares "$dir/pyproject.toml" ruff; then printf ruff; return; fi
     if toml_declares "$dir/pyproject.toml" black; then printf black; return; fi
