@@ -234,6 +234,18 @@ else
   report 1 "reviewer.md" "reviewer.md names the hook that reads the reply's tag"
 fi
 
+# A re-review is the *same* reviewer resumed under the same phase name, so one
+# filename per phase means round 2 writes over round 1 — and round 1's file is
+# what the skill hands round 2 as "the previous round's findings". The notes
+# directory already holds review-phase2-verdict.log next to its -r2- and -r3-,
+# so the convention exists; only the instruction has to follow it.
+if grep -qF 'review-<phase>-r<N>-verdict.log' "$REVIEWER_MD" \
+   && grep -qF '덮어쓰지' "$REVIEWER_MD"; then
+  report 0 "reviewer.md" "round 2+ writes its own verdict log instead of overwriting the last one"
+else
+  report 1 "reviewer.md" "round 2+ writes its own verdict log instead of overwriting the last one"
+fi
+
 # The orchestrator's side of the same defect: it parses the *file*, which has
 # the tag either way, so a reply recorded as UNKNOWN looks like a clean round
 # from where /review stands. It has to be told what a missing tag means.
