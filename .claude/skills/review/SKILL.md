@@ -35,6 +35,7 @@ allowed-tools: Agent, Read, Edit, Grep, Glob, Bash
 ## On BLOCK or REQUEST CHANGES
 
 - **Resume the coder that wrote this phase** — `SendMessage` to its name, with the findings. It already holds the plan, the files and the reasoning; a fresh coder would re-read all of it to arrive where this one already is. Spawn a new one only if no coder from this phase is still reachable, or if the fix belongs to a different role (a findings list that is entirely documentation goes to `@agent-documenter`, not to a coder — the hook's re-dispatch message says so too).
+  - **Close it and spawn fresh when the same finding comes back twice.** Resuming keeps the transcript, and a wrong assumption is part of that transcript — the one thing a blank instance was good at dropping. If this round's findings repeat a point the last round already reported as fixed, the context is the problem, not the effort: close that worker, spawn a new one, and hand it the findings plus what the resumed one tried.
 - **Resume the same reviewer for the re-review.** It wrote the findings; it does not need the diff explained again, and it can say plainly which of its own points are now closed instead of re-deriving them.
 - Re-run `/review` after the fix reports done.
 - The budget is 3 cycles per Phase, and **you are not the one counting them**. `.claude/hooks/record-verdict.sh` writes each reviewer verdict and the attempt number to `.claude/notes/loop-state.json`, and `.claude/hooks/enforce-loop.sh` reads that file at the end of every main turn:
