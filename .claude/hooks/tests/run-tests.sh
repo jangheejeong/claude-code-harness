@@ -232,6 +232,27 @@ choice_case "a commented-out [tool.black] declares nothing" none pyproject.toml 
 choice_case "ruff.toml alone -> ruff"  ruff ruff.toml  ''
 choice_case ".ruff.toml alone -> ruff" ruff .ruff.toml ''
 
+# D16 — a repo that declares both gets one of them, and it has to be the same
+# one every time. Alternating would leave the two tools undoing each other's
+# output, so every edit would show a diff and none of them would mean anything.
+# No project under ~/Projects/heum is in this state today; the rule exists so
+# the first one that is does not get a coin flip.
+choice_case "both declared -> ruff" ruff pyproject.toml \
+  '[tool.ruff]
+line-length = 100
+
+[tool.black]
+line-length = 120
+'
+# ...and the order they appear in the file must not decide it either.
+choice_case "both declared, black written first -> still ruff" ruff pyproject.toml \
+  '[tool.black]
+line-length = 120
+
+[tool.ruff]
+line-length = 100
+'
+
 # The point of the whole change: black's line-length has to reach the file. ruff
 # format folds this 100-column call at its default 88; black at 120 leaves it on
 # one line. If black were not installed the hook would run nothing and the line
