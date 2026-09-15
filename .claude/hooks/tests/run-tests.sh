@@ -253,6 +253,30 @@ line-length = 120
 line-length = 100
 '
 
+# D15 — no declaration, no formatting. This is the behaviour change: 12 of the
+# 23 heum projects declare nothing and were being formatted at ruff's defaults,
+# which is the same imposition as the 88-column fold, just harder to notice.
+# A pyproject with no formatter table is the commonest shape of "undeclared".
+choice_case "no config at all -> nothing runs"            none ''               ''
+choice_case "a pyproject with no formatter table -> none" none pyproject.toml \
+  '[project]
+name = "undeclared"
+'
+
+# ...and the proof it is the file, not the stubs: with the real ruff on PATH an
+# undeclared project comes back byte-for-byte. `x  =  1` is what ruff rewrites
+# first, so this line failing means a default slipped back in.
+BARE_PROJ=$(new_lint_proj)
+printf 'x  =  1\n' > "$BARE_PROJ/loose.py"
+printf '%s' "$(path_json "$BARE_PROJ/loose.py")" | bash "$HOOKS_DIR/$L" >/dev/null 2>&1
+BARE_AFTER=$(cat "$BARE_PROJ/loose.py")
+rm -rf "$BARE_PROJ"
+if [ "$BARE_AFTER" = "x  =  1" ]; then
+  report 0 "$L" "an undeclared project is left byte-for-byte alone, real formatters installed"
+else
+  report 1 "$L" "an undeclared project is left byte-for-byte alone, real formatters installed (got '$BARE_AFTER')"
+fi
+
 # The point of the whole change: black's line-length has to reach the file. ruff
 # format folds this 100-column call at its default 88; black at 120 leaves it on
 # one line. If black were not installed the hook would run nothing and the line
