@@ -205,6 +205,27 @@ choice_case "[tool.black] alone -> black" black pyproject.toml \
   '[tool.black]
 line-length = 120
 '
+choice_case "[tool.ruff] alone -> ruff" ruff pyproject.toml \
+  '[tool.ruff]
+line-length = 100
+'
+# Most repos configure ruff through a subtable and never write the bare header,
+# so a check that only matched [tool.ruff] exactly would miss them.
+choice_case "[tool.ruff.format] counts as declaring ruff" ruff pyproject.toml \
+  '[tool.ruff.format]
+quote-style = "single"
+'
+# ...and a table that merely starts with the same letters is a different tool.
+choice_case "[tool.ruffian] is not ruff" none pyproject.toml \
+  '[tool.ruffian]
+enabled = true
+'
+# A commented-out header is a project that decided against it, or has not
+# decided yet. Either way it has not declared a formatter.
+choice_case "a commented-out [tool.black] declares nothing" none pyproject.toml \
+  '# [tool.black]
+# line-length = 120
+'
 
 # The point of the whole change: black's line-length has to reach the file. ruff
 # format folds this 100-column call at its default 88; black at 120 leaves it on
