@@ -256,6 +256,17 @@ else
   report 1 "review/SKILL.md" "the orchestrator is told a reply without the tag was recorded UNKNOWN"
 fi
 
+# Resuming the worker that wrote the phase keeps its transcript, and a wrong
+# assumption is part of that transcript — the one thing a blank instance was
+# good at dropping. The plan wrote down the way out; a way out that lives only
+# in the plan is not one, because the skill is the file the orchestrator reads.
+ESCAPE_HATCH=$(grep -iF 'spawn fresh' "$REVIEW_SKILL")
+if printf '%s\n' "$ESCAPE_HATCH" | grep -qiF 'twice'; then
+  report 0 "review/SKILL.md" "a worker that repeats a finding gets closed instead of resumed again"
+else
+  report 1 "review/SKILL.md" "a worker that repeats a finding gets closed instead of resumed again (line='$ESCAPE_HATCH')"
+fi
+
 verdict_case 0 "APPROVE" "APPROVE -> stdout APPROVE, exit 0" \
   '## Review: Phase 1
 
