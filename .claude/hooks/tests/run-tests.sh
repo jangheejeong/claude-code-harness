@@ -277,6 +277,38 @@ else
   report 1 "$L" "an undeclared project is left byte-for-byte alone, real formatters installed (got '$BARE_AFTER')"
 fi
 
+# --- the walk, and where it has to stop ---
+# Config sits at the repo root and edits happen deep in the tree, so the lookup
+# has to climb. ~/Projects/heum is a plain directory holding independent repos
+# side by side, so it must not climb past the repo it started in — one project's
+# 120 columns are not the next one's.
+nested_case() {  # <desc> <ruff|black|none> <child-is-a-repo: yes|no> <parent config body>
+  local desc="$1" want="$2" child_repo="$3" body="$4" outer stubs got
+  outer=$(mktemp -d /tmp/hooktest-lint-XXXXXX)
+  printf '%s' "$body" > "$outer/pyproject.toml"
+  mkdir -p "$outer/child/src"
+  [ "$child_repo" = yes ] && mkdir -p "$outer/child/.git"
+  printf 'x = 1\n' > "$outer/child/src/sample.py"
+  stubs=$(lint_stubs)
+  got=$(formatter_for "$outer/child/src/sample.py" "$stubs")
+  rm -rf "$outer" "$stubs"
+  [ -z "$got" ] && got=none
+  if [ "$got" = "$want" ]; then
+    report 0 "$L" "$desc"
+  else
+    report 1 "$L" "$desc (ran '$got', expected '$want')"
+  fi
+}
+
+BLACK_DECL='[tool.black]
+line-length = 120
+'
+# The control comes first: without a boundary the parent's config is reachable,
+# so the climb is real and the next case is measuring the boundary, not a lookup
+# that never worked.
+nested_case "the lookup climbs out of a subdirectory to the config above it" black no "$BLACK_DECL"
+nested_case "a .git between the file and that config stops the climb"        none yes "$BLACK_DECL"
+
 # The point of the whole change: black's line-length has to reach the file. ruff
 # format folds this 100-column call at its default 88; black at 120 leaves it on
 # one line. If black were not installed the hook would run nothing and the line
