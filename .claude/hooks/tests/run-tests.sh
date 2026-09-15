@@ -2740,14 +2740,27 @@ fi
 # has to leave the answer alone. The string cases matter most: those are the ones
 # a reader added later would actually parse, and the loop would then have a
 # switch nobody knew they were flipping.
+#
+# Both engines, byte for byte, not whichever one this host happens to have: a
+# reader added to one branch only is how the other two keys in this file drifted
+# apart twice, and a single-engine case would let it ship green — green on a
+# machine with jq, and green the opposite way on a machine without it. That is
+# what fingerprint_parity_case is for, so it is what runs here; it reads
+# $FP_NOJQ, which the block above already removed, so build one for this block.
+FP_NOJQ=$(mktemp -d /tmp/hooktest-nojq-head-XXXXXX)
+ln -s "$REAL_PY" "$FP_NOJQ/python3"
+ln -s "$(command -v cat)" "$FP_NOJQ/cat"
+
 for HEAD_VALUE in '"deadbeef"' '""' 'null' '3' 'true' '[]' '{}'; do
-  enforce_case 0 "a last_reviewed_head of $HEAD_VALUE leaves the stalled verdict alone" \
+  fingerprint_parity_case 0 "a last_reviewed_head of $HEAD_VALUE leaves the stalled verdict alone on both readers" \
     "{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"last_diff_sha\":\"deadbeef\",\"prev_diff_sha\":\"deadbeef\",\"last_reviewed_head\":$HEAD_VALUE}" \
-    "$(stop_json)" '무진전' -
-  enforce_case 2 "a last_reviewed_head of $HEAD_VALUE leaves the moved verdict alone" \
+    '무진전'
+  fingerprint_parity_case 2 "a last_reviewed_head of $HEAD_VALUE leaves the moved verdict alone on both readers" \
     "{\"last_verdict\":\"BLOCK\",\"attempt\":1,\"last_diff_sha\":\"deadbeef\",\"prev_diff_sha\":\"cafebabe\",\"last_reviewed_head\":$HEAD_VALUE}" \
-    "$(stop_json)" 'attempt 1/3' -
+    'attempt 1/3'
 done
+
+rm -rf "$FP_NOJQ"
 
 # ---------- the two hooks : a stalled loop stops before the budget does ----------
 # The cases above seed fingerprints by hand. This one lets the hooks produce
