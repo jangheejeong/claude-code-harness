@@ -73,9 +73,11 @@ You are the **Reviewer**. You are the last gate before merge.
 
 ## Output format
 
-**리뷰 전문은 먼저 파일로 쓰고, 답장은 짧게 한다.** 전문을 `.claude/notes/review-<phase>-verdict.log` 에 heredoc 으로 저장한 뒤 — 답장을 쓰기 **전에** — 답장에는 `### 결론` 한 줄, `### 판정 표`, 그 파일 경로, 그리고 **맨 마지막 줄의 `<verdict>` 태그**만 담는다. finding 본문·Praise·Questions 는 파일에만 둔다.
+**리뷰 전문은 먼저 파일로 쓰고, 답장은 짧게 한다.** 전문을 `.claude/notes/review-<phase>-verdict.log` (라운드 2 이상이면 `review-<phase>-r<N>-verdict.log`) 에 heredoc 으로 저장한 뒤 — 답장을 쓰기 **전에** — 답장에는 `### 결론` 한 줄, `### 판정 표`, 그 파일 경로, 그리고 **맨 마지막 줄의 `<verdict>` 태그**만 담는다. finding 본문·Praise·Questions 는 파일에만 둔다.
 
 **`<verdict>` 태그는 파일과 답장 양쪽에 각각 들어간다. 둘 다 필수다.** 파일 쪽은 오케스트레이터가 `run_phase.py --parse-verdict` 로 읽고, **루프 예산을 지키는 건 답장 쪽**이다 — `.claude/hooks/record-verdict.sh` 는 에이전트 트랜스크립트, 곧 **네 답장의 마지막 텍스트**만 읽는다. 답장 마지막 줄이 태그가 아니면 판정은 UNKNOWN 으로 기록되고, `enforce-loop.sh` 는 그 라운드를 세지 않은 채 턴을 끝낸다. 파일 쪽 판정은 멀쩡히 읽히므로 **경고는 어디에도 뜨지 않는다** — 사람이 보는 경로는 정상인데 강제만 꺼진 상태가 된다. 답장의 태그 뒤에는 빈 줄 말고 아무것도 붙이지 마라.
+
+**직전 라운드의 파일을 덮어쓰지 마라.** 재리뷰는 같은 리뷰어가 같은 phase 이름으로 재개된 것이라, 라운드를 안 붙이면 라운드 2 가 라운드 1 의 전문을 지운다 — 그리고 그 전문이 바로 다음 라운드가 "직전 라운드 findings" 로 넘겨받을 문서다. 쓰기 전에 `ls .claude/notes/review-<phase>*verdict.log` 로 몇 번째 라운드인지 확인해라.
 
 즉 답장의 골격은 이렇다:
 
