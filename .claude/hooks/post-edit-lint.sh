@@ -59,8 +59,9 @@ toml_declares() {  # <pyproject.toml> <ruff|black>: does it hold a [tool.<x>] ta
 
 project_formatter() {  # <dir> -> "ruff" | "black" | "" — what the project declares
   local dir="$1"
-  if [ -f "$dir/pyproject.toml" ] && toml_declares "$dir/pyproject.toml" black; then
-    printf black
+  if [ -f "$dir/pyproject.toml" ]; then
+    if toml_declares "$dir/pyproject.toml" ruff; then printf ruff; return; fi
+    if toml_declares "$dir/pyproject.toml" black; then printf black; return; fi
   fi
 }
 
@@ -73,7 +74,10 @@ TOOL=$(project_formatter "$DIR")
 # Snapshot file content before formatting
 HASH_BEFORE=$(hash_file "$FILE")
 
-black --quiet "$FILE" >/dev/null 2>&1
+case "$TOOL" in
+  ruff)  ruff format "$FILE" >/dev/null 2>&1 ;;
+  black) black --quiet "$FILE" >/dev/null 2>&1 ;;
+esac
 
 HASH_AFTER=$(hash_file "$FILE")
 if [ "$HASH_BEFORE" != "$HASH_AFTER" ]; then
