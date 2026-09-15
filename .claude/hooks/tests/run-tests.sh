@@ -206,6 +206,44 @@ else
   report 1 "reviewer.md" "결론 / 판정 표 / Findings sections intact"
 fi
 
+# The tag lives in two places and only one of them counts the round.
+# record-verdict.sh reads the agent transcript — the reviewer's *reply* — so a
+# reply that ends with a findings table and a file path is recorded UNKNOWN,
+# the cycle never reaches the counter, and enforce-loop.sh lets the turn end
+# without a word. The file's copy is read by `/review --parse-verdict`, which
+# keeps working the whole time: the human path stays green while enforcement
+# goes dark. These three lines are what keeps a future "the reply is already
+# too long" edit from switching it off again.
+REPLY_SPEC=$(grep -F '답장에는' "$REVIEWER_MD" | grep -F '만 담는다')
+if printf '%s\n' "$REPLY_SPEC" | grep -qF '<verdict>'; then
+  report 0 "reviewer.md" "the reply spec lists the verdict tag among what the reply carries"
+else
+  report 1 "reviewer.md" "the reply spec lists the verdict tag among what the reply carries (spec='$REPLY_SPEC')"
+fi
+
+TAG_RULE=$(grep -F '`<verdict>` 태그는' "$REVIEWER_MD")
+if printf '%s\n' "$TAG_RULE" | grep -qF '답장' && printf '%s\n' "$TAG_RULE" | grep -qF '파일'; then
+  report 0 "reviewer.md" "the verdict tag is demanded on the last line of both the file and the reply"
+else
+  report 1 "reviewer.md" "the verdict tag is demanded on the last line of both the file and the reply (rule='$TAG_RULE')"
+fi
+
+if grep -qF 'record-verdict.sh' "$REVIEWER_MD"; then
+  report 0 "reviewer.md" "reviewer.md names the hook that reads the reply's tag"
+else
+  report 1 "reviewer.md" "reviewer.md names the hook that reads the reply's tag"
+fi
+
+# The orchestrator's side of the same defect: it parses the *file*, which has
+# the tag either way, so a reply recorded as UNKNOWN looks like a clean round
+# from where /review stands. It has to be told what a missing tag means.
+REVIEW_SKILL="$REPO_ROOT/.claude/skills/review/SKILL.md"
+if grep -qF '<verdict>' "$REVIEW_SKILL"; then
+  report 0 "review/SKILL.md" "the orchestrator is told a reply without the tag was recorded UNKNOWN"
+else
+  report 1 "review/SKILL.md" "the orchestrator is told a reply without the tag was recorded UNKNOWN"
+fi
+
 verdict_case 0 "APPROVE" "APPROVE -> stdout APPROVE, exit 0" \
   '## Review: Phase 1
 
