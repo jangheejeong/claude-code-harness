@@ -421,3 +421,45 @@ orchestrator/SKILL.md:46  python scripts/harness/run_phase.py --subproject ...
 
 - [x] Owner approved scope — 2026-09-05, `/work` 호출로 승인
 - [x] All open questions resolved
+
+---
+
+## 추가 승인 — 2026-09-19 Claude CLI 하네스 경량화
+
+사용자가 Codex 하네스에서 검증한 원칙을 Claude CLI 하네스에도 적용하도록 승인했습니다. 위의 Hook 루프 설계는 역사 기록으로만 남기고, 현재 동작에서는 제거합니다.
+
+### Phase 10. 실행 흐름 단일화
+
+- [x] reviewer는 스펙 정합성, 보안, 정확성·유지보수성, 성능·운영성의 네 관점을 순서대로 확인합니다.
+- [x] 단독 `/review`는 한 번만 읽기 전용으로 실행하며, 코드를 수정하거나 자신을 재호출하지 않습니다.
+- [x] orchestrator만 수정·재리뷰를 관리하며 최초 리뷰를 포함해 최대 3회로 제한합니다.
+- [x] 반복 finding, 변경 없는 재시도, `UNKNOWN`, 세 번째 비승인이면 멈추고 사용자에게 인계합니다.
+- [x] 작은 작업은 메인이 처리하고 tester·documenter는 위험이나 문서 영향이 있을 때만 호출합니다.
+
+### Phase 11. 불필요한 런타임 제거
+
+- [x] `record-verdict.sh`, `enforce-loop.sh`, `announce-agent.sh`, `post-edit-lint.sh`와 전용 상태·테스트를 제거합니다.
+- [x] 외부 Claude 세션을 중복 생성하는 `run_phase.py`와 `HARNESS_RUN_PHASE` 의존성을 제거하고 native Agent만 사용합니다.
+- [x] `block-destructive.sh`와 `protect-secrets.sh`는 유지하며 기존 deny/allow 동작을 회귀 테스트합니다.
+- [x] 설치기는 과거 하네스가 만든 정확한 Hook·전역 자산·workspace 중복본만 정리하고 사용자 자산은 보존합니다.
+
+### Phase 12. 모델·토큰 최적화
+
+- [x] planner/reviewer는 `opus` high, coder/tester는 `sonnet` high, explorer는 `sonnet` medium, documenter는 `haiku` low를 사용합니다.
+- [x] agent·skill 지침은 역할과 경계만 남기고, 이미 Claude가 아는 설명과 중복 프로토콜을 제거합니다.
+- [x] 강제 red/green 커밋과 항상 tester를 호출하는 규칙을 제거하고 변경 위험에 비례한 테스트를 사용합니다.
+- [x] release는 명시적 사용자 호출 전용이며 승인되지 않은 commit·push·PR·merge를 수행하지 않습니다.
+
+### Phase 13. 설치·문서·검증
+
+- [x] 전역 정본 1벌을 설치하고 heum의 Git 이력과 정확히 일치하는 과거 중복본만 복구 가능한 백업 뒤 제거합니다.
+- [x] README, HARNESS, CLAUDE 예시와 실제 heum `CLAUDE.md`의 하네스 설명을 현재 동작과 맞춥니다.
+- [x] 구조·frontmatter·설치 멱등성·Hook 회귀·문서 계약 검사를 통과합니다.
+- [x] 실제 설치를 두 번 실행해 두 번째 변경이 0이고, 사용자 RTK 훅을 보존한 채 하네스 Hook에는 안전 훅 2개만 남는지 확인합니다.
+- [x] 독립 reviewer의 네 관점 검토를 통과한 뒤 기존 저장소의 새 브랜치에 커밋·푸시하고, 별도 승인에 따라 개인 저장소 `main`에 병합합니다.
+
+**Review: APPROVE — 2026-09-19** (3라운드, 예산 3/3). 1차에서 프로젝트 변수형 Hook 등록 정리와 workspace 심볼릭 링크 경계 문제가 발견됐고, 회귀 테스트를 추가해 수정한 뒤 2차 네 관점 검토를 통과했습니다. 3차에서 workspace 안내 문서까지 확인했으며, 사용자가 커밋·푸시·병합·로컬 적용을 승인했습니다.
+
+### Approval
+
+- [x] Owner approved scope — 2026-09-19, “Claude CLI 쪽 하네스도 동일하게 최적화 및 불필요한 것들 제거”

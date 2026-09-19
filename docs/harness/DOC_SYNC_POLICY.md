@@ -15,7 +15,7 @@ Goal: docs never lie. If code says X and docs say Y, the next reader (or agent) 
 
 ## Cadence
 
-- Docs sync runs as part of `/release` (documenter subagent), per Phase.
+- When verified behavior changes, `/release` syncs the affected docs. The documenter subagent is optional.
 - Standalone doc sync without code changes: out of harness scope; just edit directly.
 
 ## Hands-off zones (no automated rewrite)

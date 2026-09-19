@@ -1,0 +1,65 @@
+{
+  "agents/coder.md": [
+    "54d3eb66de4c3243d5f9f45ce45b65756936d9e2f8da3e6e4b072d721c0c0f62",
+    "eda6c949c0f3d923bb829733d7d0e0c3ce5c684cef7b7d8e2f9239c99b2c22bf"
+  ],
+  "agents/documenter.md": [
+    "2a8cd2ad0f8e8e16210ee389449cc3b1788b15217d03634eb4377acd9bc7289c",
+    "8319744feea05ec16fafbca5dc7c581f97ff8358f3c17c24c6d144fe5e9a4cde"
+  ],
+  "agents/explorer.md": [
+    "6c589df48c1be834aa636e1b2ead42962d697b0785aceb00ee4d9efb49a1a674",
+    "c477eb39529c7a0600257996d1f6bc50b1e4d7fc2cd7c0857c6ff7668b26d9b7"
+  ],
+  "agents/planner.md": [
+    "3870d777a6159d2194ccc57c463b35a007a074ef4858ecba3a95fbae1d18351c",
+    "c1f0625947b6f66b8b613aefa6e1e98be749454788168f7bea0f2bfd9a954add"
+  ],
+  "agents/reviewer.md": [
+    "0532bd597534ddbbf203119f425c6a6f3359c7141b1d0d140bcaa8bfa376f928"
+  ],
+  "agents/tester.md": [
+    "10a0d6683e6c44d1d5034eed5f0ba6ad90aeb7e55b3ee600e3b2376aafb06d34",
+    "d57837af19ca371549741b2083167216d32cc1f28b5a77335af945e9514d1e49"
+  ],
+  "hooks/announce-agent.sh": [
+    "ef445af50dd5c47cb58f6e2ea20df410d3b90b2305144f0f79660149c7434430"
+  ],
+  "hooks/block-destructive.sh": [
+    "d0dc3f26fc675424412b953bee7782277f4f203abf9076182a5d4b6b49e57358"
+  ],
+  "hooks/enforce-loop.sh": [
+    "4c5ffd423c788f89ff306c27fc3591b071a207ebb4bc77f9549fb1349d149b22"
+  ],
+  "hooks/post-edit-lint.sh": [
+    "1c52973020ba49d35d24e15e48cc83addde1687f34719834dc6030850355b9ff",
+    "eecbc41ea89bdf09bf40fcea5d959aaa4f9527ba124fbee4a8139cde82f6c398"
+  ],
+  "hooks/protect-secrets.sh": [
+    "feec6fbe6d101822f9ed61aa8da4e9c42b381e25566c33b097fd429285c98869"
+  ],
+  "hooks/record-verdict.sh": [
+    "63e1256f969d23e94dd29072251f39d454462986865baac29ee20d35c940e3bf",
+    "90a8e8eb510707c8804dbe14796f450fa7a05994c6f630d5c5f237fe57805909"
+  ],
+  "skills/orchestrator/SKILL.md": [
+    "5aee18dc519fbee2ebe65aac7bd8454b3f523f7ea1b7398fe0c3f34418fdb914",
+    "fd6f3a492ff09297619998798f6e9a30bb21a8108d81bb6a56713508166d8136"
+  ],
+  "skills/plan/SKILL.md": [
+    "30616e11804db8ca23c4a52326444c8d807e34cc010882ec4fd39fc950b0414b"
+  ],
+  "skills/release/SKILL.md": [
+    "5c84cdd402e6a9f2b916e95fafe2a4274e719427d5f6ba6ed244462160b40ee0"
+  ],
+  "skills/review/SKILL.md": [
+    "9d39512cd3bb51018f317f7672395c8bd5eb51ed94a036cae2a4fe8005a315c0",
+    "a852ca3c22100f3f9a29fa3eed3d2ddfa78cf45948b3cdc16d22e42e17bfddfb"
+  ],
+  "skills/setup/SKILL.md": [
+    "89644946b49e2fa75dd1c58158a9d916dcbeb58ee13b1e17a2d7da79d1b74d8d"
+  ],
+  "skills/work/SKILL.md": [
+    "17877866251dc2e3c04a8012f692f2d5e226fe7acefaa5c09b556a591dabfe3c"
+  ]
+}

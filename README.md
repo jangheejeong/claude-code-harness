@@ -1,650 +1,79 @@
-<div align="center">
+# Claude Code Harness
 
-# claude-code-harness
+Claude Code의 기본 동작을 덮어쓰지 않고, 계획·구현·리뷰·릴리스를 일관되게 돕는 가벼운 개인용 하네스입니다.
 
-**Claude Code v2.1+ 용 워크플로우 하네스**
+## 구성
 
-`/orchestrator` 한 번으로 계획 → 구현 → 리뷰 → PR 자동화
+- 에이전트 6개: `explorer`, `planner`, `coder`, `tester`, `reviewer`, `documenter`
+- 스킬 6개: `/plan`, `/work`, `/review`, `/release`, `/setup`, `/orchestrator`
+- 안전 훅 2개: 파괴적 명령 차단, 비밀 파일 쓰기 차단
+- 설치기: 정본을 전역 Claude 설정에 심볼릭 링크하고, 확인된 과거 복제본만 백업 후 정리
 
-`6 subagent` · `6 verb skill` · `6 hooks` · `phase runner`
+수명주기 훅 루프, 디스크 재시도 카운터, 외부 phase runner, 에이전트 호출 알림, 편집 후 자동 lint는 사용하지 않습니다. 재시도가 필요하면 `/orchestrator`가 대화 안에서만 조율합니다.
 
-[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1+-purple)](https://code.claude.com)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+## 권장 흐름
 
-**한국어** · [English](README.en.md)
+작은 수정은 메인 에이전트가 직접 처리합니다. 요구사항이나 위험이 있는 변경은 다음 흐름을 사용합니다.
 
-</div>
+```text
+/plan → /work → /review → /release
+```
 
----
+- `/plan`: `Plans.md`에 범위와 인수 기준을 정리합니다.
+- `/work`: 승인된 Phase 하나를 작게 구현합니다. tester는 필요할 때만 사용합니다.
+- `/review`: 스펙, 보안, 정확성·유지보수성, 성능·운영성의 네 관점을 한 번 검토합니다.
+- `/release`: 사용자가 요청했을 때만 문서·커밋·푸시·PR을 준비합니다.
+- `/orchestrator`: 비단순 작업의 전체 흐름과 수정·재리뷰를 조율합니다. 최초 리뷰를 포함해 최대 3회만 수행합니다.
 
-## What This Is
+같은 지적이 반복되거나, 결과가 불명확하거나, 세 번째 리뷰에서도 승인되지 않으면 자동 진행을 멈추고 사용자에게 보고합니다.
 
-> Claude Code 가 기본 상태에서 흔히 보이는 세 문제 — **계획 없이 바로 코드부터 시작**, **위험 명령 무방비 실행**, 그리고 **고쳐-리뷰-다시고쳐 루프가 몇 바퀴 돌았는지 아무도 세지 않음** — 을 막는 절차 묶음.
->
-> 세 번째가 이 하네스의 특이한 부분이다. "자동 수정 루프 최대 3회" 같은 규칙을 문서에 적어두는 것만으로는 지켜지지 않는다 — 세는 주체가 없으면 그건 규칙이 아니라 바람이다. 여기서는 리뷰어의 판정이 디스크에 남고, 매 턴 끝에 훅이 그 파일을 읽어 한 번 더 돌릴지를 **모델 대신** 정한다. 예산이 다 되면 멈추고, 코더가 파일을 하나도 안 건드렸으면 예산이 남아 있어도 멈춘다.
->
-> 프로젝트 루트에 `.claude/` 트리를 복사하면 활성화.
+## 모델과 추론 강도
 
-### Components
-
-| 구성 | 위치 | 역할 |
+| 역할 | 모델 | 추론 강도 |
 |---|---|---|
-| **Subagents** (6) | `.claude/agents/*.md` | 격리된 context 의 worker — `explorer` / `planner` / `coder` / `tester` / `reviewer` / `documenter` |
-| **Verb skills** (6) | `.claude/skills/*/SKILL.md` | 슬래시 명령어 — `/orchestrator` 외 5개 옵션 |
-| **PreToolUse hooks** (2) | `.claude/hooks/*.sh` | `block-destructive.sh`, `protect-secrets.sh` |
-| **PostToolUse hook** (1) | `.claude/hooks/post-edit-lint.sh` | Edit/Write 후 자동 `ruff format` (또는 `black`) — low-nit policy 자동화 |
-| **Subagent hook** (1) | `.claude/hooks/announce-agent.sh` | SubagentStart/Stop 시 어느 agent 가 실행 중인지 터미널 출력 |
-| **Loop hooks** (2) | `.claude/hooks/record-verdict.sh`, `enforce-loop.sh` | reviewer verdict 를 `.claude/notes/loop-state.json` 에 기록 (SubagentStop) → 자동 수정 루프 예산 3회를 턴 끝에서 강제 (Stop) |
-| **Phase runner** | `scripts/harness/run_phase.py` | 긴 phase 작업 분리 |
-| **Doc templates** | `docs/harness/*.md` | `REQUIREMENTS` / `ADR` / `DOC_SYNC_POLICY` |
+| planner, reviewer | Opus | high |
+| coder, tester | Sonnet | high |
+| explorer | Sonnet | medium |
+| documenter | Haiku | low |
 
-<details>
-<summary><strong>각 컴포넌트 상세</strong></summary>
+판단 오류의 비용이 큰 역할에 Opus를 쓰고, 구현·검증에는 Sonnet을 사용합니다. 탐색과 문서화는 작업 성격에 맞춰 강도를 낮춰 토큰과 지연을 줄입니다.
 
-<br>
-
-**Subagents**
-각자 격리된 context window 에서 동작 → verbose 한 tool 출력은 하위 세션에 머물고 메인엔 요약만 반환. 조언·결정 비싼 단계 (`planner`, `reviewer`) 는 상위 티어 모델 Fable, 실행 단계 (`explorer`, `coder`, `tester`, `documenter`) 는 Opus 로 분리 (advisor + worker 전략).
-
-**Verb skills**
-`/orchestrator` (메인) + `/plan`, `/work`, `/review`, `/release`, `/setup` (옵션). description 매칭으로 자연어 invocation 가능. `/release` 만 `disable-model-invocation: true` 로 잠가둠 — 커밋/푸시/PR 같은 side effect 가 있어서 사용자 직접 타이핑.
-
-**Hooks**
-모델 prompt 에 의존하지 않고 stdin JSON → exit code 로 결정. 개별 hook 의 차단 대상 / 동작 / 테스트는 아래 [Safety + Polish Hooks](#safety--polish-hooks--what-they-do) 섹션 참고.
-
-**Phase runner**
-`claude --agent <name> -p` 래퍼. 긴 phase 작업을 별도 process 로 spawn → `.claude/notes/phase-N-<agent>-<ts>.log` 에 stdout 캡처. 메인 세션 컨텍스트 보호.
-
-**Doc templates**
-`REQUIREMENTS.template.md`, `ADR.template.md`, `DOC_SYNC_POLICY.md`.
-
-</details>
-
----
-
-## Why a Harness
-
-Claude Code 는 강력하지만 기본 동작에 절제가 없다. 자연어 작업을 던지면 즉시 코드부터 치고, `rm -rf` 같은 위험 명령도 instruction 만으론 깜빡할 수 있다. 이 하네스는 그 위에 6개 강제력을 얹는다. (사람이 개입하는 게이트 3개 — Plan 승인 / BLOCK 결정 / PR 머지 — 는 아래 [사용자가 개입하는 3 지점](#사용자가-개입하는-3-지점) 참고.)
-
-### 1. Plan 먼저
-코드 수정 전에 `Plans.md` 가 있어야 한다. `planner` (Fable) 가 작업을 phase 단위로 분해하고 각 phase 의 acceptance criteria 를 적는다. Plan 이 부실하면 그 위에 쌓이는 모든 게 부실해지므로 가장 똑똑한 모델(Fable) 을 여기 투자한다.
-
-각 phase 는 **vertical slice** 로 분해한다 — 한 phase 가 DB + service + API + UI 를 가로질러 **한 기능이 end-to-end 로 작동**하게.
-
-예시 — "webhook 3개 (Slack/Discord/Telegram) 추가" 작업:
-
-- ✅ **vertical**: Phase 1 = Slack webhook DB→서비스→API→UI 끝까지 / Phase 2 = Discord 끝까지 / Phase 3 = Telegram 끝까지. **각 phase 끝나면 한 기능이 진짜 동작**.
-- ❌ **horizontal**: Phase 1 = 3개 webhook 의 DB 다 / Phase 2 = 서비스 다 / Phase 3 = API 다 / Phase 4 = UI 다. **마지막 phase 까지 가야 한 기능이라도 작동**.
-
-horizontal 은 도중에 발견되는 문제 (DB 스키마가 UI 요구와 안 맞음 등) 를 마지막에야 발견하게 만들고, reviewer 가 phase 별로 검증할 거리도 빈약해진다 ("DB 만 추가됨 = valid" 정도). vertical 이 reviewer / 사람 양쪽에 더 쓸모 있는 단위.
-
-> Claude Code 자체에도 [plan mode](https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode) (read-only 탐색 + Plan agent) 가 있음. 본 하네스의 `/plan` 은 그 위에 phase 분해 + acceptance criteria + 영속화 (`Plans.md` 파일) 를 더한 것.
-
-### 2. TDD red-green-refactor + commit 체크포인트 (default)
-각 phase 안에서 `coder` 는 강제로 TDD 사이클을 따르고, red/green 마다 work 브랜치에 커밋을 남긴다 (`/work` 가 main/master 위에서는 작업 브랜치를 먼저 만든다):
-
-1. acceptance criteria 를 충족하는 **실패 테스트** 부터 작성
-2. **red** 확인 (test runner 가 fail 출력) → `test(<scope>): red — …` 커밋
-3. **최소 구현** 으로 통과시킴
-4. **green** 확인 (test runner 가 pass 출력)
-5. (필요시) **refactor** — green 유지하면서
-6. `feat(<scope>): green — …` 커밋. push 는 안 함 — push/PR 은 `/release` 몫.
-
-테스트가 implementation 을 lead 한다. 이 순서를 어기면 코드는 본인 가정에 맞춘 자기충족적 코드가 되고 회귀에 취약해진다. **실패 테스트를 먼저 커밋해두면 모델이 테스트를 약화시켜 통과시키는 우회를 git 이력이 잡아낸다** — Anthropic 권장 패턴 ([Claude Code best practices](https://code.claude.com/docs/en/best-practices)). `tester` 는 이후 단계에서 red 커밋이 green 커밋보다 먼저인지 git 이력으로 TDD 준수를 검증하고, acceptance 외 엣지 케이스 테스트를 추가로 채운다 (`test(<scope>): edge cases — phase <n>` 커밋). `reviewer` / `documenter` 는 이 커밋들의 누적 diff (`git merge-base` 기준) 를 읽는다.
-
-### 3. 한 phase 씩
-한 phase = 한 reviewable 단위 — 보통 수백 줄 diff (경험상 300-500 줄 정도가 무리 없음) 안에서 끊는다. 작업 크기에 따라 phase 수는 달라지지만 보통 3-7개 정도, 각 phase 가 독립 머지 가능하도록 설계한다. 큰 diff 는 `reviewer` agent 도 사람도 놓치는 게 늘어난다 — context window 가 길어질수록 모델이 엣지 케이스나 회귀를 놓치는 빈도가 올라가고, 사람의 리뷰도 형식적이 된다. 작게 쪼갤수록 양쪽의 정확도가 모두 올라간다.
-
-### 4. 4-lens review + 스택 룰
-머지 전 `reviewer` (Fable) 가 4 관점 — spec / security / correctness / performance — 적용. 거기에 본인 스택의 함정을 추가: Django ORM N+1, FastAPI `async def` 안의 sync DB 호출 (event loop 블록) 등.
-
-### 5. Hook 으로 강제
-instruction 은 모델이 깜빡할 수 있다. PreToolUse hook 이 셸 레벨에서 deny 한다. exit code 2 + stderr 사유 → Claude 에게 차단 사유가 표시됨. `--dangerously-skip-permissions` 모드에서도 hook 차단은 작동.
-
-**루프 예산도 같은 방식으로 강제된다.** 위험 명령 차단이 "이 도구 호출을 막는다" 라면, 이쪽은 "이 턴을 끝내지 못하게 막는다" 다. 리뷰어가 `BLOCK` 을 내면 `record-verdict.sh` 가 `SubagentStop` 에서 판정과 카운터를 `.claude/notes/loop-state.json` 에 적고, 턴이 끝나려 할 때 `enforce-loop.sh` 가 그 파일을 읽어 exit 2 로 턴을 되돌린다. 카운터가 컨텍스트가 아니라 **파일**에 있는 이유는, 컨텍스트 안의 숫자는 압축 한 번이면 사라지기 때문이다.
-
-멈추는 이유는 셋이고 전부 exit 0 으로 턴을 놓아주되 stdout 에 "성공이 아니다" 를 명시한다 — 예산 3회 소진, 작업 트리가 직전 사이클과 동일(무진전), 그리고 리뷰어 판정이 디스크에 닿지 못함. 마지막 것을 조용히 넘기지 않는 이유는, 판정을 못 읽은 사이클을 통과로 처리하면 강제가 켜진 채로 아무 일도 안 하게 되기 때문이다.
-
-### 6. 응답 포맷도 "결론 먼저, 근거 나중" 으로 강제
-LLM 의 자유서술은 결론이 본문 중간에 묻히고 범위 (본 작업 / 이전부터 있던 이슈) 가 안 갈린다. `CLAUDE.md` 에 [BLUF (Bottom Line Up Front)](https://en.wikipedia.org/wiki/BLUF_(communication)) 템플릿을 박아서 — **결론 → 근거(file:line) → 범위·심각도 태그 → 결정 필요(추천 선택지 명시)** 4섹션을 의무로 한다. 헤더 라벨은 한글로 명시 (영어 약자 `TL;DR / Decision needed` 금지 — 가독성 떨어짐), 태그 어휘 (`[NEW]/[EXISTING]/[BLOCK]/[CHANGES]/[NIT]`) 만 `reviewer`, `tester` subagent 와 통일 — 메인 세션 보고 ↔ 리뷰 결과 사이에 어휘 전환이 없게.
-
-### 7. 루프를 돌릴 수 있는 값으로 유지한다
-
-강제되는 루프는 실제로 돈다. 그러면 **한 라운드의 비용이 작업 속도를 정한다.** 이 레포에서 3 phase 를 진행하며 실측한 값:
-
-```
-리뷰 라운드 12회
-리뷰어가 읽은 diff 누적 617KB      Phase 3 한 개가 76KB → 114KB → 123KB (r1/r2/r3)
-서브에이전트 스폰 29회             그중 fix 라운드 8회
-테스트 스위트 75 케이스 25초 → 407 케이스 90초
-```
-
-`76KB → 114KB → 123KB` 가 문제의 모양이다. 라운드마다 커진다 — `git diff $(git merge-base <base> HEAD)...HEAD` 는 **브랜치 누적 diff** 라서 fix 커밋이 쌓일수록 커지고, 재리뷰는 "이번 수정분"이 아니라 Phase 전체를 매번 처음부터 다시 읽는다. r3 의 123KB 중 대부분은 r1·r2 에서 이미 읽은 내용이다.
-
-세 군데를 줄인다.
-
-**재리뷰가 다시 읽는 양** — `record-verdict.sh` 가 리뷰어가 끝날 때마다 그 시점 HEAD 를 `last_reviewed_head` 로 남기고, `/review` 는 2회차부터 `git diff <그 sha>` 만 뜬다. APPROVE 면 키를 지워서 다음 Phase 는 전체 diff 로 시작한다. 실측: 444줄 → 229줄. 리뷰 범위는 줄지 않는다 — 리뷰어에게 직전 라운드의 전체 diff 파일 경로와 findings 를 함께 주고, spec correctness 는 계속 Phase 전체로 판정한다.
-
-**fix 라운드가 다시 쌓는 컨텍스트** — 수정은 그 Phase 를 쓴 코더의 일이므로 새로 띄우지 않고 `SendMessage` 로 재개한다. 재개된 워커는 계획·읽은 파일·자기 추론을 그대로 갖고 있다. 공식 문서가 *"Each subagent invocation creates a new instance rather than continuing an earlier one"* 이라고 명시하고, 프롬프트 캐시도 2회 이하에서는 손해·3회 근처에서 손익분기인데 **fix 루프가 정확히 3회**다. 대가는 있다 — 재개는 **틀린 가정도 함께 물려준다**. 그래서 같은 finding 이 두 번 돌아오면 그 워커를 닫고 새로 띄운다.
-
-**보고가 메인 세션으로 넘어오는 양** — 리뷰어는 전문을 `.claude/notes/review-<phase>-r<N>-verdict.log` 에 **먼저** 쓰고, 답장에는 결론 한 줄·판정 표·파일 경로·`<verdict>` 태그만 담는다. 모델 경계를 넘는 토큰은 두 번 청구되고 그 세션이 끝날 때까지 컨텍스트에 남는데, 오케스트레이터에게 필요한 건 판정과 "누구에게 넘길지" 뿐이다. 부수 효과로 크래시에 강해진다 — 리뷰어 하나가 세션 한도로 죽었을 때 파일에 먼저 썼기 때문에 리뷰가 살아남았다.
-
-> **주의** — 답장의 `<verdict>` 태그는 생략할 수 없다. `record-verdict.sh` 는 파일이 아니라 **리뷰어의 답장**을 읽는다. 답장이 태그로 끝나지 않으면 판정은 `UNKNOWN` 으로 기록되고 그 라운드는 세어지지 않는데, **파일 쪽 판정은 멀쩡히 읽히므로 어디에도 경고가 뜨지 않는다.** 이 절의 초안이 실제로 그 결함을 냈고 리뷰가 `BLOCK` 으로 잡았다 — 토큰을 아끼려는 변경이 루프 강제를 끄는 경로였다.
-
----
-
-> 비싼 부분 — phase 분해, TDD 사이클, 엣지 케이스 확장, 4관점 리뷰, 자동 fix 루프 — 은 AI 가 처리하고, 사람은 게이트 셋만 통과시킨다.
-
-
-## Install
-
-### 기존 프로젝트에 추가
+## 설치
 
 ```bash
-cd ~/your-project
-
-git clone https://github.com/jangheejeong/claude-code-harness.git .harness-tmp
-[ -f .claude/settings.json ] && cp .claude/settings.json .claude/settings.json.bak   # 기존 설정 백업 (cp -r 이 덮어씀)
-cp -r .harness-tmp/.claude ./      # agents + skills + hooks + settings.json (hook 6개 등록 포함)
-cp -r .harness-tmp/scripts ./
-cp -r .harness-tmp/docs ./
-cp .harness-tmp/CLAUDE.md.example ./CLAUDE.md   # 본인 프로젝트에 맞게 수정
-cp .harness-tmp/HARNESS.md ./
-rm -rf .harness-tmp
-
-chmod +x .claude/hooks/*.sh
+git clone https://github.com/jangheejeong/claude-code-harness.git
+cd claude-code-harness
+python3 scripts/install.py --workspace /Users/jangheejeong/Projects/heum
 ```
 
-> `.claude/settings.json` 에 hook 6개가 이미 등록되어 있음 — 별도 설정 불필요. 공식 권장대로 `settings.json` 은 팀 공유용으로 체크인하고, 개인 설정은 `settings.local.json` (gitignore) 에. 기존 `settings.json` 이 있던 프로젝트라면 백업본 (`settings.json.bak`) 에 새 파일의 `hooks` 블록을 수동으로 합쳐서 복원.
+설치기는 다음 원칙을 지킵니다.
 
-확인:
+- `~/.claude/agents`, `~/.claude/skills`, `~/.claude/hooks`에 이 저장소를 가리키는 링크를 만듭니다.
+- 기존 사용자 설정과 관리 대상이 아닌 파일은 보존합니다.
+- 해시가 일치하는 과거 하네스 복제본만 타임스탬프 백업으로 옮깁니다.
+- 오래된 하네스 훅 등록과 `HARNESS_RUN_PHASE`만 제거합니다.
+- 실험적 agent teams 설정은 변경하지 않습니다.
 
-```text
-> claude
-> /agents              # 6 subagent 보여야 함
-> /                    # 6 verb skill 보여야 함
-```
-
-### 멀티-프로젝트 워크스페이스
-
-여러 독립 git repo 가 한 폴더 아래 모인 환경 (모노레포 X) 이라면, 그 폴더 루트에 `.claude/` 등을 떨어뜨리고 `CLAUDE.md` 의 프로젝트 지도를 본인 서브프로젝트로 채움. 거기서 `claude` 띄우면 모든 서브프로젝트에 하네스 적용.
-
-### 업데이트 — 이미 설치된 하네스를 최신으로
-
-설치 명령은 `.harness-tmp` 를 지우면서 끝나기 때문에 `git pull` 로 갱신 못 함. 대신 `update.sh` 한 줄:
+변경 내용을 먼저 확인하려면 `--dry-run`을 사용하세요.
 
 ```bash
-cd ~/your-project          # ← 하네스를 사용 중인 프로젝트의 루트
-curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/main/update.sh | bash -s -- --yes
+python3 scripts/install.py --workspace /Users/jangheejeong/Projects/heum --dry-run
 ```
 
-> **어디서 실행하나**: `.claude/` 가 있는 **사용 중 프로젝트의 루트** 에서. 하네스 repo (`claude-code-harness/`) 자체에서 실행하는 게 아님 — 하네스 repo 는 `git pull` 로 받음. 사용 중 프로젝트가 여러 개라면 각각의 루트에서 따로 실행해야 함 (`overtax_sole/`, `heum/` 등 각자).
-
-동작:
-
-- 변경될 파일 목록 보여줌 (e.g., `~ .claude/agents/coder.md  (112 lines changed)`)
-- **사용자 파일은 보존**: `CLAUDE.md`, `.claude/settings*.json` (`settings.json` 은 없을 때만 신규 설치 — 본인 파일에 등록 안 된 hook 이 있으면 그 이름들과 붙여넣을 JSON 스니펫을 출력), `Plans.md`, `REQUIREMENTS.md`, `.claude/notes/`, `worktrees/`, `agent-memory/`
-- **managed 파일은 단순 덮어쓰기**: 5 generic agents (coder/tester/planner/explorer/documenter), 6 verb skills, 6 hooks (block-destructive / protect-secrets / post-edit-lint / announce-agent / record-verdict / enforce-loop), `run_phase.py`, doc 템플릿, `HARNESS.md`, `examples/` (동일 이름만 덮어씀 — upstream 에서 사라진 로컬 파일은 삭제하지 않고 경고만)
-- **`reviewer.md` 는 3-way auto-merge**: 스택 커스텀 영역 (Django N+1, FastAPI async 등) 과 공용 영역 (Tag 의미, 4-lens 골격) 이 한 파일에 섞여있어서 `git merge-file` 로 합침
-  - 로컬에 `reviewer.md` 가 없으면: upstream 을 신규 설치
-  - 첫 실행: cache 없으므로 보존 + cache 시드 (`.claude/.harness-cache/upstream-prev/reviewer.md`)
-  - 다음 실행부터: 사용자/cache/새 upstream 3-way 머지 — 다른 영역 변경은 자동 합쳐짐, 같은 영역 동시 변경 시만 `<<<<<<<` marker 박힘 (수동 해결)
-- 갱신 전 상태는 `.claude/.harness-backup-<timestamp>/` 에 자동 백업 → 문제 시 롤백 가능
-- 업스트림 최신 `reviewer.md` 는 `<backup>/reviewer.md.upstream-latest` 로 참고용 저장
-
-> ⚠️ `--yes` 빼면 인터랙티브 [y/N] prompt 가 나와야 하지만, `curl | bash` 는 stdin 이 pipe 라 prompt 가 자동으로 N 으로 읽혀 abort 됨. 인터랙티브로 확인하면서 진행하고 싶으면 파일로 받아서 실행:
-> ```bash
-> curl -sSL https://raw.githubusercontent.com/jangheejeong/claude-code-harness/main/update.sh -o /tmp/u.sh
-> bash /tmp/u.sh
-> ```
-
-적용 후 **Claude Code 재시작** (`/exit` → `claude`) 필수 — 새 agent/skill 정의 로딩.
-
----
-
-## Usage
-
-### Lifecycle — skill 이 agent 를 부르는 구조
-
-`/orchestrator` 한 번 호출되면 skill 들이 시간 순으로 호출되고, 각 skill 이 본인 agent 들을 spawn 한다.
-
-![orchestrator lifecycle](docs/harness/assets/orchestrator-lifecycle.svg)
-
-> 메인 Claude 가 `orchestrator/SKILL.md` 본문을 읽고 → `/plan` → `/work` → `/review` 를 차례로 invoke, 마지막 release 단계는 `/release` 가 잠겨 있어 (`disable-model-invocation: true`) 같은 절차를 직접 수행. 각 skill 이 본인 [@agent-…](.claude/agents) 들을 spawn 하고, 결과를 메인 세션으로 요약 반환. 자세한 verdict 분기는 아래 Flow 다이어그램 참고.
-
-### Flow
-
-```mermaid
-flowchart TD
-    Start[사용자: /orchestrator 자연어 작업] --> Plan[planner Fable 가 Plans.md 작성]
-    Plan --> Gate1{사용자 검토}
-    Gate1 -->|Approval| Phase[Phase 시작]
-    Gate1 -->|수정 요청| Plan
-
-    Phase --> Coder[coder · TDD red→green 커밋 체크포인트]
-    Coder --> Tester[tester · TDD 이력 검증 + 엣지 확장]
-    Tester --> R[reviewer Fable 검토 시작]
-
-    R --> C1{1. Plan 의 성공 조건<br/>모두 충족?}
-    C1 -->|No| BLOCK[BLOCK / REQUEST CHANGES]
-    C1 -->|Yes| C2{2. 보안 / 정확성<br/>이슈 있나?}
-    C2 -->|Yes| BLOCK
-    C2 -->|No| C3{3. 테스트 모두 통과?}
-    C3 -->|No| BLOCK
-    C3 -->|Yes| APPROVE[APPROVE]
-
-    BLOCK --> Fix[자동 fix 루프 max 3]
-    Fix -->|fail| Gate2[STOP: 사용자 결정]
-    Fix -->|success| R
-    Gate2 -.수정 후.-> Phase
-
-    APPROVE --> Next{다음 phase?}
-    Next -->|Yes| Phase
-    Next -->|No| PR[PR 생성]
-    PR --> Gate3[STOP: GitHub 머지]
-
-    classDef gate fill:#f59e0b,stroke:#92400e,stroke-width:2.5px,color:#000
-    class Gate1,Gate2,Gate3 gate
-    classDef block fill:#ef4444,stroke:#7f1d1d,stroke-width:2px,color:#fff
-    class BLOCK block
-    classDef approve fill:#22c55e,stroke:#14532d,stroke-width:2px,color:#fff
-    class APPROVE approve
-```
-
-> **Reviewer 의 3단계 판단**: 1번 (Plan 성공 조건) → 2번 (보안/정확성) → 3번 (테스트) 순서로 검사. 셋 다 통과해야 APPROVE — APPROVE 시 `Plans.md` 에 `Review: APPROVE — <date>` 라인이 기록되고 `/release` 가 이걸 확인한다. 하나라도 실패하면 BLOCK (경미하면 REQUEST CHANGES), 어느 쪽이든 자동 fix 루프 진입.
-
-### 사용 방법
+## 검증
 
 ```bash
-$ cd ~/your-project && claude
-
-> /orchestrator api-server 의 webhook 에 HMAC 검증 추가
+python3 -m unittest discover -s tests -v
+bash .claude/hooks/tests/run-tests.sh
 ```
 
-| Step | What happens |
-|---|---|
-| **1.** Plan | `planner` 가 phase 분해 + acceptance criteria 작성 → `Plans.md` 저장 |
-| **⛔ Gate** | 사용자가 `Plans.md` 검토 + Approval ✓ |
-| **2.** Loop | Phase 별 TDD 사이클 (`coder` red 커밋 → green 커밋, work 브랜치) → `tester` git 이력 검증/엣지 확장 → `reviewer` 4-lens. BLOCK / REQUEST CHANGES 면 자동 fix 루프 (최대 3회), APPROVE 면 `Plans.md` 에 `Review: APPROVE` 기록 |
-| **3.** Release | `Plans.md` 의 `Review: APPROVE` 확인 → `documenter` 가 README/CHANGELOG 갱신 → docs commit → push → `gh pr create` |
-| **⛔ Gate** | 사용자가 GitHub 에서 PR 머지 |
+설치 후 새 Claude Code 세션에서 `/skills`로 스킬을 확인할 수 있습니다. 이미 존재하는 에이전트·스킬 디렉터리는 실행 중에도 다시 읽히지만, 설정 훅 변경은 새 세션에서 확인하는 편이 가장 확실합니다.
 
-> 사용자가 일상적으로 입력하는 verb 는 `/orchestrator` 하나로 충분하다. 나머지 5개는 특수 상황용.
+운영 원칙과 문제 해결 방법은 [HARNESS.md](HARNESS.md)를 참고하세요.
 
-### 사용자가 개입하는 3 지점
+## 설계 근거
 
-워크플로우 안에서 사람이 직접 결정해야 하는 지점은 셋이고, 그 외엔 모두 자동이다.
-
-**Plan 승인.** `planner` 가 작성한 `Plans.md` 를 검토하고 Approval 박스에 체크해야 다음 단계로 넘어간다. Plan 이 부실하면 그 위에 쌓이는 코드, 테스트, 리뷰가 모두 부실해지므로 이 검토에 시간을 충분히 쓰는 게 작업 전체에서 가장 큰 레버리지다.
-
-수정이 필요하면 `Plans.md` 를 직접 편집하기보단 자연어로 요청하는 게 좋다 — _"Phase 2 가 너무 크다, 둘로 쪼개줘"_, _"acceptance 가 모호하다, 구체적인 status code 로 바꿔"_, _"만료 nonce 처리 phase 가 빠졌다, 추가해"_ 식. `planner` 가 다시 짜고 사용자는 다시 검토. 직접 편집은 planner 가 본인이 안 쓴 변경을 모르게 만들어 이후 단계와 어긋난다.
-
-**BLOCK verdict.** `reviewer` 가 BLOCK (또는 REQUEST CHANGES) 을 내고 자동 fix 루프 3회가 풀지 못하면 흐름이 멈춘다.
-
-이 3회는 모델이 알아서 세는 숫자가 아니라 hook 두 개가 디스크에 적어가며 강제한다. 리뷰어가 끝날 때마다 `record-verdict.sh` 가 판정과 시도 횟수, 그리고 그 순간의 작업 트리 지문을 `.claude/notes/loop-state.json` 에 기록하고, 매 턴 끝에 `enforce-loop.sh` 가 그 파일을 읽는다. 예산이 남아 있고 직전 사이클 이후로 작업 트리가 움직였으면 exit 2 로 **턴을 끝내지 못하게 막고** 재투입을 지시한다 — 새 BLOCK 이 기록된 뒤 오는 턴은 그 위에서 조용히 마무리될 수 없다. 예산을 다 쓰면 (`attempt` 3) 턴을 끝내되 이렇게 출력한다:
-
-```text
-[enforce-loop] 자동 수정 루프 3/3 소진 — 마지막 리뷰 판정은 BLOCK 입니다.
-성공이 아닙니다. 사람 개입이 필요합니다: 리뷰 findings 를 직접 확인하고 범위를 다시 정하세요.
-```
-
-예산이 남아 있는데도 멈추는 경우가 하나 더 있다. 한 사이클을 돌고 왔는데 작업 트리 지문이 직전과 똑같으면 — 코더가 파일에 아무것도 남기지 못했다는 뜻이다 — 남은 예산을 쓰지 않고 거기서 멈춘다:
-
-```text
-[enforce-loop] 무진전 중단 — 직전 사이클과 작업 트리가 동일합니다 (attempt 2/3, 판정 BLOCK).
-성공이 아닙니다. 사람 개입이 필요합니다: 같은 코드에 같은 리뷰가 반복될 뿐이니, findings 를 직접 확인하고 범위를 다시 정하세요.
-```
-
-즉 소진이든 무진전이든 그 시점의 종료는 **통과가 아니라 정지**다. 여기서부터는 hook 이 재투입을 밀어붙이지 않고 (`/review` 도 에스컬레이션을 지시한다), 사람 차례가 된다.
-
-다만 무진전 감지는 **그물이 아니라 하한선**이다. 지문은 커밋, 추적 중인 변경 내용, 그리고 아직 add 하지 않은 파일들의 이름과 내용을 본다. 반대로 **지문이 보는 파일 중 하나만 바뀌어도 지문이 움직이므로** (`.claude/notes` 와 gitignore 된 트리는 제외) 테스트 파일 하나만 추가한 사이클은 여기 안 걸린다. "루프가 안 움직인다" 는 것만 잡아주고, phase 가 괜찮은지는 여전히 리뷰어가 판단한다.
-
-3회 안에 풀리지 않는 BLOCK 은 보통 다음 셋 중 하나의 신호다:
-
-- Plan 의 가정이 잘못됨
-- 더 큰 architectural 결정이 필요함
-- reviewer 의 finding 자체가 false positive
-
-이때 **사용자가 직접 코드를 수정하는 건 권장하지 않는다.** 사람이 코드를 직접 만지는 순간 하네스의 컨텍스트와 어긋나기 시작하고, 이후 phase 의 reviewer / coder 가 사용자의 직접 변경을 모르는 상태로 진행하면서 회귀가 쌓인다. 자연어로 방향을 다시 잡아주는 게 올바른 대응이다:
-
-- _"Phase 2 의 가정이 틀렸다, X 대신 Y 로 가자"_
-- _"이건 false positive 다, reviewer 에게 다시 보라고 해"_
-- 더 큰 방향 전환이면 `/plan` 으로 Plan 을 다시 짠 뒤 `/orchestrator` 재실행
-
-자연어로도 안 풀리는 막힘이라면 그건 보통 Plan 의 근본 가정을 다시 봐야 할 시점이지, 사용자가 코드 패치로 우회할 문제가 아니다.
-
-**PR 머지.** 머지는 GitHub 에서 사람이 직접 클릭한다. `main` 으로의 자동 머지는 의도적으로 비활성화 — 동료 리뷰와 CI 가 통과한 뒤 사람의 손이 한 번 들어가는 흐름을 강제한다.
-
----
-
-## When to Use Other Verbs
-
-`/orchestrator` 가 평소 흐름. 나머지 5 verb 는 특수 상황용.
-
-| Verb | 언제 쓰나 |
-|---|---|
-| `/plan` | Plans.md 의 phase 분해를 **다시 짜고 싶을 때** (시공은 안 함) |
-| `/work N` | Plans.md 가 있는 상태에서 **N 번째 phase 만 따로** (디버깅) |
-| `/review` | 마지막 작업 diff **리뷰만 다시** |
-| `/release` | 본인 commit/PR 스타일 따로 있어서 자동 PR 안 쓰고 싶을 때 — 사실 안 써도 됨. `disable-model-invocation: true` 로 잠가둠. <sup>[1]</sup> |
-| `/setup` | **신규 서브프로젝트** 첫 부트스트랩 (한 번만) |
-
-<sup>[1]</sup> Claude Code v2.1.74+ 에서 검증. 이전 버전은 슬래시 호출도 막힐 수 있음 ([issue #26251](https://github.com/anthropics/claude-code/issues/26251)). `claude --version` 으로 확인.
-
----
-
-## When NOT to Use
-
-다음 작업은 `/orchestrator` 거치지 말고 그냥 채팅:
-
-```text
-> apps/server.py 의 logger 레벨 INFO 로 바꿔줘
-> 이 함수에 docstring 추가해줘
-> README 오타 고쳐줘
-```
-
-| 상황 | 권장 |
-|---|---|
-| 한 파일 한두 줄 수정 | 그냥 채팅 |
-| 빠른 디버깅 / 탐색 / 스파이크 | 그냥 채팅 |
-| README / 문서 단순 수정 | 그냥 채팅 |
-| 3 phase 이상 새 기능 / 리팩토링 | `/orchestrator` |
-| 보안/정확성 중요한 변경 | `/orchestrator` |
-| 멀티-프로젝트 인터페이스 변경 | repo 단위로 `/orchestrator` |
-
-> 하네스는 3 phase 이상 본격 작업에서 본전. 그 외엔 우회.
-
----
-
-## Side Commands
-
-```text
-> /compact
-```
-컨텍스트 정리. 작업 사이마다 권장.
-
-```text
-> @agent-explorer api-server 의 webhook 라우팅 보여줘
-> @agent-reviewer 이 PR 다시 봐줘
-```
-특정 agent 직접 호출 — `@` 입력하면 typeahead.
-
-```text
-> 이번엔 하네스 빼고 그냥 고쳐줘
-```
-일시적 우회.
-
----
-
-## Cheatsheet
-
-```text
-1. cd ~/your-project && claude
-2. > /orchestrator <자연어 작업 설명>
-3. ⛔ Plans.md 검토 + Approval ✓
-4. (자동 진행)
-5. ⛔ BLOCK 났으면 자연어로 방향 재지시 → /orchestrator 재실행
-6. ⛔ GitHub 에서 PR 머지
-7. 다음 작업 → /orchestrator <다음 작업>
-```
-
-> 외울 verb: `/orchestrator` 1개.
-
----
-
-## Project Structure
-
-```text
-.
-├── CLAUDE.md.example              # 작업 규칙 + 프로젝트 지도 (CLAUDE.md 로 복사)
-├── HARNESS.md                     # 종합 사용 가이드
-│
-├── .claude/
-│   ├── agents/                    # 6 subagent
-│   │   ├── explorer.md            #   Opus · read-only · 코드 탐색
-│   │   ├── planner.md             #   Fable · phase 분해
-│   │   ├── coder.md               #   Opus · 1 phase TDD 구현 (red-green-refactor)
-│   │   ├── tester.md              #   Opus · TDD 검증 + 엣지 케이스 확장
-│   │   ├── reviewer.md            #   Fable · 4 lens + 스택 룰
-│   │   └── documenter.md          #   Opus · 문서 동기화
-│   ├── skills/                    # 6 verb skill
-│   │   ├── orchestrator/          #   /orchestrator (메인)
-│   │   ├── plan/                  #   /plan
-│   │   ├── work/                  #   /work N
-│   │   ├── review/                #   /review
-│   │   ├── release/               #   /release (locked)
-│   │   └── setup/                 #   /setup
-│   ├── settings.json              # hook 6개 등록 (팀 공유용, 체크인)
-│   └── hooks/
-│       ├── block-destructive.sh   # Pre · 위험 셸 명령 차단
-│       ├── protect-secrets.sh     # Pre · 시크릿 파일 쓰기 거부
-│       ├── post-edit-lint.sh      # Post · .py 자동 ruff format (low-nit 자동화)
-│       ├── announce-agent.sh      # SubagentStart/Stop · agent 실행 알림
-│       ├── record-verdict.sh      # SubagentStop · reviewer verdict 기록
-│       ├── enforce-loop.sh        # Stop · 자동 fix 루프 예산 강제
-│       └── tests/run-tests.sh     # hook 회귀 테스트 suite
-│
-├── scripts/harness/
-│   └── run_phase.py               # /orchestrator 가 호출, 긴 phase 출력 분리
-│
-├── docs/harness/
-│   ├── REQUIREMENTS.template.md   # /setup 이 복사, planner 가 읽음
-│   ├── ADR.template.md            # documenter 가 결정 기록 시 사용
-│   └── DOC_SYNC_POLICY.md         # documenter 가 문서 갱신 판단 시 참고
-│
-└── examples/
-    └── reviewer-python.md         # Python (Django/FastAPI/Airflow)
-```
-
-> **빌트인과의 이름**: Claude Code 빌트인 subagent (`Explore`, `Plan`, `general-purpose`) 와 본 하네스 커스텀 (`explorer`, `planner`) 은 대소문자가 달라 충돌 안 함. 빌트인은 read-only quick-research 용, 본 커스텀은 Plans.md 연동 워크플로우 전용.
-
-자세한 사용법 / 트러블슈팅 / 비용 가이드는 [HARNESS.md](HARNESS.md) 참고.
-
----
-
-## Reviewer — Stack-Agnostic by Default
-
-`reviewer` (Fable) 가 PR 직전 4 lens 적용. **Universal lens 는 항상 포함**, **stack-specific 룰은 placeholder 로 비워둠** — 본인 스택에 맞게 채우는 게 다음 섹션.
-
-| Lens | Universal checks |
-|---|---|
-| **Spec** | Plan 에 적힌 성공 조건이 실제 코드에서 충족됐는지 |
-| **Security** | 시크릿 노출, 인젝션 (SQL/명령/템플릿), SSRF, path traversal, AuthZ, PII 로깅 |
-| **Correctness** | 엣지 케이스, 에러 처리, 네이밍, dead code, 테스트 커버리지 |
-| **Performance** | 메모리 폭주, async 경로의 blocking I/O, 관측성 결함 |
-
-### Verdict tags
-
-태그는 **scope** (신규 vs 기존) + **severity** (차단 정도) 두 축의 조합 — `tester` 와 메인 세션 BLUF 보고도 같은 어휘.
-
-| Tag | 축 | 의미 |
-|---|---|---|
-| `[NEW]` | scope | 본 Phase diff 가 만든 이슈. 기본값이라 단독 `[BLOCK]` 도 `[NEW]` 의미. 조합 예: `[NEW][BLOCK]` |
-| `[EXISTING]` | scope | 기존 코드 이슈. 이번 PR 차단 안 함, 별도 티켓 권장. |
-| `[BLOCK]` | severity | 보안 / correctness / spec 미달. 머지 차단. |
-| `[CHANGES]` | severity | 머지 전 수정 권장. |
-| `[NIT]` | severity | 선택적 개선. low-nit policy — formatter 가 잡을 건 코멘트 X. |
-
----
-
-## Safety + Polish Hooks — What They Do
-
-PreToolUse 는 차단 (exit `2` + stderr 사유), PostToolUse 는 후처리 (exit `0`, stdout 안내), Stop 은 턴 종료 판정 (exit `2` 면 턴이 안 끝나고 계속). stdin JSON 은 `jq` 로 파싱 (`python3` fallback — 둘 다 없으면 경고 출력 후 통과).
-
-> **권한 모드 우회 불가**: hook 의 `deny` 는 사용자가 `--dangerously-skip-permissions` 또는 `bypassPermissions` 모드로 띄워도 작동. 즉 사용자가 권한 검사 끄고 띄워도 hook 차단은 그대로. 팀 정책 / 보안 가드용으로 신뢰 가능.
-
-> **회귀 테스트**: `bash .claude/hooks/tests/run-tests.sh` — hook 6개에 합성 JSON 을 흘려 exit code (2 = deny / 0 = allow) 와 상태 파일 결과를 단언하는 self-contained suite. 오탐 가드 포함.
-
-### `block-destructive.sh` · matcher: `Bash`
-
-```text
-deny:  rm -rf {/, ~, $HOME, /usr/*, /etc/*, /Library/*, ...}   (compound 명령의 모든 segment 검사)
-deny:  git push {--force, --force-with-lease, -f, +refspec}    (git -C <path> push 포함)
-deny:  git reset --hard origin/<branch>
-deny:  dd of=/dev/{sd,nvme,hd,disk,rdisk}*
-
-allow: rm -rf {node_modules, /tmp/foo, .venv, build}, rm -rf build > /dev/null
-allow: git push -u origin <branch>
-allow: git reset --hard HEAD~1
-```
-
-> suite 중 40 케이스 (deny 22 + 오탐 가드 16 + 프로토콜 2).
-
-### `protect-secrets.sh` · matcher: `Edit|Write`
-
-```text
-deny:  .env*, *.pem, *.key, *.p12, *.pfx, *.p8, *.keystore, id_rsa*, id_ed25519*,
-       .npmrc, .pypirc, .htpasswd, *{credentials,secret,token}*.{json,yaml,yml}, .mcp.json
-allow: README.md, *.txt, .env.example (*.example/*.sample/*.template 은 문서/템플릿),
-       token_service.py, design-tokens.css   (credential 형태가 아닌 소스 파일은 통과)
-```
-
-> suite 중 28 케이스 (deny 18 + 오탐 가드 10).
-
-### `post-edit-lint.sh` · matcher: `Edit|Write` (PostToolUse)
-
-```text
-target:  *.py 변경 직후
-action:  ruff format <file>   (없으면 black --quiet <file>)
-notify:  파일이 실제로 변경됐을 때만 stdout 에 "↳ auto-formatted by <tool>: <file>"
-exit:    항상 0 — 코더 차단 X (lint 실패는 reviewer 영역)
-```
-
-목적: `reviewer.md` 의 **low-nit policy** 자동화. 포맷/공백/임포트 정렬 같은 NIT 를 formatter 가 흡수 → reviewer 는 진짜 이슈 (BLOCK/CHANGES) 에 집중. `ruff format` 만 사용 (`ruff check --fix` 는 너무 적극적이라 제외 — semantic 변경 위험).
-
-도구 없으면 silent skip → CI 환경 / 새 프로젝트에서 noise 없음.
-
-### `announce-agent.sh` · matcher: `SubagentStart|SubagentStop`
-
-작업 중 어느 agent 가 실행/종료되는지 **메인 터미널 포그라운드에 직접 출력**. Claude Code CLI 자체엔 active subagent 표시가 없어서 ([issue #27916](https://github.com/anthropics/claude-code/issues/27916)) hook 이 빈 자리를 채움.
-
-표시 예:
-```text
-▶ 14:32:15  agent 시작: explorer
-■ 14:32:48  agent 종료: explorer
-▶ 14:32:51  agent 시작: planner
-■ 14:35:22  agent 종료: planner
-▶ 14:36:01  agent 시작: coder
-...
-```
-
-`/dev/tty` 로 직접 출력 → stdout/stderr 캡처와 무관하게 항상 보임. 동일 내용을 `.claude/notes/agent-activity.log` 에도 기록 (사후 검증용).
-
-#### 활성화 방법
-
-기본 제공되는 `.claude/settings.json` 에 `SubagentStart` / `SubagentStop` / `Stop` entry 가 이미 등록되어 있음 — 신규 설치면 추가 설정 불필요. 본인 `settings.json` 을 따로 유지 중이라면 `update.sh` 가 등록 안 된 훅 이름과 붙여넣을 JSON 스니펫을 출력하고, upstream `settings.json` 을 백업 폴더에 참고용으로 저장해줌. 등록 후 Claude Code 재시작 → 다음 `/orchestrator` 부터 agent 시작/종료가 터미널에 한 줄씩 출력됨.
-
-#### 검증
-
-작업 끝나고 로그로 어느 agent 가 진짜 spawn 됐는지 확인:
-
-```bash
-cat .claude/notes/agent-activity.log
-# 14:32:15  SubagentStart  explorer
-# 14:32:48  SubagentStop   explorer
-# ...
-```
-
-이게 ground truth — skill 본문이 의도한 대로 진짜 agent 가 spawn 됐는지 **사후 검증** 가능.
-
-### `record-verdict.sh` · event: `SubagentStop`
-
-리뷰어가 끝나면 그 판정을 파일에 적어둔다. 서브에이전트 트랜스크립트의 마지막 답변을 `run_phase.py --parse-verdict` 로 파싱해서 이렇게 남긴다:
-
-```json
-// .claude/notes/loop-state.json  (gitignore 됨)
-{"last_verdict": "BLOCK", "attempt": 2, "enforced": false,
- "last_diff_sha": "8f3c…", "prev_diff_sha": "1a90…",
- "last_reviewed_head": "4837194…"}
-```
-
-`APPROVE` 면 `attempt` 를 0 으로 리셋, `BLOCK` / `REQUEST CHANGES` 면 +1, 판정을 못 읽었으면 (`UNKNOWN`) 그대로 둔다. `last_diff_sha` 는 이번 사이클의 작업 트리 지문이고 `prev_diff_sha` 는 직전 사이클의 것이다 — 아래 `enforce-loop.sh` 가 둘을 비교해 헛도는 루프를 끊는다. `last_reviewed_head` 는 **리뷰한 커밋**이고, 다음 라운드의 `/review` 가 여기서부터 diff 를 떠서 이미 읽은 코드를 다시 읽지 않는다 (지문은 내용 해시라 `git diff` 의 인자가 못 된다). 이 키만은 `enforce-loop.sh` 가 읽지 않는다 — 루프 예산은 자기가 소유한 값으로만 판정한다. 판정을 **아예 기록하지 못하면** `record_failed` / `record_failed_reason` 을 대신 남겨서, 그 사이클이 조용히 사라지지 않게 한다. 카운터를 컨텍스트가 아니라 디스크에 두는 이유는 컨텍스트가 한 번 압축되면 그 안의 숫자는 사라지기 때문이다. 어떤 입력에도 **항상 exit 0** — `SubagentStop` 의 exit 2 는 "서브에이전트를 멈추지 못하게 한다" 는 뜻이라 read-only 인 리뷰어를 계속 돌릴 뿐이다.
-
-> ⚠️ **리뷰어 서브에이전트 이름은 `reviewer` 로 시작해야 한다.** 이 hook 은 `agent_type` 이 `reviewer` 또는 `reviewer-*` 일 때만 기록한다 (`reviewer-phase2` 같은 팀메이트 이름까지 걸리도록). `phase3-reviewer` 나 `review-gate` 로 띄우면 기록이 없고, 기록이 없으면 아래 루프 강제가 **조용히 꺼진다.**
-
-### `enforce-loop.sh` · event: `Stop`
-
-메인 턴이 끝날 때마다 발화해서 위 파일을 읽고 자동 fix 루프 예산(3회) 을 판정한다.
-
-```text
-파일 없음                             → exit 0 (평범한 대화 턴을 가로채지 않음)
-APPROVE / UNKNOWN / 이미 반응한 판정    → exit 0
-BLOCK·CHANGES + 예산 남음 + 트리 변함   → exit 2 — 턴을 끝내지 못하게 막고 stderr 로 재투입 지시
-BLOCK·CHANGES + 예산 남음 + 트리 동일   → exit 0 + "무진전 중단" (남은 예산을 안 쓰고 사람에게 넘김)
-BLOCK·CHANGES + attempt 3             → exit 0 + "성공이 아닙니다. 사람 개입이 필요합니다"
-record_failed 표시가 있음              → exit 0 + 그 사실을 한 번 알리고 표시를 소비 (예산 분기보다 먼저)
-상태 파일 손상 / jq·python3 부재        → exit 0 + stderr 경고 (세션을 hook 안에 가두지 않음)
-```
-
-exit 0 이 늘 통과라는 뜻은 아니다. 무진전 중단과 예산 소진은 **정지**이고, 그렇게 끝난 턴 다음에 사이클을 하나 더 돌리는 건 hook 이 막으려던 바로 그 동작이다.
-
-판정 하나는 반응 한 번만 산다 (`enforced` 플래그) — 사용자가 루프를 놔두고 떠나도 남은 BLOCK 이 이후 모든 턴을 붙잡지 않는다.
-
-**범위**: 이 두 hook 이 하는 일은 리뷰어 판정을 기록하고 재시도 상한을 강제하는 것까지다. `tester` 발견으로 도는 `/work` 안쪽 루프는 여기서 세지 않는다.
-
----
-
-## Honest Limitations
-
-- **결과의 상한은 Plan 의 품질이 정한다.** Plan 이 모호하면 코드도 리뷰도 모호해진다. `planner` 에 최상위 모델(Fable) 을 할당하는 게 작업 전체에서 가장 가성비 좋은 결정이다.
-- **`/orchestrator` 한 번은 phase 수만큼의 subagent 호출 (`planner` + `coder` + `tester` + `reviewer` × phase 수) 을 포함하므로 단일 채팅보다 토큰 소비가 많다.** 정확한 배수는 코드베이스 크기, phase 분해 깊이, BLOCK 자동 fix 루프 횟수에 따라 크게 달라지므로 본인 환경에서 직접 측정하는 게 맞다.
-- **단일 세션 subagent 패턴을 따른다.** Claude Code 의 [Agent Teams](https://code.claude.com/docs/en/agent-teams) — teammates 끼리 직접 메시지를 주고받고 공유 task list 를 다루는 패턴 — 는 의도적으로 채택하지 않았다. 일반적인 phase 단위 작업에는 단일 세션 + 격리 컨텍스트가 더 단순하고 디버깅하기 쉽다. 10명 이상의 worker 가 자율 토론하며 동시에 작업하는 시나리오라면 Agent Teams 쪽이 토큰 효율도 3-5배 좋다.
-
----
-
-## Customize for Your Stack
-
-> 의도적으로 **언어/프레임워크 비종속** 으로 출발. 본인 스택에 맞춰 다음 표대로 채움.
-
-### What to edit, where
-
-| 커스터마이즈 대상 | 수정할 파일 | How |
-|---|---|---|
-| **스택별 reviewer 룰** (ORM N+1, async/sync 혼합, 마이그레이션 안전성, 프레임워크 함정) | `.claude/agents/reviewer.md` 의 "Stack-specific" 서브섹션 | `examples/reviewer-python.md` 참고하여 작성 |
-| **의존성 매니저 / 린트 / 테스트 러너** | `.claude/agents/coder.md`, `tester.md` | agent 가 `pyproject.toml`/`package.json` 등 lock file 을 읽고 따라가도록 instruction 작성됨. 특정 도구를 강제하려면 한 줄 추가 |
-| **빌드 산출물 skip 폴더** | `.claude/agents/explorer.md` | 표준 폴더 (`node_modules`, `.venv`, `target`, `build`, `dist`) 이미 포함 |
-| **테스트 디렉토리** | `.claude/agents/tester.md` | agent 가 `tests/`, `__tests__/` 등 표준 위치를 인식하도록 instruction 작성됨. 비표준 위치면 한 줄 추가 |
-| **프로젝트 지도 / 작업 규칙** | `CLAUDE.md` | `CLAUDE.md.example` 복사 후 채움. **Anthropic 권장 200 줄 / 150 instruction 이내**. 그 이상은 `@import` 로 분리 |
-| **요구사항 / 인수 기준** | `<subproject>/REQUIREMENTS.md` | `docs/harness/REQUIREMENTS.template.md` 복사 후 채움 (또는 `/setup` 자동화) |
-
-### Reference reviewers
-
-| 스택 | 파일 |
-|---|---|
-| Python (Django / FastAPI / Airflow) | [`examples/reviewer-python.md`](examples/reviewer-python.md) |
-| Java / Kotlin / Scala / Go / Rust / Ruby / ... | _PR 환영_ |
-
-복사 명령:
-
-```bash
-cp examples/reviewer-<your-stack>.md .claude/agents/reviewer.md
-```
-
-### Advanced — Subagent persistent memory
-
-특정 agent 가 **cross-session 으로 학습**하길 원하면 frontmatter 에 `memory: project` 추가:
-
-```yaml
----
-name: reviewer
-memory: project
-...
----
-```
-
-→ `.claude/agent-memory/reviewer/MEMORY.md` 에 자주 발견되는 이슈 / 코드베이스 특화 패턴이 누적된다. 다음 세션에서 reviewer 가 그 메모리를 참고. 같은 옵션을 다른 agent 에도 적용 가능.
-
----
-
-## License
-
-[MIT](LICENSE)
-
----
-
-## Contributing & Acknowledgments
-
-- 워크플로우 구조: 민세홍님의 6-agent 디자인에서 시작.
-- Best-practice 참고: [Chachamaru127/claude-code-harness](https://github.com/Chachamaru127/claude-code-harness), [Anthropic Claude Code 공식 문서](https://code.claude.com/docs), [Martin Fowler — Harness engineering](https://martinfowler.com/articles/harness-engineering.html).
-- Spec-Driven Development 패밀리 (본 하네스보다 무겁지만 같은 계보): [gotalab/cc-sdd](https://github.com/gotalab/cc-sdd), Superpowers, GSD.
-- 새 스택 reviewer 추가 PR 환영.
+- [Claude Code skills](https://code.claude.com/docs/en/skills): 스킬 본문은 호출 후 컨텍스트에 남으므로 짧게 유지합니다.
+- [Claude Code subagents](https://code.claude.com/docs/en/sub-agents): 격리 가치가 있는 독립 작업에만 subagent를 사용합니다.
+- [Claude Code hooks](https://code.claude.com/docs/en/hooks): 훅은 여러 설정 계층에서 합쳐지므로 최소 안전 가드만 둡니다.
+- [Claude Code model configuration](https://code.claude.com/docs/en/model-config): 역할별 모델 alias와 추론 강도를 명시합니다.

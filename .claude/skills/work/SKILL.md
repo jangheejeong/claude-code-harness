@@ -1,62 +1,13 @@
 ---
 name: work
-description: Execute one Phase from an approved Plans.md using strict TDD. Coder runs red-green-refactor cycle per acceptance bullet, then tester verifies TDD compliance and extends edge case coverage. Use after /plan is approved. Stops at the Phase boundary.
-allowed-tools: Agent, Read, Edit, Write, Grep, Glob, Bash
+description: Implement or continue one approved plan phase with a focused diff and proportional tests. Use for `/work` or an approved phase; do not use when requirements are unsettled, only review is requested, or release actions are needed.
 ---
 
-# /work — Phase execution (TDD)
+# Work
 
-## Preconditions (HARD)
+1. Verify the target phase and acceptance criteria in `Plans.md`.
+2. Ask `coder` to implement only that phase and run focused checks. Do not require red/green commits or push from the agent.
+3. Use `tester` only for meaningful behavior, integration boundaries, regressions, or unverified edge cases.
+4. Report the changed files, checks, and remaining risk. Stop at the phase boundary.
 
-- An approved `Plans.md` exists in the target subproject. The user has checked off the Approval section.
-- Working tree is clean OR on a dedicated branch / worktree (`.claude/worktrees/<feature>`).
-- Each Phase in `Plans.md` has TDD-ready acceptance criteria (testable, observable). If criteria are vague, route back to `/plan` instead of guessing.
-- If you cannot verify the above, refuse and route to `/plan` or to a branch creation step.
-
-## Steps
-
-1. **Read `<subproject>/Plans.md`**. Identify the next un-done Phase (or use the Phase number the user passed). Quote its acceptance criteria back at the top of your message.
-
-2. **Branch guard**. Check `git branch --show-current`. If on `main`/`master`, create a work branch BEFORE spawning coder — respect the user's branch conventions (e.g. Jira ticket id); default `phase/<n>-<slug>`. Coder commits land on this branch.
-
-3. **Spawn `@agent-coder`** with the Phase id. Coder follows strict TDD per acceptance bullet, committing each checkpoint on the work branch:
-   - RED: write the failing test first; run it; confirm failure; commit `test(<scope>): red — <bullet summary>`
-   - GREEN: minimal implementation to pass; commit `feat(<scope>): green — <bullet summary>` (or `fix`/`refactor` type)
-   - REFACTOR: only if needed, while keeping tests green
-   
-   Coder never pushes, never amends/rebases existing commits, never commits secrets. Wait for the diff summary with per-cycle RED/GREEN notes.
-
-4. **Spawn `@agent-tester`** to:
-   - Verify the coder followed TDD discipline — git history is the evidence: each acceptance bullet's red commit precedes its green commit
-   - Map every acceptance bullet to ≥1 test
-   - Add edge case tests beyond the bullets (empty/null, boundary values, concurrency, error paths, time, encoding) — tester may commit them as `test(<scope>): edge cases — phase <n>`
-   
-   If tester reports a TDD violation or production bug, spawn coder again with the finding. Cap this at 3 iterations, then escalate to the user.
-
-   This particular cap is on you to respect: `.claude/hooks/enforce-loop.sh` counts **reviewer** verdicts only, and a tester finding is not one. The enforced budget starts at `/review` — see `.claude/skills/review/SKILL.md`.
-
-5. **Stop**. Print:
-   - Phase number completed
-   - Diff summary (files + LoC)
-   - TDD cycle summary (per acceptance bullet)
-   - Tester's edge cases added
-   - Test run results
-   - Suggested next step: `/review` (to gate) or `/work` again (next Phase) or pause
-
-## Subagent lifecycle (HARD)
-
-- **Resume the same worker when the work continues; close it when the role changes.** A fix round after a review is the *same* coder's job, and `SendMessage` to its name resumes it with its whole transcript — the plan, the files it already read, the reasoning behind what it wrote. Spawning a fresh coder for round two makes it read all of that again to learn what it already knew. The official guidance is explicit: *"Each subagent invocation creates a new instance rather than continuing an earlier one. To continue an existing subagent's work instead of starting over, ask Claude to resume it."* Prompt caching points the same way — it costs more than it saves at two calls and turns profitable around three, and a fix loop is exactly three.
-- **But never leave two workers holding the same files.** Close the previous one before starting a *different* worker that touches what it touched. **Idle is not stopped** — a coder that reported and went quiet still has write access. On 2026-09-05 a finished coder was left open while the next one started with the same two files open for writing; the earlier one happened to notice and stop itself, which is luck, not a rule.
-- **Do not read "went quiet" as "stalled".** On 2026-09-06 a tester that had finished its audit and was mid-way through writing tests was killed because it had not written a file for five minutes — it was running a 90-second suite repeatedly. The uncommitted work was lost and had to be redone. Check what it has actually produced (commits, files, running processes) before deciding it is stuck.
-- **A reviewer subagent's name must start with `reviewer`** — `reviewer`, `reviewer-phase2`, and so on. `.claude/hooks/record-verdict.sh` records a verdict only for `reviewer` and `reviewer-*` names, so a reviewer spawned as `phase3-reviewer` or `review-gate` turns loop enforcement off for the whole phase, and nothing in the session says it is off.
-
-## Don't
-
-- Don't accept "test-after" from coder. If coder skipped RED verification, escalate.
-- Don't run multiple Phases back-to-back without the user's signal.
-- Don't push or open a PR — commits stay local on the work branch; push/PR is `/release`'s job. Never amend or rebase existing commits.
-- Don't introduce dependencies that aren't already in the project's lock file unless the Plan explicitly authorizes it.
-
-## Optional flag — `parallel`
-
-If the user types `/work --parallel <N>`, AND the Phase is internally decomposed into independent vertical sub-slices, spawn N coder subagents in **isolated worktrees** — create them via Bash: `git worktree add .claude/worktrees/<slice> -b phase/<n>-<slice>`. Each subagent still follows strict TDD inside its slice. Otherwise ignore the flag.
+Standalone `/work` performs one phase and does not own review retries.
