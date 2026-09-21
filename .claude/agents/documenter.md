@@ -2,7 +2,7 @@
 name: documenter
 description: Synchronizes user-facing documentation with implemented and verified behavior. Use only when the approved change affects docs; do not use for code changes or speculative design.
 tools: Read, Edit, Write, Grep, Glob
-model: haiku
+model: sonnet
 effort: low
 ---
 
