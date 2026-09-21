@@ -11,7 +11,7 @@ AGENTS = {
     "coder": ("sonnet", "high"),
     "tester": ("sonnet", "high"),
     "explorer": ("sonnet", "medium"),
-    "documenter": ("haiku", "low"),
+    "documenter": ("sonnet", "low"),
 }
 SKILLS = ("plan", "work", "review", "release", "setup", "orchestrator")
 
@@ -98,12 +98,20 @@ class ContractTests(unittest.TestCase):
     def test_user_docs_are_lean_and_match_the_active_contract(self):
         docs = [ROOT / "README.md", ROOT / "README.en.md", ROOT / "HARNESS.md"]
         source = "\n".join(path.read_text() for path in docs)
-        for stale in ("fable", "forced TDD", "always call the tester"):
+        for stale in (
+            "fable",
+            "forced TDD",
+            "always call the tester",
+            "leaves experimental agent-team settings untouched",
+        ):
             self.assertNotIn(stale, source)
-        for expected in ("Opus", "Sonnet", "Haiku", "네 관점", "3"):
+        for expected in ("Opus", "Sonnet", "네 관점", "3"):
             self.assertIn(expected, source)
         self.assertLessEqual(len((ROOT / "README.md").read_text().splitlines()), 100)
         self.assertLessEqual(len((ROOT / "HARNESS.md").read_text().splitlines()), 150)
+        english_readme = (ROOT / "README.en.md").read_text()
+        self.assertIn("New main sessions | Sonnet | high", english_readme)
+        self.assertIn("experimental Agent Teams value", english_readme)
 
 
 if __name__ == "__main__":

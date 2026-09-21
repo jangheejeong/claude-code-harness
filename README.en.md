@@ -31,10 +31,11 @@ Automation stops when a finding repeats unchanged, the verdict is unclear, or th
 
 | Role | Model | Effort |
 |---|---|---|
+| New main sessions | Sonnet | high |
 | planner, reviewer | Opus | high |
 | coder, tester | Sonnet | high |
 | explorer | Sonnet | medium |
-| documenter | Haiku | low |
+| documenter | Sonnet | low |
 
 Opus is reserved for high-consequence judgment, Sonnet handles implementation and verification, and lower effort is used where extra reasoning has limited value.
 
@@ -46,7 +47,7 @@ cd claude-code-harness
 python3 scripts/install.py --workspace /Users/jangheejeong/Projects/heum
 ```
 
-The installer creates repository-backed global links, preserves unmanaged files and settings, backs up only known legacy copies, removes retired harness hook registrations and `HARNESS_RUN_PHASE`, and leaves experimental agent-team settings untouched.
+The installer creates repository-backed global links, preserves unmanaged files and settings, backs up only known legacy copies, and removes retired harness hook registrations, `HARNESS_RUN_PHASE`, and the experimental Agent Teams value previously enabled by this harness. In workspace-local settings, it removes only retired harness hooks and exact duplicates of shared hooks while preserving permissions, MCP servers, and custom hooks. It never closes running sessions or deletes session history; configuration changes are most reliable in a new session.
 
 Preview changes first with:
 
@@ -62,6 +63,8 @@ bash .claude/hooks/tests/run-tests.sh
 ```
 
 Use `/skills` in a new Claude Code session to confirm discovery. Existing skill and agent directories are reloaded while Claude Code is running, but a new session is the most reliable way to verify hook configuration changes.
+
+For new main sessions, the recommended user setting is `"model": "sonnet"` with `"effortLevel": "high"`. Resumed sessions keep their saved model.
 
 See [HARNESS.md](HARNESS.md) for operating rules and troubleshooting.
 

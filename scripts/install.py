@@ -22,6 +22,7 @@ RETIRED_HOOKS = (
     "record-verdict",
     "enforce-loop",
 )
+RETIRED_AGENT_TEAMS_ENV = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 
 
 def digest(path: Path) -> str:
@@ -140,6 +141,7 @@ def rendered_settings(
     managed_paths: Iterable[Union[Path, str]],
     safety_paths: Optional[Dict[str, Path]],
     retired_runner: Path,
+    remove_retired_agent_teams: bool = False,
 ) -> str:
     if not isinstance(existing, dict):
         raise ValueError("settings.json must be an object")
@@ -183,11 +185,66 @@ def rendered_settings(
         )
 
     env = result.get("env")
-    if isinstance(env, dict) and env.get("HARNESS_RUN_PHASE") == str(retired_runner):
-        env.pop("HARNESS_RUN_PHASE")
+    if isinstance(env, dict):
+        if env.get("HARNESS_RUN_PHASE") == str(retired_runner):
+            env.pop("HARNESS_RUN_PHASE")
+        if remove_retired_agent_teams and env.get(RETIRED_AGENT_TEAMS_ENV) == "1":
+            env.pop(RETIRED_AGENT_TEAMS_ENV)
         if not env:
             result.pop("env")
     return json.dumps(result, indent=2, ensure_ascii=False) + "\n"
+
+
+def without_duplicate_hooks(existing: dict, inherited: dict) -> dict:
+    result = copy.deepcopy(existing)
+    hooks = result.get("hooks")
+    inherited_hooks = inherited.get("hooks", {})
+    if hooks is None:
+        return result
+    if not isinstance(hooks, dict) or not isinstance(inherited_hooks, dict):
+        raise ValueError("settings.json hooks must be an object")
+
+    for event, entries in list(hooks.items()):
+        if not isinstance(entries, list):
+            raise ValueError("hook event entries must be lists")
+        inherited_entries = inherited_hooks.get(event, [])
+        if not isinstance(inherited_entries, list):
+            raise ValueError("inherited hook event entries must be lists")
+
+        cleaned = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+                raise ValueError("hook entries must contain a hooks list")
+            entry_scope = {key: value for key, value in entry.items() if key != "hooks"}
+            inherited_handlers = []
+            for inherited_entry in inherited_entries:
+                if not isinstance(inherited_entry, dict):
+                    raise ValueError("inherited hook entries must be objects")
+                inherited_scope = {
+                    key: value
+                    for key, value in inherited_entry.items()
+                    if key != "hooks"
+                }
+                if inherited_scope == entry_scope:
+                    inherited_handlers.extend(inherited_entry.get("hooks", []))
+
+            remaining = [
+                handler
+                for handler in entry["hooks"]
+                if handler not in inherited_handlers
+            ]
+            if remaining:
+                item = copy.deepcopy(entry)
+                item["hooks"] = remaining
+                cleaned.append(item)
+        if cleaned:
+            hooks[event] = cleaned
+        else:
+            hooks.pop(event)
+
+    if not hooks:
+        result.pop("hooks")
+    return result
 
 
 def atomic_write(path: Path, content: str) -> bool:
@@ -295,6 +352,8 @@ def install(
 
     workspace_settings = None
     workspace_rendered = None
+    workspace_local_settings = None
+    workspace_local_rendered = None
     if workspace is not None:
         workspace_claude = workspace / ".claude"
         cleanup = []
@@ -365,31 +424,60 @@ def install(
                     )
                 )
 
+        scheduled_removals = {destination for destination, _ in remove_actions}
+        workspace_paths = []
+        for name in SAFETY_HOOKS + RETIRED_HOOKS:
+            path = workspace_claude / "hooks" / "{}.sh".format(name)
+            if not (path.exists() or path.is_symlink()) or path in scheduled_removals:
+                workspace_paths.append(path)
+        workspace_commands = list(workspace_paths)
+        workspace_commands.extend(
+            "$CLAUDE_PROJECT_DIR/.claude/hooks/{}.sh".format(path.stem)
+            for path in workspace_paths
+        )
+        workspace_commands.extend(
+            "${{CLAUDE_PROJECT_DIR}}/.claude/hooks/{}.sh".format(path.stem)
+            for path in workspace_paths
+        )
+
         workspace_settings = workspace_claude / "settings.json"
         validate_parent(workspace_settings)
+        workspace_settings_data = {}
         if workspace_settings.exists():
             if workspace_settings.is_symlink():
                 raise ValueError("refusing symlinked settings file: {}".format(workspace_settings))
-            scheduled_removals = {destination for destination, _ in remove_actions}
-            workspace_paths = []
-            for name in SAFETY_HOOKS + RETIRED_HOOKS:
-                path = workspace_claude / "hooks" / "{}.sh".format(name)
-                if not (path.exists() or path.is_symlink()) or path in scheduled_removals:
-                    workspace_paths.append(path)
-            workspace_commands = list(workspace_paths)
-            workspace_commands.extend(
-                "$CLAUDE_PROJECT_DIR/.claude/hooks/{}.sh".format(path.stem)
-                for path in workspace_paths
-            )
-            workspace_commands.extend(
-                "${{CLAUDE_PROJECT_DIR}}/.claude/hooks/{}.sh".format(path.stem)
-                for path in workspace_paths
-            )
+            workspace_settings_data = json.loads(workspace_settings.read_text())
             workspace_rendered = rendered_settings(
-                json.loads(workspace_settings.read_text()),
+                workspace_settings_data,
                 workspace_commands,
                 None,
                 root / "scripts/harness/run_phase.py",
+            )
+            workspace_settings_data = json.loads(workspace_rendered)
+
+        workspace_local_settings = workspace_claude / "settings.local.json"
+        validate_parent(workspace_local_settings)
+        if workspace_local_settings.exists():
+            if workspace_local_settings.is_symlink():
+                raise ValueError(
+                    "refusing symlinked settings file: {}".format(
+                        workspace_local_settings
+                    )
+                )
+            local_cleaned = json.loads(
+                rendered_settings(
+                    json.loads(workspace_local_settings.read_text()),
+                    workspace_commands,
+                    None,
+                    root / "scripts/harness/run_phase.py",
+                )
+            )
+            local_cleaned = without_duplicate_hooks(
+                local_cleaned,
+                workspace_settings_data,
+            )
+            workspace_local_rendered = (
+                json.dumps(local_cleaned, indent=2, ensure_ascii=False) + "\n"
             )
 
     global_settings = global_root / "settings.json"
@@ -412,12 +500,17 @@ def install(
         global_safety_paths + managed_global_retired_paths,
         safety_paths,
         root / "scripts/harness/run_phase.py",
+        remove_retired_agent_teams=True,
     )
 
     settings_updated = int(content_would_change(global_settings, global_rendered))
     if workspace_settings is not None and workspace_rendered is not None:
         settings_updated += int(
             content_would_change(workspace_settings, workspace_rendered)
+        )
+    if workspace_local_settings is not None and workspace_local_rendered is not None:
+        settings_updated += int(
+            content_would_change(workspace_local_settings, workspace_local_rendered)
         )
 
     planned_backups = [
@@ -443,6 +536,8 @@ def install(
         atomic_write(global_settings, global_rendered)
         if workspace_settings is not None and workspace_rendered is not None:
             atomic_write(workspace_settings, workspace_rendered)
+        if workspace_local_settings is not None and workspace_local_rendered is not None:
+            atomic_write(workspace_local_settings, workspace_local_rendered)
 
     return {
         "dry_run": dry_run,

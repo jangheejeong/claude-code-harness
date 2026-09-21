@@ -44,6 +44,7 @@ class InstallTests(unittest.TestCase):
             "other": "keep",
             "env": {
                 "HARNESS_RUN_PHASE": str(ROOT / "scripts/harness/run_phase.py"),
+                "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
                 "KEEP_ME": "yes",
             },
             "hooks": {"PreToolUse": [custom]},
@@ -72,6 +73,84 @@ class InstallTests(unittest.TestCase):
             (self.global_root / "skills/review").resolve(),
             ROOT / ".claude/skills/review",
         )
+
+    def test_non_harness_agent_teams_value_is_preserved(self):
+        self.global_root.mkdir(parents=True)
+        settings_path = self.global_root / "settings.json"
+        settings_path.write_text(
+            json.dumps(
+                {"env": {"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "0"}}
+            )
+        )
+
+        self.install(workspace=False)
+
+        installed = json.loads(settings_path.read_text())
+        self.assertEqual(
+            installed["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"],
+            "0",
+        )
+
+    def test_workspace_local_removes_only_retired_and_duplicate_hooks(self):
+        workspace_claude = self.workspace / ".claude"
+        workspace_claude.mkdir(parents=True)
+        duplicate = {
+            "matcher": "Edit|Write",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "project-frontend-context",
+                }
+            ],
+        }
+        (workspace_claude / "settings.json").write_text(
+            json.dumps({"hooks": {"PostToolUse": [duplicate]}})
+        )
+        custom = {
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "custom-local-hook"}],
+        }
+        local_settings = workspace_claude / "settings.local.json"
+        local_settings.write_text(
+            json.dumps(
+                {
+                    "permissions": {"allow": ["Bash(git status)"]},
+                    "enabledMcpjsonServers": ["jira"],
+                    "hooks": {
+                        "PostToolUse": [duplicate],
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": '"$CLAUDE_PROJECT_DIR"/.claude/hooks/block-destructive.sh',
+                                    }
+                                ],
+                            },
+                            custom,
+                        ],
+                        "SubagentStop": [
+                            {
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": '"$CLAUDE_PROJECT_DIR"/.claude/hooks/announce-agent.sh',
+                                    }
+                                ]
+                            }
+                        ],
+                    },
+                }
+            )
+        )
+
+        self.install()
+
+        installed = json.loads(local_settings.read_text())
+        self.assertEqual(installed["permissions"], {"allow": ["Bash(git status)"]})
+        self.assertEqual(installed["enabledMcpjsonServers"], ["jira"])
+        self.assertEqual(installed["hooks"], {"PreToolUse": [custom]})
 
     def test_exact_workspace_duplicates_and_retired_state_are_backed_up(self):
         workspace_claude = self.workspace / ".claude"

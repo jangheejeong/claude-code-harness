@@ -463,3 +463,28 @@ orchestrator/SKILL.md:46  python scripts/harness/run_phase.py --subproject ...
 ### Approval
 
 - [x] Owner approved scope — 2026-09-19, “Claude CLI 쪽 하네스도 동일하게 최적화 및 불필요한 것들 제거”
+
+---
+
+## 추가 승인 — 2026-09-21 Claude CLI 실행 환경 토큰 경량화
+
+하네스 정본 자체뿐 아니라 사용자·workspace 설정에 남은 중복 플러그인, 오래된 Hook 등록, 과도한 상시 컨텍스트를 정리합니다. 기존에 오래 열린 Claude 세션과 세션 기록은 종료하거나 삭제하지 않습니다.
+
+### Phase 14. 로컬 실행 환경 정리
+
+- [x] `claude-mem`, `superpowers`, `harness`, `feature-dev`, `code-review` 플러그인과 구형 중복 `security-guidance` 플러그인은 삭제하지 않고 사용자 범위에서 비활성화합니다.
+- [x] 공식 `security-guidance`, `pyright-lsp`, `context7`, `eli5` 플러그인은 유지합니다.
+- [x] 실험적 Agent Teams 환경 변수를 제거하고, 새 세션의 기본 모델을 `sonnet`, 추론 강도를 `high`로 설정합니다.
+- [x] workspace의 `settings.local.json`에서는 중복되거나 제거된 Hook 등록만 없애고 기존 권한·MCP 설정은 보존합니다.
+- [x] 전역 한국어 안내는 짧은 기본 원칙만 남기고 `plain-korean` 스킬은 명시적으로 호출할 때만 로드되게 합니다.
+- [x] workspace `CLAUDE.md`를 200줄 미만으로 줄이되 작업 규칙, 프로젝트 지도, 하네스 흐름, 모델 정책, MCP와 안전장치는 보존합니다.
+- [x] 설치기가 이후 재설치에서도 Agent Teams와 workspace 로컬의 과거 하네스 Hook을 안전하게 정리하도록 회귀 테스트를 추가합니다.
+- [x] 기존 Claude 프로세스, `~/.claude/projects`, history와 플러그인 데이터는 수정·종료·삭제하지 않습니다.
+- [x] 설정 JSON, 설치 멱등성, Hook 계약, 플러그인 상태와 기존 세션 보존을 검증하고 독립 네 관점 리뷰를 통과합니다.
+- [x] 기존 로컬 커밋의 `documenter=sonnet/low` 설정을 보존하고 README·운영 가이드·계약 테스트를 실제 설정과 동기화합니다.
+
+**Review: APPROVE — 2026-09-21** (2라운드, 예산 2/3). 1차에서 영문 README의 Agent Teams 설명과 새 메인 모델 표가 현재 동작과 어긋난다는 지적을 받아 문서·계약 테스트를 수정했고, 2차 네 관점 검토를 통과했습니다. 저장소 unittest 16개와 Hook 테스트 20개가 통과했으며 실제 설치를 두 번 실행해 변경 0건을 확인했습니다.
+
+### Approval
+
+- [x] Owner approved scope — 2026-09-21, “권장정리 하나씩 해. 그런데 기존 세션 오래 열려있는 건 제거하지 마”

@@ -31,10 +31,11 @@ Claude Code의 기본 동작을 덮어쓰지 않고, 계획·구현·리뷰·릴
 
 | 역할 | 모델 | 추론 강도 |
 |---|---|---|
+| 새 메인 세션 | Sonnet | high |
 | planner, reviewer | Opus | high |
 | coder, tester | Sonnet | high |
 | explorer | Sonnet | medium |
-| documenter | Haiku | low |
+| documenter | Sonnet | low |
 
 판단 오류의 비용이 큰 역할에 Opus를 쓰고, 구현·검증에는 Sonnet을 사용합니다. 탐색과 문서화는 작업 성격에 맞춰 강도를 낮춰 토큰과 지연을 줄입니다.
 
@@ -51,8 +52,9 @@ python3 scripts/install.py --workspace /Users/jangheejeong/Projects/heum
 - `~/.claude/agents`, `~/.claude/skills`, `~/.claude/hooks`에 이 저장소를 가리키는 링크를 만듭니다.
 - 기존 사용자 설정과 관리 대상이 아닌 파일은 보존합니다.
 - 해시가 일치하는 과거 하네스 복제본만 타임스탬프 백업으로 옮깁니다.
-- 오래된 하네스 훅 등록과 `HARNESS_RUN_PHASE`만 제거합니다.
-- 실험적 agent teams 설정은 변경하지 않습니다.
+- 오래된 하네스 훅 등록, `HARNESS_RUN_PHASE`, 과거 하네스가 켠 실험적 Agent Teams 값을 제거합니다.
+- workspace의 `settings.local.json`에서는 퇴역한 하네스 훅과 공유 설정에 이미 있는 완전 중복 훅만 제거합니다. 권한·MCP·사용자 훅은 보존합니다.
+- 실행 중인 세션과 세션 기록은 종료하거나 삭제하지 않습니다. 설정 변경은 새 세션에 적용됩니다.
 
 변경 내용을 먼저 확인하려면 `--dry-run`을 사용하세요.
 
@@ -68,6 +70,17 @@ bash .claude/hooks/tests/run-tests.sh
 ```
 
 설치 후 새 Claude Code 세션에서 `/skills`로 스킬을 확인할 수 있습니다. 이미 존재하는 에이전트·스킬 디렉터리는 실행 중에도 다시 읽히지만, 설정 훅 변경은 새 세션에서 확인하는 편이 가장 확실합니다.
+
+개인 사용자 설정은 새 세션의 메인을 Sonnet/high로 두는 구성을 권장합니다. 이미 재개한 세션은 저장된 모델을 유지합니다.
+
+```json
+{
+  "model": "sonnet",
+  "effortLevel": "high"
+}
+```
+
+이 하네스와 역할이 겹치거나 매 응답 훅을 추가하는 `claude-mem`, `superpowers`, `harness`, `feature-dev`, `code-review` 플러그인은 삭제 대신 비활성화를 권장합니다. `security-guidance`가 여러 마켓플레이스에 있으면 공식판 하나만 활성화합니다.
 
 운영 원칙과 문제 해결 방법은 [HARNESS.md](HARNESS.md)를 참고하세요.
 
