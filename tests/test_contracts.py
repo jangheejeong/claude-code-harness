@@ -20,7 +20,7 @@ SKILLS = (
     "release",
     "setup",
     "orchestrator",
-    "pr-walkthrough",
+    "pr-explain",
     "frontend-design",
 )
 

@@ -5,7 +5,7 @@ Claude Code의 기본 동작을 덮어쓰지 않고, 계획·구현·리뷰·릴
 ## 구성
 
 - 에이전트 6개: `explorer`, `planner`, `coder`, `tester`, `reviewer`, `documenter`
-- 스킬 8개: `/plan`, `/work`, `/review`, `/release`, `/setup`, `/orchestrator`, `/pr-walkthrough`, `/frontend-design`
+- 스킬 8개: `/plan`, `/work`, `/review`, `/release`, `/setup`, `/orchestrator`, `/pr-explain`, `/frontend-design`
 - 안전 훅 2개: 파괴적 명령 차단, 비밀 파일 쓰기 차단
 - 설치기: 정본을 전역 Claude 설정에 심볼릭 링크하고, 확인된 과거 복제본만 백업 후 정리
 
@@ -24,7 +24,7 @@ Claude Code의 기본 동작을 덮어쓰지 않고, 계획·구현·리뷰·릴
 - `/review`: 스펙, 보안, 정확성·유지보수성, 성능·운영성의 네 관점을 한 번 검토합니다.
 - `/release`: 사용자가 요청했을 때만 문서·커밋·푸시·PR을 준비합니다.
 - `/orchestrator`: 비단순 작업의 전체 흐름과 수정·재리뷰를 조율합니다. 최초 리뷰를 포함해 최대 3회만 수행합니다.
-- `/pr-walkthrough`: 사람 리뷰어가 PR을 빨리 읽도록 읽기 전용 안내서를 만듭니다. 승인 판정은 `/review`가 맡습니다.
+- `/pr-explain`: 사람 리뷰어가 PR을 빨리 읽도록 읽기 전용 안내서를 만듭니다. 승인 판정은 `/review`가 맡습니다.
 - `/frontend-design`: 새 화면이나 화면 개편에서 뻔한 기본값을 피하는 디자인 지침입니다(anthropics/skills, Apache-2.0).
 
 같은 지적이 반복되거나, 결과가 불명확하거나, 세 번째 리뷰에서도 승인되지 않으면 자동 진행을 멈추고 사용자에게 보고합니다.

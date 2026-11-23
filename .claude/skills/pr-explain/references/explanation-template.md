@@ -1,4 +1,4 @@
-# PR Walkthrough Template
+# PR Explanation Template
 
 Use this structure to deliver a high-readability, low-cognitive-load walkthrough for human reviewers. Omit empty subsections rather than padding with filler.
 

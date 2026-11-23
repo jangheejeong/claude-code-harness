@@ -2,7 +2,7 @@
 
 ## 2026-11-23
 
-- Antigravity용 하네스(agy-code-harness)에서 `pr-walkthrough`, `frontend-design` 스킬을 가져왔습니다. PR 안내서는 대화에 Markdown으로 돌려주고, GitHub 댓글은 초안만 만듭니다.
+- Antigravity용 하네스(agy-code-harness)에서 `pr-explain`, `frontend-design` 스킬을 가져왔습니다. PR 안내서는 대화에 Markdown으로 돌려주고, GitHub 댓글은 초안만 만듭니다.
 - coder와 reviewer에 단일 추상화 수준·내려가기 규칙 지침을 추가했습니다.
 
 ## 2026-09-19

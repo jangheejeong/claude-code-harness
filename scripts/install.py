@@ -21,7 +21,7 @@ SKILLS = (
     "release",
     "setup",
     "orchestrator",
-    "pr-walkthrough",
+    "pr-explain",
     "frontend-design",
 )
 SAFETY_HOOKS = ("block-destructive", "protect-secrets")
