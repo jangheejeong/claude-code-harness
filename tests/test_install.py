@@ -56,7 +56,7 @@ class InstallTests(unittest.TestCase):
         first_settings = settings_path.read_bytes()
         second = self.install(workspace=False)
 
-        self.assertEqual(first["links_updated"], 14)
+        self.assertEqual(first["links_updated"], 16)
         self.assertEqual(second["links_updated"], 0)
         self.assertEqual(second["settings_updated"], 0)
         self.assertEqual(first_settings, settings_path.read_bytes())
@@ -318,7 +318,7 @@ class InstallTests(unittest.TestCase):
         )
 
         self.assertTrue(result["dry_run"])
-        self.assertEqual(result["links_updated"], 14)
+        self.assertEqual(result["links_updated"], 16)
         self.assertEqual(result["settings_updated"], 1)
         self.assertEqual(result["backups"], [])
         self.assertEqual(settings.read_text(), original)

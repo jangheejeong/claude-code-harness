@@ -14,7 +14,16 @@ from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 
 AGENTS = ("explorer", "planner", "coder", "tester", "reviewer", "documenter")
-SKILLS = ("plan", "work", "review", "release", "setup", "orchestrator")
+SKILLS = (
+    "plan",
+    "work",
+    "review",
+    "release",
+    "setup",
+    "orchestrator",
+    "pr-walkthrough",
+    "frontend-design",
+)
 SAFETY_HOOKS = ("block-destructive", "protect-secrets")
 RETIRED_HOOKS = (
     "announce-agent",

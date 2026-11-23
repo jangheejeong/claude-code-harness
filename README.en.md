@@ -5,7 +5,7 @@ A lean personal harness for consistent planning, implementation, review, and rel
 ## What it contains
 
 - Six agents: `explorer`, `planner`, `coder`, `tester`, `reviewer`, and `documenter`
-- Six skills: `/plan`, `/work`, `/review`, `/release`, `/setup`, and `/orchestrator`
+- Eight skills: `/plan`, `/work`, `/review`, `/release`, `/setup`, `/orchestrator`, `/pr-walkthrough`, and `/frontend-design`
 - Two safety hooks: destructive-command blocking and secret-file write protection
 - A conservative installer that links the canonical files globally and backs up only recognized legacy copies
 
@@ -24,6 +24,8 @@ Let the main agent handle small edits directly. For non-trivial or risky changes
 - `/review` performs one independent pass across specification, security, correctness and maintainability, and performance and operations.
 - `/release` prepares documentation, commits, pushes, or a PR only when explicitly invoked.
 - `/orchestrator` coordinates the full flow and at most three review attempts, including the first review.
+- `/pr-walkthrough` builds a read-only guide that helps a human reviewer read a PR; `/review` still owns the verdict.
+- `/frontend-design` gives design guidance for new or reshaped UI (adapted from anthropics/skills, Apache-2.0).
 
 Automation stops when a finding repeats unchanged, the verdict is unclear, or the third review is not approved.
 

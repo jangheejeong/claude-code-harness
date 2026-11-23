@@ -13,7 +13,16 @@ AGENTS = {
     "explorer": ("sonnet", "medium"),
     "documenter": ("sonnet", "low"),
 }
-SKILLS = ("plan", "work", "review", "release", "setup", "orchestrator")
+SKILLS = (
+    "plan",
+    "work",
+    "review",
+    "release",
+    "setup",
+    "orchestrator",
+    "pr-walkthrough",
+    "frontend-design",
+)
 
 
 def frontmatter(path):
